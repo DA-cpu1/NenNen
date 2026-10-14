@@ -1,0 +1,19 @@
+# 依赖与构建产物
+node_modules/
+dist/
+release/
+out/
+
+# 密钥与环境配置（绝不提交）
+.env
+.env.*
+*.key
+
+# 日志与缓存
+*.log
+.cache/
+
+# 系统与编辑器杂项
+Thumbs.db
+Desktop.ini
+.DS_Store
