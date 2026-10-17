@@ -1,5 +1,5 @@
 /**
- * 界面渲染入口：把 React 根组件挂载到 #root。
+ * 界面的起点：找到页面里的 #root 空位，把 React 组件挂上去。
  */
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'

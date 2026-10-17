@@ -1,13 +1,13 @@
 /**
- * 后台服务子进程入口（03 §3）：由桌面主进程用独立 Node 进程启动。
- * 会话令牌从父进程经 stdin 专用管道送达（首行），绝不经过命令行参数、
- * 环境变量或日志；端口等非机密信息用 stdout 单行协议回报父进程。
+ * 后台进程的入口：被主进程雇来后——从管子收暗号、开始接电话、回头报到。
+ * 暗号只走 stdin 管道（命令行参数、环境变量、日志里都不许出现）；
+ * 端口号不是机密，从 stdout 报给主进程。
  */
 import { startBackendServer } from './server'
 
 /**
- * 子进程主函数：读 stdin 首行令牌 → 启动服务 → 输出 READY 协议行。
- * stdin 保持打开：将来模型密钥也走同一条专用管道（03 §3）。
+ * 流程：读管子第一行当暗号 → 启动总机 → 输出「READY 端口号」报到。
+ * 管子保持打开不关：将来模型密钥也从这条管子送来（03 §3）。
  */
 function main(): void {
   let buffer = ''
@@ -16,22 +16,22 @@ function main(): void {
   process.stdin.setEncoding('utf-8')
   process.stdin.on('data', (chunk: string) => {
     buffer += chunk
-    // 只认第一行作为令牌；未收到换行说明数据未传完，继续等
     if (started) return
+    // 还没见到换行 = 暗号没传完，继续等
     const newlineIndex = buffer.indexOf('\n')
     if (newlineIndex === -1) return
     started = true
 
     const token = buffer.slice(0, newlineIndex).trim()
     if (!token) {
-      // 令牌缺失：只回报错误码，不打印任何收到的内容
+      // 空暗号：只报错误码，不打印收到的任何内容
       process.stderr.write('E_NO_TOKEN\n')
       process.exit(1)
     }
 
     void startBackendServer(token).then(
       (server) => {
-        // 固定协议行：父进程据此拿到实际端口（端口不是机密）
+        // 固定格式的报到行，主进程靠它拿到端口号
         process.stdout.write(`READY ${server.port}\n`)
       },
       (error: unknown) => {
@@ -42,7 +42,8 @@ function main(): void {
     )
   })
 
-  // 父进程退出会关闭 stdin：子进程随之退出，避免残留（T01 验收项）
+  // 第二道保险：主进程一死，管子就断（stdin 结束），我们立刻退，
+  // 不留孤儿进程占着端口
   process.stdin.on('end', () => {
     process.exit(0)
   })

@@ -1,12 +1,13 @@
 /**
- * 桌面主进程入口（03 §3）：创建首个窗口并加载界面，启动后台服务子进程。
- * 当前是 T01 最小贯通：单实例锁、托盘、密钥交付在后续小步加入。
+ * 程序"大管家"进程的入口：开一个窗口、把界面装进去、雇一个后台进程干重活。
+ * 规矩：窗口界面不许碰数据库和密钥，重活全在后台进程（03 §3）。
+ * 现在还是最小骨架——防双开的锁、托盘图标、密钥交付都还没做。
  */
 import { app, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { startBackend, type BackendHandle } from './backend'
 
-/** 创建主窗口；开发环境连 electron-vite 开发服务器，生产加载打包产物 */
+/** 创建主窗口；开发时连本地开发服务器（改代码立即生效），正式版加载打包好的文件 */
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 420,
@@ -14,7 +15,7 @@ function createWindow(): void {
     title: '二次元女友',
     autoHideMenuBar: true,
     webPreferences: {
-      // 03 §7：界面沙箱与隔离，禁用 Node 直接访问
+      // 三道安全开关：把界面当纯网页对待，拿不到 Node 能力、碰不了文件和数据库（03 §7）
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -22,7 +23,7 @@ function createWindow(): void {
     },
   })
 
-  // electron-vite 约定：开发模式注入界面开发服务器地址，生产环境加载文件
+  // electron-vite 的约定：开发模式会把这个变量塞给我们，指向上面的开发服务器
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -30,23 +31,23 @@ function createWindow(): void {
   }
 }
 
-// 所有窗口关闭即退出（Windows 惯例；后续加入托盘常驻时再调整）
+// 所有窗口都关掉就退出程序（Windows 的惯例；以后加托盘常驻时再改）
 app.on('window-all-closed', () => {
   app.quit()
 })
 
-// 退出前回收后台子进程，保证无残留（T01 验收项）；kill 是同步派发，无需等待
+// 程序退出前叫后台进程下班，不许留孤儿进程占着内存和端口
 app.on('will-quit', () => {
   backend?.stop()
 })
 
-/** 当前后台子进程句柄；每次启动重建 */
+/** 当前的后台进程句柄；每次启动重新雇一个 */
 let backend: BackendHandle | undefined
 
 /**
- * 启动后台服务并做启动自检：
- * 用令牌访问 /health 应得 200，不带令牌应得 401。
- * 日志只记端口与状态码，不记令牌（03 §7）。
+ * 雇后台进程并当场自测：拿暗号打 /health 应该接通（200），
+ * 不拿暗号应该被拒（401），两个都符合才算通道正常。
+ * 日志只记端口号和结果数字——暗号绝不能进日志（03 §7）
  */
 async function startBackendWithSelfCheck(): Promise<void> {
   const handle = await startBackend()
@@ -62,7 +63,7 @@ async function startBackendWithSelfCheck(): Promise<void> {
 
 app.whenReady().then(() => {
   createWindow()
-  // 后台启动失败不让界面跟着挂：先记录，后续步骤再做重试与用户提示
+  // 后台起不来不能连累窗口白屏：先记下来。重试和提示用户是以后的事
   startBackendWithSelfCheck().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : 'unknown'
     console.error(`[后台] 启动失败：${message}`)

@@ -1,9 +1,10 @@
 /**
- * 根组件（T01 空壳）：仅证明界面进程正常运行，尚无实际功能。
+ * 窗口里显示的第一页。现在只是"开机自检页"——
+ * 能看到这两行字，就说明界面进程活着。
  */
 import styles from './App.module.css'
 
-/** 空壳页：显示应用名与当前阶段说明 */
+/** 自检页内容：应用名 + 当前阶段说明 */
 export default function App() {
   return (
     <main className={styles.shell}>
