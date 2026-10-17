@@ -1,0 +1,15 @@
+<!doctype html>
+<!-- 界面入口页面：仅承载 React 挂载点，不写业务 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 阻止界面内导航到外部地址（03 §7 限制导航） -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <title>二次元女友</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

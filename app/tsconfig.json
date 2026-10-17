@@ -1,0 +1,15 @@
+{
+  "//": "TypeScript 全局配置：strict 模式。空壳阶段主进程与界面共用一份，后台服务成型后按进程拆分。",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src", "tests", "electron.vite.config.ts"]
+}
