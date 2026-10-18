@@ -1,7 +1,7 @@
 /**
  * 程序"大管家"进程的入口：开一个窗口、把界面装进去、雇一个后台进程干重活。
  * 规矩：窗口界面不许碰数据库和密钥，重活全在后台进程（03 §3）。
- * 现在还是最小骨架——防双开的锁、托盘图标、密钥交付都还没做。
+ * 现在是技术贯通骨架：密钥已走后台管道；防双开和托盘留待后续小步骤。
  */
 import { app, BrowserWindow } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
@@ -59,7 +59,7 @@ let backend: BackendHandle | undefined
 /**
  * 雇后台进程并当场自测，共两步：
  * ① 拿暗号打 /health 应接通（200），不拿暗号应被拒（401）；
- * ② 配了密钥就打 /model/ping——后台会真的调一次模型，验证密钥管道和供应商连通。
+ * ② 配了密钥就打 /agent/ping——经过 eve 完成一轮，验证两跳密钥管道和模型调用。
  * 日志只记状态码、耗时和用量数字——暗号、密钥、模型回复原文都不进日志（03 §7）
  */
 async function startBackendWithSelfCheck(): Promise<void> {
@@ -81,7 +81,7 @@ async function startBackendWithSelfCheck(): Promise<void> {
   }
   const started = Date.now()
   try {
-    const res = await fetch(`http://127.0.0.1:${handle.port}/model/ping`, {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/agent/ping`, {
       headers: authHeader,
     })
     const body = (await res.json()) as {
@@ -95,7 +95,7 @@ async function startBackendWithSelfCheck(): Promise<void> {
     if (res.status === 200 && body.ok) {
       // 只记字符数和用量，不记回复原文（回复将来是聊天内容，不进日志）
       console.log(
-        `[模型] 连通成功（${elapsed}ms）；回复 ${body.text?.length ?? 0} 字；用量 in=${body.usage?.inputTokens ?? '?'} out=${body.usage?.outputTokens ?? '?'}`,
+        `[eve] 连通成功（${elapsed}ms）；回复 ${body.text?.length ?? 0} 字；用量 in=${body.usage?.inputTokens ?? '?'} out=${body.usage?.outputTokens ?? '?'}`,
       )
     } else {
       console.error(`[模型] 自测失败（${elapsed}ms）：${body.code ?? res.status} ${body.message ?? ''}`)

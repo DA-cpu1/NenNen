@@ -1,55 +1,82 @@
 /**
- * 后台进程的入口：被主进程雇来后——从管子收暗号和模型密钥、开始接电话、
- * 回头报到。两样东西都只走 stdin 管道（命令行参数、环境变量、日志里
- * 都不许出现）；端口号不是机密，从 stdout 报给主进程。
+ * 后台进程入口：从主进程管道收令牌和密钥，启动业务 HTTP 服务及 eve 子进程。
+ * 机密只通过 stdin 在内存间交付；stdout 只报 READY 端口，stderr 只报固定错误码。
  */
-import { startBackendServer } from './server'
+import { resolve } from 'node:path'
+import { startBackendServer, type BackendServer } from './server'
+import { startEve, type EveHandle } from '../agent/eve-process'
+import { pingEve } from '../agent/eve-client'
 
 /**
- * 管道协议（v2）：第 1 行 = 会话暗号（必填），第 2 行 = 模型密钥
- * （可为空行 = 未配置模型）。两行都到齐才启动服务。
- * 管子保持打开不关：以后还有别的机密从这条管子送来（03 §3）。
+ * 接收两行启动消息并等待服务就绪；主进程断线时回收 eve 后退出。
+ * @returns 无返回值；启动结果用 READY 协议或错误码通知主进程。
  */
 function main(): void {
   let buffer = ''
   let started = false
+  let closing = false
+  let eve: EveHandle | undefined
+  let server: BackendServer | undefined
+
+  /** 只执行一次关闭：先停业务请求，再结束 eve，最后退出后台。 */
+  async function shutdown(): Promise<void> {
+    if (closing) return
+    closing = true
+    await server?.stop()
+    await eve?.stop()
+    process.exit(0)
+  }
+
+  /** 密钥收齐后启动 eve；没有密钥时保留基础服务，不触发付费调用。 */
+  async function start(token: string, modelApiKey: string): Promise<void> {
+    if (modelApiKey) {
+      eve = await startEve({
+        appDir: resolve(__dirname, '../..'),
+        modelApiKey,
+        // 只传公开测试地址；自动检查让请求落到本机假供应商，避免误花钱。
+        modelBaseUrl: process.env.COMPANION_MODEL_BASE_URL || undefined,
+      })
+      if (closing) {
+        await eve.stop()
+        return
+      }
+    }
+    const handle = eve
+    server = await startBackendServer(token, {
+      modelApiKey: modelApiKey || undefined,
+      pingAgent: handle ? (signal) => pingEve(handle, signal) : undefined,
+    })
+    if (closing) {
+      await server.stop()
+      await eve?.stop()
+      return
+    }
+    process.stdout.write(`READY ${server.port}\n`)
+  }
 
   process.stdin.setEncoding('utf-8')
   process.stdin.on('data', (chunk: string) => {
-    buffer += chunk
     if (started) return
-    const firstNl = buffer.indexOf('\n')
-    if (firstNl === -1) return // 第 1 行没传完，继续等
-    const secondNl = buffer.indexOf('\n', firstNl + 1)
-    if (secondNl === -1) return // 第 2 行没传完，继续等
+    buffer += chunk
+    const first = buffer.indexOf('\n')
+    const second = first < 0 ? -1 : buffer.indexOf('\n', first + 1)
+    if (second < 0) return
     started = true
-
-    const token = buffer.slice(0, firstNl).trim()
-    const modelApiKey = buffer.slice(firstNl + 1, secondNl).trim()
+    const token = buffer.slice(0, first).trim()
+    const modelApiKey = buffer.slice(first + 1, second).trim()
+    buffer = ''
     if (!token) {
-      // 空暗号：只报错误码，不打印收到的任何内容
       process.stderr.write('E_NO_TOKEN\n')
       process.exit(1)
     }
-
-    void startBackendServer(token, { modelApiKey: modelApiKey || undefined }).then(
-      (server) => {
-        // 固定格式的报到行，主进程靠它拿到端口号
-        process.stdout.write(`READY ${server.port}\n`)
-      },
-      (error: unknown) => {
-        const message = error instanceof Error ? error.message : 'unknown'
-        process.stderr.write(`E_START ${message}\n`)
-        process.exit(1)
-      },
-    )
+    void start(token, modelApiKey).catch(async () => {
+      await eve?.stop()
+      process.stderr.write('E_START\n')
+      process.exit(1)
+    })
   })
-
-  // 第二道保险：主进程一死，管子就断（stdin 结束），我们立刻退，
-  // 不留孤儿进程占着端口
-  process.stdin.on('end', () => {
-    process.exit(0)
-  })
+  process.stdin.on('end', () => { void shutdown() })
+  process.stdin.on('error', () => { void shutdown() })
 }
 
 main()

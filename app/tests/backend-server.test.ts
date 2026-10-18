@@ -63,6 +63,65 @@ describe('后台服务认证', () => {
   })
 })
 
+describe('eve 自测端点 /agent/ping', () => {
+  it('未认证时不会启动 Agent 调用', async () => {
+    let calls = 0
+    const fake = await startBackendServer(TOKEN, {
+      modelApiKey: 'fake-key',
+      pingAgent: async () => {
+        calls += 1
+        return { text: '收到', usage: undefined }
+      },
+    })
+    extraServers.push(fake)
+    const response = await fetch(`http://127.0.0.1:${fake.port}/agent/ping`)
+    expect(response.status).toBe(401)
+    expect(calls).toBe(0)
+  })
+
+  it('缺密钥与未启动 eve 都明确拒绝，不假装成功', async () => {
+    const headers = { 'x-session-token': TOKEN }
+    const noKey = await fetch(`http://127.0.0.1:${server!.port}/agent/ping`, { headers })
+    expect(noKey.status).toBe(503)
+    expect(await noKey.json()).toEqual({ ok: false, code: 'NO_KEY' })
+    const withoutAgent = await startBackendServer(TOKEN, { modelApiKey: 'fake-key' })
+    extraServers.push(withoutAgent)
+    const noAgent = await fetch(`http://127.0.0.1:${withoutAgent.port}/agent/ping`, { headers })
+    expect(await noAgent.json()).toEqual({ ok: false, code: 'AGENT_UNAVAILABLE' })
+  })
+
+  it('完整调用成功才返回文字与用量', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      modelApiKey: 'fake-key',
+      pingAgent: async (signal) => {
+        expect(signal.aborted).toBe(false)
+        return { text: '收到', usage: { inputTokens: 8, outputTokens: 2 } }
+      },
+    })
+    extraServers.push(fake)
+    const response = await fetch(`http://127.0.0.1:${fake.port}/agent/ping`, {
+      headers: { 'x-session-token': TOKEN },
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      ok: true, text: '收到', usage: { inputTokens: 8, outputTokens: 2 },
+    })
+  })
+
+  it('失败只返回错误码，不泄露异常里的机密或提示词', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      modelApiKey: 'fake-key',
+      pingAgent: async () => { throw new Error('fake-key + 不应泄露的提示词') },
+    })
+    extraServers.push(fake)
+    const response = await fetch(`http://127.0.0.1:${fake.port}/agent/ping`, {
+      headers: { 'x-session-token': TOKEN },
+    })
+    expect(response.status).toBe(502)
+    expect(await response.json()).toEqual({ ok: false, code: 'AGENT_ERROR' })
+  })
+})
+
 describe('模型自测端点 /model/ping', () => {
   it('未配置密钥返回 503 NO_KEY', async () => {
     const res = await fetch(`http://127.0.0.1:${server!.port}/model/ping`, {

@@ -11,6 +11,8 @@
     "dev": "electron-vite dev",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "build:agent": "node scripts/build-agent.mjs",
+    "check:agent": "node scripts/probe-eve.mjs",
     "build:win": "electron-vite build && electron-builder --win nsis"
   },
   "dependencies": {

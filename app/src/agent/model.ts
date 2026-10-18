@@ -1,8 +1,8 @@
 /**
- * 模型连接层：全项目唯一知道"供应商"存在的地方。
- * 换供应商（比如 DeepSeek）只改这里的 baseURL 和模型名——人设、记忆、
- * 界面、数据库都不知道供应商是谁，一行不用动（03 §5/§6 的稳定边界）。
- * 智谱走 OpenAI 兼容协议；DeepSeek 等同类接口换地址即可。
+ * T01 的 AI SDK 直连探针：单独验证供应商连通，不承担正式聊天循环。
+ * eve 运行探针另在作者目录创建模型；两处暂用同一供应商和模型配置，
+ * 正式配置入口留待设置与运行层实现，界面和数据库不直接依赖供应商。
+ * 智谱当前使用 OpenAI 兼容接口；其他供应商仍需各自验证。
  */
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { generateText } from 'ai'

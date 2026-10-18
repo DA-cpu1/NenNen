@@ -3,6 +3,8 @@ node_modules/
 dist/
 release/
 out/
+.output/
+.eve/
 
 # 密钥与环境配置（绝不提交）
 .env

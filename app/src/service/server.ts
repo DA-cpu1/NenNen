@@ -25,6 +25,8 @@ export interface BackendOptions {
   modelApiKey?: string
   /** 模型调用函数；默认用真的。测试注入假实现，避免真的调付费接口 */
   callModel?: typeof callModelOnce
+  /** eve 自测函数由后台入口提供；没启动 eve 时不开放这条能力。 */
+  pingAgent?: (signal: AbortSignal) => Promise<ModelCallResult>
 }
 
 /**
@@ -132,6 +134,25 @@ async function handleRequest(
       // 模型调用失败：把原因带回去（错误消息里不会有密钥），主进程记日志
       const message = error instanceof Error ? error.message : 'unknown'
       sendJson(res, 502, { ok: false, code: 'MODEL_ERROR', message })
+    }
+    return
+  }
+  // 和直连自测分开：这条路径必须经过 eve 的会话与模型执行流程。
+  if (req.method === 'GET' && req.url === '/agent/ping') {
+    if (!options.modelApiKey) {
+      sendJson(res, 503, { ok: false, code: 'NO_KEY' })
+      return
+    }
+    if (!options.pingAgent) {
+      sendJson(res, 503, { ok: false, code: 'AGENT_UNAVAILABLE' })
+      return
+    }
+    try {
+      const result = await options.pingAgent(AbortSignal.timeout(30_000))
+      sendJson(res, 200, { ok: true, text: result.text, usage: result.usage ?? null })
+    } catch {
+      // 不传原始错误消息；第三方错误对象可能包含提示词或密钥。
+      sendJson(res, 502, { ok: false, code: 'AGENT_ERROR' })
     }
     return
   }

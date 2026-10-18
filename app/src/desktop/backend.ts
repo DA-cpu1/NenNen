@@ -17,9 +17,8 @@ export interface BackendHandle {
   stop(): void
 }
 
-/** 等报到的闹钟：超过 10 秒还没收到 READY 就当启动失败，
- * 免得子进程卡死把整个程序挂住 */
-const START_TIMEOUT_MS = 10_000
+/** 等报到的闹钟：后台还要等 eve 启动，给 20 秒；超时明确失败，避免窗口永远等。 */
+const START_TIMEOUT_MS = 20_000
 
 /**
  * 雇一个后台进程并等它报到。
