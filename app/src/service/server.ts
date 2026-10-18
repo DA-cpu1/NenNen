@@ -9,6 +9,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
 import { Buffer } from 'node:buffer'
+import { callModelOnce, type ModelCallResult } from '../agent/model'
 
 /** 总机句柄：端口号 + 关机方法 */
 export interface BackendServer {
@@ -16,6 +17,14 @@ export interface BackendServer {
   port: number
   /** 关机：不再接新电话，等正在通话的结束，然后关掉 */
   stop(): Promise<void>
+}
+
+/** 启动选项：模型密钥 + 可替换的模型调用函数（测试塞假的，不真花钱） */
+export interface BackendOptions {
+  /** 模型密钥；没有就只起基础服务，/model/ping 返回 NO_KEY */
+  modelApiKey?: string
+  /** 模型调用函数；默认用真的。测试注入假实现，避免真的调付费接口 */
+  callModel?: typeof callModelOnce
 }
 
 /**
@@ -45,25 +54,22 @@ function sendJson(res: ServerResponse, status: number, body: Record<string, unkn
 /**
  * 启动总机。
  * @param token 本次开机的暗号
+ * @param options 模型密钥与可替换的调用函数（测试用）
  * @returns 返回的是一张"取货凭证"（Promise）：此刻还没监听成功，将来兑现成
  *          端口号和关机方法。端口是系统分配的，只有监听成功"回电"那一刻才
  *          知道是几号——所以发货(resolve)必须写在回电(回调)里
  */
-export function startBackendServer(token: string): Promise<BackendServer> {
+export function startBackendServer(
+  token: string,
+  options: BackendOptions = {},
+): Promise<BackendServer> {
   return new Promise((resolve, reject) => {
+    // 回调用了 async（/model/ping 要等模型回话），所以整体包 try/catch，
+    // 不让任何意外把整个进程带崩
     const server = createServer((req, res) => {
-      // 暗号不对：不说"差一点就对了"（那是在帮试探者缩小范围），统一拒接
-      if (!isAuthorized(req, token)) {
-        sendJson(res, 401, { ok: false, code: 'UNAUTHORIZED' })
-        return
-      }
-      // 最小健康检查：主进程开机后拿它自测通道。聊天、记忆这些正式入口
-      // 以后按白名单逐个加
-      if (req.method === 'GET' && req.url === '/health') {
-        sendJson(res, 200, { ok: true })
-        return
-      }
-      sendJson(res, 404, { ok: false, code: 'NOT_FOUND' })
+      void handleRequest(req, res, token, options).catch(() => {
+        sendJson(res, 500, { ok: false, code: 'INTERNAL' })
+      })
     })
 
     server.on('error', reject)
@@ -84,4 +90,50 @@ export function startBackendServer(token: string): Promise<BackendServer> {
       })
     })
   })
+}
+
+/** 处理一通来电：先对暗号，再按路径分活 */
+async function handleRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  options: BackendOptions,
+): Promise<void> {
+  // 每个请求都要带暗号，因为 HTTP 是"无记忆"的：处理完这通电话就忘了
+  // 你是谁，没有"开头自我介绍一次、后面就认识你"。暗号装在请求头里
+  // （请求头 = "名字: 值"的清单，HTTP 只管搬运不问含义；
+  //   x-session-token 是我们自己起的名字）。
+  // 暗号不对就统一拒接，不说"差一点就对了"（那是在帮试探者缩小范围）
+  if (!isAuthorized(req, token)) {
+    sendJson(res, 401, { ok: false, code: 'UNAUTHORIZED' })
+    return
+  }
+  // 基础健康检查：主进程开机后拿它自测通道
+  if (req.method === 'GET' && req.url === '/health') {
+    sendJson(res, 200, { ok: true })
+    return
+  }
+  // 模型自测：真的调一次模型（固定短提示词），验证密钥管道和供应商连通
+  if (req.method === 'GET' && req.url === '/model/ping') {
+    const apiKey = options.modelApiKey
+    if (!apiKey) {
+      sendJson(res, 503, { ok: false, code: 'NO_KEY' })
+      return
+    }
+    try {
+      const call = options.callModel ?? callModelOnce
+      const result: ModelCallResult = await call(
+        apiKey,
+        '请只回复两个字：收到',
+        AbortSignal.timeout(30_000),
+      )
+      sendJson(res, 200, { ok: true, text: result.text, usage: result.usage ?? null })
+    } catch (error) {
+      // 模型调用失败：把原因带回去（错误消息里不会有密钥），主进程记日志
+      const message = error instanceof Error ? error.message : 'unknown'
+      sendJson(res, 502, { ok: false, code: 'MODEL_ERROR', message })
+    }
+    return
+  }
+  sendJson(res, 404, { ok: false, code: 'NOT_FOUND' })
 }

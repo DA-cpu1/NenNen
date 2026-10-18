@@ -4,8 +4,20 @@
  * 现在还是最小骨架——防双开的锁、托盘图标、密钥交付都还没做。
  */
 import { app, BrowserWindow } from 'electron'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { startBackend, type BackendHandle } from './backend'
+
+/** 开发期的密钥文件位置（app/local.key，git 已挡住不进仓库）。
+ * 正式版改由设置页输入 + safeStorage 加密存储（T11），不再读本地明文文件 */
+const MODEL_KEY_FILE = join(__dirname, '../../local.key')
+
+/** 读开发期密钥文件；不存在或为空就返回 undefined（= 未配置模型） */
+function readModelKey(): string | undefined {
+  if (!existsSync(MODEL_KEY_FILE)) return undefined
+  const key = readFileSync(MODEL_KEY_FILE, 'utf-8').trim()
+  return key || undefined
+}
 
 /** 创建主窗口；开发时连本地开发服务器（改代码立即生效），正式版加载打包好的文件 */
 function createWindow(): void {
@@ -45,20 +57,53 @@ app.on('will-quit', () => {
 let backend: BackendHandle | undefined
 
 /**
- * 雇后台进程并当场自测：拿暗号打 /health 应该接通（200），
- * 不拿暗号应该被拒（401），两个都符合才算通道正常。
- * 日志只记端口号和结果数字——暗号绝不能进日志（03 §7）
+ * 雇后台进程并当场自测，共两步：
+ * ① 拿暗号打 /health 应接通（200），不拿暗号应被拒（401）；
+ * ② 配了密钥就打 /model/ping——后台会真的调一次模型，验证密钥管道和供应商连通。
+ * 日志只记状态码、耗时和用量数字——暗号、密钥、模型回复原文都不进日志（03 §7）
  */
 async function startBackendWithSelfCheck(): Promise<void> {
-  const handle = await startBackend()
+  const modelKey = readModelKey()
+  const handle = await startBackend(modelKey)
   backend = handle
+  const authHeader = { 'x-session-token': handle.token }
   const withToken = await fetch(`http://127.0.0.1:${handle.port}/health`, {
-    headers: { 'x-session-token': handle.token },
+    headers: authHeader,
   })
   const withoutToken = await fetch(`http://127.0.0.1:${handle.port}/health`)
   console.log(
     `[后台] 端口 ${handle.port}；带令牌 ${withToken.status}（应 200）；未认证 ${withoutToken.status}（应 401）`,
   )
+
+  if (!modelKey) {
+    console.log('[模型] app/local.key 不存在，跳过模型自测')
+    return
+  }
+  const started = Date.now()
+  try {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/model/ping`, {
+      headers: authHeader,
+    })
+    const body = (await res.json()) as {
+      ok: boolean
+      text?: string
+      usage?: { inputTokens?: number; outputTokens?: number } | null
+      code?: string
+      message?: string
+    }
+    const elapsed = Date.now() - started
+    if (res.status === 200 && body.ok) {
+      // 只记字符数和用量，不记回复原文（回复将来是聊天内容，不进日志）
+      console.log(
+        `[模型] 连通成功（${elapsed}ms）；回复 ${body.text?.length ?? 0} 字；用量 in=${body.usage?.inputTokens ?? '?'} out=${body.usage?.outputTokens ?? '?'}`,
+      )
+    } else {
+      console.error(`[模型] 自测失败（${elapsed}ms）：${body.code ?? res.status} ${body.message ?? ''}`)
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown'
+    console.error(`[模型] 自测请求失败：${message}`)
+  }
 }
 
 app.whenReady().then(() => {

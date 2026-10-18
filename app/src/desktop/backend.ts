@@ -25,17 +25,21 @@ const START_TIMEOUT_MS = 10_000
  * 雇一个后台进程并等它报到。
  * 现在用系统里的 node（24.10.0，后台框架 eve 要求这个版本）跑构建产物；
  * 打包成安装包后会改用随包自带的 node（08 V06，到打包那步再验证）。
+ * @param modelApiKey 模型密钥（可选）：和暗号一样从管子送过去，只进内存
  * @returns 工作证（端口号 + 暗号 + 下班按钮）
  */
-export function startBackend(): Promise<BackendHandle> {
+export function startBackend(modelApiKey?: string): Promise<BackendHandle> {
   return new Promise((resolve, reject) => {
-    // 每次开机现编一个新暗号：32 字节纯随机数。每次都换新的——
-    // 就算哪次泄露了，重启就作废
+    // 每次开机现编一个新暗号：32 字节纯随机数，自己编给自己用——
+    // 两个进程都是本程序的，不像网页登录那样由服务器"下发"。
+    // 每次都换新的，就算哪次泄露了，重启就作废
     const token = randomBytes(32).toString('base64url')
     // 要跑的文件：和本文件（out/main/index.js）同目录的 service.js（构建时一起生成）
     const serviceEntry = join(__dirname, 'service.js')
 
-    // spawn = 启动一个全新进程。三根管子（输入/输出/错误）全接到自己手上
+    // spawn = 启动一个全新进程。三根管子 = stdin/stdout/stderr：操作系统
+    // 在父子进程之间接的"私有线"，流过的内容只有这两家看得见，不进任何
+    // 文件、日志或系统记录——所以传机密只走这里
     const child: ChildProcess = spawn('node', [serviceEntry], {
       stdio: ['pipe', 'pipe', 'pipe'],
       // 注意：暗号绝不放进启动参数或环境变量，唯一出路是下面的输入管子
@@ -93,8 +97,8 @@ export function startBackend(): Promise<BackendHandle> {
       })
     })
 
-    // 把暗号从输入管子塞过去（换行 = "暗号到此为止"）。
-    // 这是暗号离开主进程内存的唯一一条路
-    child.stdin?.write(`${token}\n`)
+    // 管道协议：第 1 行暗号，第 2 行模型密钥（没配置就发空行占位）。
+    // 这两样东西离开主进程内存的唯一一条路就是这根管子
+    child.stdin?.write(`${token}\n${modelApiKey ?? ''}\n`)
   })
 }

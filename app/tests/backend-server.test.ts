@@ -1,7 +1,7 @@
 /**
  * 后台服务最小行为检查（T01 / 03 §3）：
- * 随机端口、令牌认证、未认证拒绝。
- * 使用固定输入与固定令牌，符合 07 §3「自动检查不用概率性输入」的要求。
+ * 随机端口、令牌认证、未认证拒绝、模型自测端点。
+ * 使用固定输入与固定令牌，模型一律用注入的假函数——自动检查不真调付费接口（07 §3）。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startBackendServer, type BackendServer } from '../src/service/server'
@@ -11,6 +11,8 @@ const TOKEN = 'test-fixed-token'
 
 /** 全部用例共享的服务句柄，最后统一关闭 */
 let server: BackendServer | undefined
+/** 各用例自己开的额外服务，一并登记统一关闭 */
+const extraServers: BackendServer[] = []
 
 beforeAll(async () => {
   server = await startBackendServer(TOKEN)
@@ -18,6 +20,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server?.stop()
+  for (const s of extraServers) await s.stop()
 })
 
 describe('后台服务监听', () => {
@@ -57,5 +60,64 @@ describe('后台服务认证', () => {
     })
     expect(res.status).toBe(404)
     expect(await res.json()).toEqual({ ok: false, code: 'NOT_FOUND' })
+  })
+})
+
+describe('模型自测端点 /model/ping', () => {
+  it('未配置密钥返回 503 NO_KEY', async () => {
+    const res = await fetch(`http://127.0.0.1:${server!.port}/model/ping`, {
+      headers: { 'x-session-token': TOKEN },
+    })
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ ok: false, code: 'NO_KEY' })
+  })
+
+  it('注入假模型函数：返回 200 与固定回复，且密钥原样传给模型层', async () => {
+    let receivedKey = ''
+    let receivedPrompt = ''
+    const fake = await startBackendServer(TOKEN, {
+      modelApiKey: 'fake-key-123',
+      callModel: async (key, prompt) => {
+        receivedKey = key
+        receivedPrompt = prompt
+        return { text: '收到', usage: { inputTokens: 5, outputTokens: 2 } }
+      },
+    })
+    extraServers.push(fake)
+    const res = await fetch(`http://127.0.0.1:${fake.port}/model/ping`, {
+      headers: { 'x-session-token': TOKEN },
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      ok: true,
+      text: '收到',
+      usage: { inputTokens: 5, outputTokens: 2 },
+    })
+    // 验证密钥从服务层原样到达模型连接层（管道没丢没改）
+    expect(receivedKey).toBe('fake-key-123')
+    expect(receivedPrompt).toBe('请只回复两个字：收到')
+  })
+
+  it('模型函数抛错时返回 502 MODEL_ERROR 并带原因', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      modelApiKey: 'fake-key-123',
+      callModel: async () => {
+        throw new Error('模拟供应商断线')
+      },
+    })
+    extraServers.push(fake)
+    const res = await fetch(`http://127.0.0.1:${fake.port}/model/ping`, {
+      headers: { 'x-session-token': TOKEN },
+    })
+    expect(res.status).toBe(502)
+    const body = (await res.json()) as { ok: boolean; code: string; message: string }
+    expect(body.ok).toBe(false)
+    expect(body.code).toBe('MODEL_ERROR')
+    expect(body.message).toContain('模拟供应商断线')
+  })
+
+  it('不带令牌打 /model/ping 同样 401', async () => {
+    const res = await fetch(`http://127.0.0.1:${server!.port}/model/ping`)
+    expect(res.status).toBe(401)
   })
 })

@@ -14,6 +14,7 @@
     "build:win": "electron-vite build && electron-builder --win nsis"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "3.0.71",
     "ai": "7.0.143",
     "better-sqlite3": "13.0.3",
     "drizzle-orm": "0.45.4",
