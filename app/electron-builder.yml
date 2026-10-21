@@ -1,0 +1,36 @@
+# electron-builder 打包配置：产出 Windows NSIS 安装包（03 §2、08 V06/C02）
+# 运行：npm run build:win（内部顺序：编译 eve → 编译应用 → 打安装包）
+
+appId: com.desktop-companion.app
+productName: 二次元女友
+# 安装包文件名用英文，避免分发/命令行里的中文路径问题；产品名在界面里仍是中文
+artifactName: desktop-companion-${version}-setup.${ext}
+directories:
+  output: release
+
+# 哪些东西进包（asar 档案内）：应用三段构建产物 + eve 编译产物 + 启动脚本
+files:
+  - out/**
+  - .output/**
+  - scripts/eve-entry.mjs
+  - package.json
+
+# 从 asar 档案里「拆出来」按普通文件放的清单。为什么：后台服务和 eve 是
+# 独立进程（用应用 exe 客串 Node 跑），读不了 asar 档案；它们的入口、
+# 脚本和全部运行依赖必须以普通文件形态出现在 app.asar.unpacked 目录
+asarUnpack:
+  - out/main/service.js
+  - .output/**
+  - scripts/eve-entry.mjs
+  - node_modules/**
+
+# 暂时跳过原生模块重建，保留现有打包方案；这不是安装版数据库已经通过的证明。
+# better-sqlite3 13.0.3 的本地源码使用 Node-API（减少对特定 Node 版本的依赖），
+# 但实际随包驱动仍需在应用后台验证加载、文件读写与重启，不能据此推定处处兼容。
+npmRebuild: false
+
+nsis:
+  # 非一键安装：给用户看安装向导（选目录），不要求管理员权限（per-user 安装）
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true

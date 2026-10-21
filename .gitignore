@@ -6,6 +6,9 @@ out/
 .output/
 .eve/
 
+# 本机测试时安装在仓库内的程序目录，不是源码
+/desktop-companion/
+
 # 密钥与环境配置（绝不提交）
 .env
 .env.*

@@ -122,6 +122,68 @@ describe('eve 自测端点 /agent/ping', () => {
   })
 })
 
+describe('运行期换密钥 /model/key', () => {
+  const post = (port: number, body: unknown, token = TOKEN) =>
+    fetch(`http://127.0.0.1:${port}/model/key`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-token': token },
+      body: JSON.stringify(body),
+    })
+
+  it('不带令牌返回 401，换钥函数不被触碰', async () => {
+    let rotated = false
+    const fake = await startBackendServer(TOKEN, {
+      rotateModelKey: async () => { rotated = true },
+    })
+    extraServers.push(fake)
+    const res = await fetch(`http://127.0.0.1:${fake.port}/model/key`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apiKey: 'new-key' }),
+    })
+    expect(res.status).toBe(401)
+    expect(rotated).toBe(false)
+  })
+
+  it('密钥缺失、空串或非字符串都按 400 INVALID_INPUT 回绝', async () => {
+    const fake = await startBackendServer(TOKEN, { rotateModelKey: async () => {} })
+    extraServers.push(fake)
+    for (const body of [{}, { apiKey: '' }, { apiKey: 123 }, 'not-json']) {
+      const res = await post(fake.port, body)
+      expect(res.status).toBe(400)
+      expect(await res.json()).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    }
+  })
+
+  it('合法输入：去掉首尾空白后原样交给换钥函数，返回 200', async () => {
+    let received = ''
+    const fake = await startBackendServer(TOKEN, {
+      rotateModelKey: async (newKey) => { received = newKey },
+    })
+    extraServers.push(fake)
+    const res = await post(fake.port, { apiKey: '  new-key-1  \r\n' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
+    expect(received).toBe('new-key-1')
+  })
+
+  it('换钥失败返回 502 AGENT_ERROR，不转发异常内容', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      rotateModelKey: async () => { throw new Error('内部路径不应泄露') },
+    })
+    extraServers.push(fake)
+    const res = await post(fake.port, { apiKey: 'new-key' })
+    expect(res.status).toBe(502)
+    expect(await res.json()).toEqual({ ok: false, code: 'AGENT_ERROR' })
+  })
+
+  it('未提供换钥能力时明确 503，不假装成功', async () => {
+    const res = await post(server!.port, { apiKey: 'new-key' })
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ ok: false, code: 'AGENT_UNAVAILABLE' })
+  })
+})
+
 describe('模型自测端点 /model/ping', () => {
   it('未配置密钥返回 503 NO_KEY', async () => {
     const res = await fetch(`http://127.0.0.1:${server!.port}/model/ping`, {

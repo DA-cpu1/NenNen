@@ -6,6 +6,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
+import { app } from 'electron'
 
 /** 后台进程的"工作证"：端口号 + 暗号 + 下班按钮 */
 export interface BackendHandle {
@@ -22,8 +23,8 @@ const START_TIMEOUT_MS = 20_000
 
 /**
  * 雇一个后台进程并等它报到。
- * 现在用系统里的 node（24.10.0，后台框架 eve 要求这个版本）跑构建产物；
- * 打包成安装包后会改用随包自带的 node（08 V06，到打包那步再验证）。
+ * 开发时用系统 Node 24.10.0 跑构建产物；打包后用应用自己的 exe 运行后台脚本。
+ * eve 要求 Node 至少为 24；安装后和无开发环境下的数据库读写仍待验证（08 V06）。
  * @param modelApiKey 模型密钥（可选）：和暗号一样从管子送过去，只进内存
  * @returns 工作证（端口号 + 暗号 + 下班按钮）
  */
@@ -33,15 +34,26 @@ export function startBackend(modelApiKey?: string): Promise<BackendHandle> {
     // 两个进程都是本程序的，不像网页登录那样由服务器"下发"。
     // 每次都换新的，就算哪次泄露了，重启就作废
     const token = randomBytes(32).toString('base64url')
-    // 要跑的文件：和本文件（out/main/index.js）同目录的 service.js（构建时一起生成）
-    const serviceEntry = join(__dirname, 'service.js')
+
+    // 跑后台用哪个程序：开发环境用系统 node；打包后用户机器上未必装了 Node，
+    // 改用应用自己的 exe 客串（ELECTRON_RUN_AS_NODE=1 让它以 Node 模式运行脚本）。
+    // 既有记录报告内嵌 Node 24.22.0，并验证过免安装目录中的后台/eve 启动与请求送达；
+    // 后台尚未接入数据库，不能把这些结果写成安装后数据库也已通过（08 C02）。
+    // 后台脚本的位置也分两套：打包后它被放在 asar 档案外的
+    // app.asar.unpacked 目录——独立进程读不了 asar 档案里的文件
+    const packaged = app.isPackaged
+    const serviceEntry = packaged
+      ? join(process.resourcesPath, 'app.asar.unpacked', 'out', 'main', 'service.js')
+      : join(__dirname, 'service.js')
 
     // spawn = 启动一个全新进程。三根管子 = stdin/stdout/stderr：操作系统
     // 在父子进程之间接的"私有线"，流过的内容只有这两家看得见，不进任何
     // 文件、日志或系统记录——所以传机密只走这里
-    const child: ChildProcess = spawn('node', [serviceEntry], {
+    const child: ChildProcess = spawn(packaged ? process.execPath : 'node', [serviceEntry], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      // 注意：暗号绝不放进启动参数或环境变量，唯一出路是下面的输入管子
+      // 注意：暗号绝不放进启动参数或环境变量，唯一出路是下面的输入管子。
+      // 打包时多带的 ELECTRON_RUN_AS_NODE 是公开的运行方式开关，不是机密
+      ...(packaged ? { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } } : {}),
     })
 
     // "结局只定一次"的标记：闹钟、崩溃、报到三处都可能宣布结局，

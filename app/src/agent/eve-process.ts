@@ -89,6 +89,10 @@ export async function startEve(options: EveStartOptions): Promise<EveHandle> {
     cwd: options.appDir,
     env: {
       ...process.env,
+      // 打包后本进程自身就是应用 exe 客串的 Node，process.execPath 已指向
+      // 应用 exe——孙进程要当 Node 用就得带同一个开关。开发环境下跑在
+      // 真 node.exe 里，这个变量会被直接忽略，带着无害
+      ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
       HOST: '127.0.0.1',
       PORT: String(port),
       WORKFLOW_LOCAL_BASE_URL: `http://127.0.0.1:${port}`,

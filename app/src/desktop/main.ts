@@ -9,8 +9,12 @@ import { join } from 'node:path'
 import { startBackend, type BackendHandle } from './backend'
 
 /** 开发期的密钥文件位置（app/local.key，git 已挡住不进仓库）。
- * 正式版改由设置页输入 + safeStorage 加密存储（T11），不再读本地明文文件 */
-const MODEL_KEY_FILE = join(__dirname, '../../local.key')
+ * 打包后主程序住在 resources/app.asar/out/main 里，「往上两级」会指到
+ * asar 档案内部——所以打包版改从 resources 目录读（测试时由验收脚本
+ * 放置）。正式版改由设置页输入 + safeStorage 加密存储（T11），不再读明文文件 */
+const MODEL_KEY_FILE = app.isPackaged
+  ? join(process.resourcesPath, 'local.key')
+  : join(__dirname, '../../local.key')
 
 /** 读开发期密钥文件；不存在或为空就返回 undefined（= 未配置模型） */
 function readModelKey(): string | undefined {
@@ -43,18 +47,40 @@ function createWindow(): void {
   }
 }
 
-// 所有窗口都关掉就退出程序（Windows 的惯例；以后加托盘常驻时再改）
-app.on('window-all-closed', () => {
-  app.quit()
-})
-
-// 程序退出前叫后台进程下班，不许留孤儿进程占着内存和端口
-app.on('will-quit', () => {
-  backend?.stop()
-})
-
 /** 当前的后台进程句柄；每次启动重新雇一个 */
 let backend: BackendHandle | undefined
+
+/**
+ * 抢「全程序唯一」的锁（03 §3：双开不允许）。
+ * requestSingleInstanceLock 由操作系统层面仲裁：第一个实例拿到 true，
+ * 之后再双击图标，新拿到的实例只会拿到 false。
+ * 抢不到的实例唯一的任务就是安静退出——不开窗口、不雇后台、不发任何模型请求。
+ * 所以下面的窗口、事件注册、开机流程全部包在「抢到了」的分支里。
+ */
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  // 有人再次双击图标时，操作系统把这次启动「转交」给拿到锁的我们。
+  // 反应保持最小：把已有窗口弹回最前，仅此而已——不起第二套后台、
+  // 不触发任何模型调用（03 §3）
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (win) {
+      // 窗口可能被最小化在任务栏：先还原再聚焦，用户才看得见
+      if (win.isMinimized()) win.restore()
+      win.focus()
+    }
+  })
+
+  // 所有窗口都关掉就退出程序（Windows 的惯例；以后加托盘常驻时再改）
+  app.on('window-all-closed', () => {
+    app.quit()
+  })
+
+  // 程序退出前叫后台进程下班，不许留孤儿进程占着内存和端口
+  app.on('will-quit', () => {
+    backend?.stop()
+  })
 
 /**
  * 雇后台进程并当场自测，共两步：
@@ -106,11 +132,12 @@ async function startBackendWithSelfCheck(): Promise<void> {
   }
 }
 
-app.whenReady().then(() => {
-  createWindow()
-  // 后台起不来不能连累窗口白屏：先记下来。重试和提示用户是以后的事
-  startBackendWithSelfCheck().catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : 'unknown'
-    console.error(`[后台] 启动失败：${message}`)
+  app.whenReady().then(() => {
+    createWindow()
+    // 后台起不来不能连累窗口白屏：先记下来。重试和提示用户是以后的事
+    startBackendWithSelfCheck().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'unknown'
+      console.error(`[后台] 启动失败：${message}`)
+    })
   })
-})
+}

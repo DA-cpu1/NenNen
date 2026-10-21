@@ -27,6 +27,27 @@ export interface BackendOptions {
   callModel?: typeof callModelOnce
   /** eve 自测函数由后台入口提供；没启动 eve 时不开放这条能力。 */
   pingAgent?: (signal: AbortSignal) => Promise<ModelCallResult>
+  /** 运行期换密钥：由入口实现（整体替换 eve 进程）；测试注入假函数。 */
+  rotateModelKey?: (newKey: string) => Promise<void>
+}
+
+/** 请求体的体积上限：合法的换密钥请求只有几十字节，超大的一律当恶意丢弃 */
+const MAX_BODY_BYTES = 16_384
+
+/**
+ * 把 POST 请求体读完并按 JSON 解析。
+ * 请求体和管道一样是「流」——分批到达，必须攒齐再解析；
+ * 超过体积上限直接抛错，调用方统一按 INVALID_INPUT 回绝。
+ */
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = []
+  let total = 0
+  for await (const chunk of req) {
+    total += (chunk as Buffer).length
+    if (total > MAX_BODY_BYTES) throw new Error('E_BODY_TOO_LARGE')
+    chunks.push(chunk as Buffer)
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf-8'))
 }
 
 /**
@@ -152,6 +173,35 @@ async function handleRequest(
       sendJson(res, 200, { ok: true, text: result.text, usage: result.usage ?? null })
     } catch {
       // 不传原始错误消息；第三方错误对象可能包含提示词或密钥。
+      sendJson(res, 502, { ok: false, code: 'AGENT_ERROR' })
+    }
+    return
+  }
+  // 运行期换密钥（03 §3「重新配置」通道）：收 POST + JSON { apiKey }。
+  // 密钥经「已通过会话令牌认证的本地通道」进来，同样不进日志
+  if (req.method === 'POST' && req.url === '/model/key') {
+    let apiKey: unknown
+    try {
+      const body = (await readJsonBody(req)) as { apiKey?: unknown }
+      apiKey = body?.apiKey
+    } catch {
+      // 解析失败或体积超限，统一按参数不合法回绝
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    if (typeof apiKey !== 'string' || apiKey.trim() === '') {
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    if (!options.rotateModelKey) {
+      sendJson(res, 503, { ok: false, code: 'AGENT_UNAVAILABLE' })
+      return
+    }
+    try {
+      await options.rotateModelKey(apiKey.trim())
+      sendJson(res, 200, { ok: true })
+    } catch {
+      // 换钥失败只报错误码，不转发原始错误内容
       sendJson(res, 502, { ok: false, code: 'AGENT_ERROR' })
     }
     return
