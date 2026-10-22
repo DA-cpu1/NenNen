@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { MIGRATIONS, runMigrations, type Migration } from '../src/data/migrations'
 import { appState } from '../src/data/tables'
+import { readSetting, writeSetting } from '../src/data/settings'
 import { eq } from 'drizzle-orm'
 
 /** 临时目录与连接；每个测试自行决定用哪个连接 */
@@ -37,12 +38,12 @@ describe('基础设置', () => {
 })
 
 describe('迁移执行', () => {
-  it('全新库执行迁移：版本登记 1 条，app_state 初始单行', () => {
+  it('全新库执行迁移：版本登记 2 条，app_state 初始单行', () => {
     runMigrations(companion.sqlite)
     const records = companion.sqlite
       .prepare('SELECT version FROM schema_migrations')
       .all() as Array<{ version: number }>
-    expect(records).toEqual([{ version: 1 }])
+    expect(records).toEqual([{ version: 1 }, { version: 2 }])
     const rows = companion.db.select().from(appState).all()
     expect(rows).toEqual([{ id: 1, globalMemoryEpoch: 0 }])
   })
@@ -52,7 +53,7 @@ describe('迁移执行', () => {
     const count = companion.sqlite
       .prepare('SELECT COUNT(*) AS n FROM schema_migrations')
       .get() as { n: number }
-    expect(count.n).toBe(1)
+    expect(count.n).toBe(2)
   })
 
   it('重开同一数据库文件后再跑迁移仍不重复', () => {
@@ -62,7 +63,7 @@ describe('迁移执行', () => {
       const count = second.sqlite
         .prepare('SELECT COUNT(*) AS n FROM schema_migrations')
         .get() as { n: number }
-      expect(count.n).toBe(1)
+      expect(count.n).toBe(2)
     } finally {
       second.close()
     }
@@ -81,6 +82,36 @@ describe('读写贯通（Drizzle）', () => {
   })
 })
 
+describe('app_settings 读写（T02 窗口位置）', () => {
+  it('写入后能按键读回，值保持对象形状', () => {
+    writeSetting(companion.db, 'petWindow', { x: 100, y: 200, width: 200, height: 260 })
+    expect(readSetting(companion.db, 'petWindow')).toEqual({
+      x: 100,
+      y: 200,
+      width: 200,
+      height: 260,
+    })
+  })
+
+  it('同键再写是覆盖不是新增——保存窗口位置会反复发生', () => {
+    writeSetting(companion.db, 'petWindow', { x: 300, y: 400, width: 200, height: 260 })
+    expect(readSetting(companion.db, 'petWindow')).toEqual({
+      x: 300,
+      y: 400,
+      width: 200,
+      height: 260,
+    })
+    const count = companion.sqlite
+      .prepare("SELECT COUNT(*) AS n FROM app_settings WHERE key = 'petWindow'")
+      .get() as { n: number }
+    expect(count.n).toBe(1)
+  })
+
+  it('没写过的键读回 undefined', () => {
+    expect(readSetting(companion.db, 'no-such-key')).toBeUndefined()
+  })
+})
+
 describe('迁移安全检查', () => {
   it('已应用脚本被改动（摘要不一致）时拒绝写入', () => {
     const tampered: Migration[] = MIGRATIONS.map((m) =>
@@ -90,12 +121,13 @@ describe('迁移安全检查', () => {
   })
 
   it('库版本比程序新（未知迁移版本）时拒绝写入（05 §7）', () => {
-    // 构造一个「已应用 version 2」的库状态：先注入自定义清单应用 v2，再用只认 v1 的默认清单去开
-    const withV2: Migration[] = [
+    // 构造一个「已应用 version 99」的库状态：99 故意选得比真实清单的版本都大，
+    // 保证它永远代表「未来的单子」；真实迁移号增长也不会和它撞车
+    const withFuture: Migration[] = [
       ...MIGRATIONS,
-      { version: 2, summary: '测试用新版本', sql: 'CREATE TABLE test_newer (id INTEGER);' },
+      { version: 99, summary: '测试用未来版本', sql: 'CREATE TABLE test_newer (id INTEGER);' },
     ]
-    runMigrations(companion.sqlite, withV2)
+    runMigrations(companion.sqlite, withFuture)
     expect(() => runMigrations(companion.sqlite)).toThrow('未知迁移版本')
   })
 })

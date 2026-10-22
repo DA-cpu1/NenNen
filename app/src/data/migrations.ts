@@ -36,6 +36,17 @@ CREATE TABLE app_state (
 INSERT INTO app_state (id) VALUES (1);
 `,
   },
+  {
+    version: 2,
+    summary: '应用设置表 app_settings：键值对存窗口位置等非机密设置（05 §2）',
+    sql: `
+CREATE TABLE app_settings (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+`,
+  },
 ]
 
 /** 给一份 SQL 算"指纹"（sha256）：同样的内容永远得到同一串字符，
