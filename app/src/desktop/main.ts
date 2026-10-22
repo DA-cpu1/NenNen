@@ -8,6 +8,8 @@ import { app, BrowserWindow, ipcMain, Menu, screen } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { startBackend, type BackendHandle } from './backend'
+import { petWindowStateSchema } from '../shared/window-state'
+import { clampPetBounds, defaultPetBounds, type WorkArea } from './pet-bounds'
 
 /** 开发期的密钥文件位置（app/local.key，git 已挡住不进仓库）。
  * 打包后主程序住在 resources/app.asar/out/main 里，「往上两级」会指到
@@ -92,6 +94,8 @@ function stopPetDrag(): void {
     petDragTimer = undefined
   }
   petDragOffset = undefined
+  // 拖完顺手保存位置：重启后角色停在用户放的地方（T02 位置恢复）
+  void savePetBounds()
 }
 
 /** 桌宠当前缩放比例：1 = 默认大小。限幅防止缩到看不见或盖满整屏 */
@@ -131,17 +135,103 @@ function showPetMenu(): void {
       label: '恢复默认位置和大小',
       click: () => {
         petScale = 1
-        // 放回主显示器工作区中央：与刚创建、还没指定坐标时的默认落点一致
-        const area = screen.getPrimaryDisplay().workArea
-        pet.setBounds({
-          x: area.x + Math.round((area.width - PET_WINDOW_SIZE.width) / 2),
-          y: area.y + Math.round((area.height - PET_WINDOW_SIZE.height) / 2),
-          width: PET_WINDOW_SIZE.width,
-          height: PET_WINDOW_SIZE.height,
-        })
+        pet.setBounds(
+          defaultPetBounds(
+            PET_WINDOW_SIZE.width,
+            PET_WINDOW_SIZE.height,
+            screen.getPrimaryDisplay().workArea,
+          ),
+        )
+        // 恢复完也保存：下次重启直接落在默认位，不再跳回旧位置
+        void savePetBounds()
       },
     },
   ]).popup({ window: pet })
+}
+
+/**
+ * 显示器配置变化（拔屏、改缩放）时，把角色当场拉回还存在的可见区（03 §3）。
+ * 改缩放后各屏工作区的 DIP 矩形会变，原来合法的位置可能悬到屏外；
+ * clamp 只做最小平移——位置本来合法时窗口纹丝不动，不会借机「归位」。
+ * 完全不可见（屏被拔）就放回主屏默认位。
+ */
+function keepPetVisible(): void {
+  const pet = petWindow
+  if (!pet || pet.isDestroyed()) return
+  const check = petWindowStateSchema.safeParse(pet.getBounds())
+  if (!check.success) return
+  const areas: WorkArea[] = screen.getAllDisplays().map((display) => display.workArea)
+  const clamped = clampPetBounds(check.data, areas)
+  if (clamped) {
+    pet.setBounds(clamped)
+  } else {
+    pet.setBounds(
+      defaultPetBounds(
+        PET_WINDOW_SIZE.width,
+        PET_WINDOW_SIZE.height,
+        screen.getPrimaryDisplay().workArea,
+      ),
+    )
+  }
+}
+
+/**
+ * 把桌宠当前位置保存进数据库（经后台服务，界面进程不经手）。
+ * 三个「没有就不保存」的前置：窗口没了、后台还没起来、读到的矩形过不了
+ * 格式关卡——任何一条不满足都安静跳过。保存失败只记状态码
+ * （01 R17：失败不假装成功，也不拿错误原文刷屏）。
+ */
+async function savePetBounds(): Promise<void> {
+  const pet = petWindow
+  const handle = backend
+  if (!pet || pet.isDestroyed() || !handle) return
+  const check = petWindowStateSchema.safeParse(pet.getBounds())
+  if (!check.success) return
+  try {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/window-state`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-session-token': handle.token },
+      body: JSON.stringify(check.data),
+    })
+    if (res.status !== 200) {
+      console.error(`[窗口状态] 保存失败：${res.status}`)
+    }
+  } catch {
+    // 网络层失败（比如后台正好在关闭）：不重试，下次拖动/缩放会再存
+  }
+}
+
+/**
+ * 开机恢复桌宠位置：向后台要上次保存的位置，能用就先「拉回可见区」再落位。
+ * 四道防线，任何一道不过都停在默认位置，绝不拿脏数据设窗口：
+ * ① 请求失败；② 没存过（state 为 null）；③ 存的值过不了格式关卡；
+ * ④ 位置在当前桌面布局里完全不可见（显示器被拔，clamp 返回 null）。
+ * 已知取舍：窗口先按默认位显示、恢复数据到位后跳过去——后台就绪要几秒，
+ * 与其让角色迟到，不如让它先出现再挪窝（T05 再优化启动顺序）。
+ */
+async function restorePetBounds(handle: BackendHandle): Promise<void> {
+  const pet = petWindow
+  if (!pet || pet.isDestroyed()) return
+  try {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/window-state`, {
+      headers: { 'x-session-token': handle.token },
+    })
+    if (res.status !== 200) {
+      console.error(`[窗口状态] 读取失败：${res.status}`)
+      return
+    }
+    const body = (await res.json()) as { ok: boolean; state: unknown }
+    if (!body.ok || body.state === null) return
+    const check = petWindowStateSchema.safeParse(body.state)
+    if (!check.success) return
+    // 工作区矩形（Rectangle）与 WorkArea 字段相同，结构上直接兼容
+    const areas: WorkArea[] = screen.getAllDisplays().map((display) => display.workArea)
+    const clamped = clampPetBounds(check.data, areas)
+    if (!clamped) return
+    pet.setBounds(clamped)
+  } catch {
+    // 后台未就绪等瞬时原因：保持默认位置，本次不恢复
+  }
 }
 
 
@@ -282,6 +372,10 @@ async function startBackendWithSelfCheck(): Promise<void> {
     console.error(`[数据库] 自测请求失败：${message}`)
   }
 
+  // 桌宠位置恢复（T02）：只依赖后台服务本身，不依赖模型密钥，
+  // 所以放在「无密钥提前返回」之前
+  await restorePetBounds(handle)
+
   if (!modelKey) {
     console.log('[模型] app/local.key 不存在，跳过模型自测')
     return
@@ -326,6 +420,8 @@ async function startBackendWithSelfCheck(): Promise<void> {
     )
     petScale = next
     resizePetWindow(next)
+    // 每档缩放动作后顺手保存：重启后保持用户调的大小
+    void savePetBounds()
   })
   ipcMain.on('pet:menu', () => showPetMenu())
 
@@ -333,6 +429,10 @@ async function startBackendWithSelfCheck(): Promise<void> {
     createWindow()
     // 桌宠窗口紧随其后；它不依赖后台服务，后台起不来也不影响角色显示
     createPetWindow()
+    // screen 模块要等应用就绪后才能用（Electron 规矩），所以这两个
+    // 监听在这里注册而不是文件顶层
+    screen.on('display-metrics-changed', () => keepPetVisible())
+    screen.on('display-removed', () => keepPetVisible())
     // 后台起不来不能连累窗口白屏：先记下来。重试和提示用户是以后的事
     startBackendWithSelfCheck().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : 'unknown'
