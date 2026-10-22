@@ -11,6 +11,8 @@ import { pingEve } from '../agent/eve-client'
 import { openCompanionDatabase, type CompanionDb } from '../data/db'
 import { runMigrations } from '../data/migrations'
 import { appState } from '../data/tables'
+import { readSetting, writeSetting } from '../data/settings'
+import { PET_WINDOW_KEY, type PetWindowState } from '../shared/window-state'
 
 /** 应用根目录：编译产物在 out/main/，往上两级正好是 app/ */
 const APP_DIR = resolve(__dirname, '../..')
@@ -110,7 +112,23 @@ function main(): void {
       database = openCompanionDatabase(dbPath)
       // 迁移抛错不在这里接：让它顺着 start 的 catch 统一走 E_START 退出
       runMigrations(database.sqlite)
-      options.db = { readEpoch, bumpEpoch }
+      options.db = {
+        readEpoch,
+        bumpEpoch,
+        // 桌宠窗口位置（T02）：存在 app_settings 的 petWindow 键下（05 §2）。
+        // 读出的原始值不在这里验格式——总机的 /window-state 只是搬运，
+        // 消费方（主进程）自己过 Zod 关卡，坏数据在那里被拦下。
+        // 开头与 readEpoch 同款守卫：闭包捕获的是模块级变量，编译器不知道
+        // 「走到这里时一定开过库」，得现查现抛
+        readWindowState: () => {
+          if (!database) throw new Error('E_DB_NOT_OPEN')
+          return readSetting(database.db, PET_WINDOW_KEY)
+        },
+        writeWindowState: (value: PetWindowState) => {
+          if (!database) throw new Error('E_DB_NOT_OPEN')
+          writeSetting(database.db, PET_WINDOW_KEY, value)
+        },
+      }
     }
     if (modelApiKey) await startEveWith(modelApiKey)
     if (closing) {

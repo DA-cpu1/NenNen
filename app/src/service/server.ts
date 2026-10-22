@@ -10,6 +10,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { timingSafeEqual } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import { callModelOnce, type ModelCallResult } from '../agent/model'
+import { petWindowStateSchema, type PetWindowState } from '../shared/window-state'
 
 /** 总机句柄：端口号 + 关机方法 */
 export interface BackendServer {
@@ -38,6 +39,10 @@ export interface BackendOptions {
     readEpoch(): number
     /** 共享记忆版本号 +1 并返回新值——一次真实的业务写 */
     bumpEpoch(): number
+    /** 读桌宠窗口位置；没存过返回 undefined（T02 位置恢复） */
+    readWindowState(): unknown
+    /** 保存桌宠窗口位置（值已过格式关卡） */
+    writeWindowState(value: PetWindowState): void
   }
 }
 
@@ -242,6 +247,48 @@ async function handleRequest(
       sendJson(res, 200, { ok: true, globalMemoryEpoch: options.db.bumpEpoch() })
     } catch {
       // 写失败同样只报错误码；失败绝不假装成功（01 R17）
+      sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
+    }
+    return
+  }
+  // 窗口位置（T02 桌宠位置恢复）：GET 读上次保存的位置，PUT 存新位置。
+  // 调用方目前只有主进程，但格式仍过 Zod 关卡——将来谁接这条通道说不准，
+  // 进库的数据先过格式关（03 §2）；失败按 400 回绝，不猜调用方的意思
+  if (req.method === 'GET' && req.url === '/window-state') {
+    if (!options.db) {
+      sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' })
+      return
+    }
+    try {
+      sendJson(res, 200, { ok: true, state: options.db.readWindowState() ?? null })
+    } catch {
+      // 读失败只报错误码，数据库报错原文可能带表结构细节，不转发
+      sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
+    }
+    return
+  }
+  if (req.method === 'PUT' && req.url === '/window-state') {
+    if (!options.db) {
+      sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' })
+      return
+    }
+    let parsed: unknown
+    try {
+      parsed = await readJsonBody(req)
+    } catch {
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    const check = petWindowStateSchema.safeParse(parsed)
+    if (!check.success) {
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    try {
+      options.db.writeWindowState(check.data)
+      sendJson(res, 200, { ok: true })
+    } catch {
+      // 写失败绝不回 ok（01 R17：失败不假装成功）
       sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
     }
     return

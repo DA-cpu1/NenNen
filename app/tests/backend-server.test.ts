@@ -197,6 +197,9 @@ describe('数据库自测端点 /db/ping', () => {
       db: {
         readEpoch: () => { touched = true; return 0 },
         bumpEpoch: () => { touched = true; return 1 },
+        // 本组用例只关心 epoch 函数；窗口位置函数放无害存根补齐接口
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
       },
     })
     extraServers.push(fake)
@@ -218,7 +221,12 @@ describe('数据库自测端点 /db/ping', () => {
 
   it('GET 读到注入函数返回的当前值', async () => {
     const fake = await startBackendServer(TOKEN, {
-      db: { readEpoch: () => 7, bumpEpoch: () => 8 },
+      db: {
+        readEpoch: () => 7,
+        bumpEpoch: () => 8,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+      },
     })
     extraServers.push(fake)
     const res = await get(fake.port)
@@ -229,7 +237,12 @@ describe('数据库自测端点 /db/ping', () => {
   it('POST 调用写入函数并返回新值', async () => {
     let bumped = 0
     const fake = await startBackendServer(TOKEN, {
-      db: { readEpoch: () => bumped, bumpEpoch: () => (bumped += 1) },
+      db: {
+        readEpoch: () => bumped,
+        bumpEpoch: () => (bumped += 1),
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+      },
     })
     extraServers.push(fake)
     const res = await post(fake.port)
@@ -243,6 +256,8 @@ describe('数据库自测端点 /db/ping', () => {
       db: {
         readEpoch: () => { throw new Error('内部路径不应泄露') },
         bumpEpoch: () => { throw new Error('内部路径不应泄露') },
+        readWindowState: () => { throw new Error('内部路径不应泄露') },
+        writeWindowState: () => { throw new Error('内部路径不应泄露') },
       },
     })
     extraServers.push(fake)
@@ -250,6 +265,115 @@ describe('数据库自测端点 /db/ping', () => {
       expect(res.status).toBe(502)
       expect(await res.json()).toEqual({ ok: false, code: 'DB_ERROR' })
     }
+  })
+})
+
+describe('窗口状态端点 /window-state（T02 位置恢复）', () => {
+  const get = (port: number, token = TOKEN) =>
+    fetch(`http://127.0.0.1:${port}/window-state`, { headers: { 'x-session-token': token } })
+  const put = (port: number, body: unknown, token = TOKEN) =>
+    fetch(`http://127.0.0.1:${port}/window-state`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-session-token': token },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    })
+  /** 省得每个用例都抄四遍注入函数：给两个可观察行为的假实现 */
+  const fakeDb = (read: () => unknown, write: (value: unknown) => void) => ({
+    readEpoch: () => 0,
+    bumpEpoch: () => 1,
+    readWindowState: read,
+    writeWindowState: write as (value: never) => void,
+  })
+
+  it('未带令牌返回 401，读写函数不被触碰', async () => {
+    let touched = false
+    const fake = await startBackendServer(TOKEN, {
+      db: fakeDb(
+        () => { touched = true; return undefined },
+        () => { touched = true },
+      ),
+    })
+    extraServers.push(fake)
+    const res = await fetch(`http://127.0.0.1:${fake.port}/window-state`)
+    expect(res.status).toBe(401)
+    expect(touched).toBe(false)
+  })
+
+  it('未接数据库时 GET 与 PUT 都返回 503，不假装可用', async () => {
+    // 共享的 server 启动时没传 db，正好代表「入口没接库」的状态
+    const readRes = await get(server!.port)
+    expect(readRes.status).toBe(503)
+    expect(await readRes.json()).toEqual({ ok: false, code: 'DB_UNAVAILABLE' })
+    const writeRes = await put(server!.port, { x: 1, y: 2, width: 3, height: 4 })
+    expect(writeRes.status).toBe(503)
+    expect(await writeRes.json()).toEqual({ ok: false, code: 'DB_UNAVAILABLE' })
+  })
+
+  it('GET 返回注入函数读到的已存值；没存过时是 null', async () => {
+    const saved = await startBackendServer(TOKEN, {
+      db: fakeDb(() => ({ x: 10, y: 20, width: 200, height: 260 }), () => {}),
+    })
+    extraServers.push(saved)
+    const res = await get(saved.port)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, state: { x: 10, y: 20, width: 200, height: 260 } })
+
+    const empty = await startBackendServer(TOKEN, {
+      db: fakeDb(() => undefined, () => {}),
+    })
+    extraServers.push(empty)
+    const res2 = await get(empty.port)
+    expect(await res2.json()).toEqual({ ok: true, state: null })
+  })
+
+  it('PUT 合法输入整体交给写入函数并返回 200', async () => {
+    let written: unknown
+    const fake = await startBackendServer(TOKEN, {
+      db: fakeDb(() => undefined, (value) => { written = value }),
+    })
+    extraServers.push(fake)
+    const res = await put(fake.port, { x: -5, y: 0, width: 400, height: 520 })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
+    expect(written).toEqual({ x: -5, y: 0, width: 400, height: 520 })
+  })
+
+  it('PUT 缺字段/类型错/非正宽高/小数/多余字段/非 JSON 一律 400', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      db: fakeDb(() => undefined, () => {}),
+    })
+    extraServers.push(fake)
+    const badBodies = [
+      {},
+      { x: 1, y: 2, width: 3 },
+      { x: 'a', y: 2, width: 3, height: 4 },
+      { x: 1, y: 2, width: -3, height: 4 },
+      { x: 1, y: 2, width: 0, height: 4 },
+      { x: 1.5, y: 2, width: 3, height: 4 },
+      { x: 1, y: 2, width: 3, height: 4, extra: 1 },
+      'not-json',
+    ]
+    for (const body of badBodies) {
+      const res = await put(fake.port, body)
+      expect(res.status, `请求体 ${JSON.stringify(body)} 应被回绝`).toBe(400)
+      expect(await res.json()).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    }
+  })
+
+  it('读写函数抛错返回 502 DB_ERROR，不转发错误内容', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      db: fakeDb(
+        () => { throw new Error('内部路径不应泄露') },
+        () => { throw new Error('内部路径不应泄露') },
+      ),
+    })
+    extraServers.push(fake)
+    const readRes = await get(fake.port)
+    expect(readRes.status).toBe(502)
+    expect(await readRes.json()).toEqual({ ok: false, code: 'DB_ERROR' })
+    const writeRes = await put(fake.port, { x: 1, y: 2, width: 3, height: 4 })
+    expect(writeRes.status).toBe(502)
+    expect(await writeRes.json()).toEqual({ ok: false, code: 'DB_ERROR' })
   })
 })
 
