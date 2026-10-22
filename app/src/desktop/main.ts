@@ -1,7 +1,8 @@
 /**
- * 程序"大管家"进程的入口：开一个窗口、把界面装进去、雇一个后台进程干重活。
+ * 程序"大管家"进程的入口：开窗口、把界面装进去、雇一个后台进程干重活。
  * 规矩：窗口界面不许碰数据库和密钥，重活全在后台进程（03 §3）。
- * 现在是技术贯通骨架：密钥已走后台管道；防双开和托盘留待后续小步骤。
+ * 现在开两个窗口：T01 的状态窗 + T02 的透明桌宠窗（角色小样）；
+ * 托盘留待后续小步骤。
  */
 import { app, BrowserWindow } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
@@ -44,6 +45,51 @@ function createWindow(): void {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
     void win.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+}
+
+/** 桌宠窗口的初始尺寸，与占位图 pet-sample.svg 的 viewBox（200×260）一致：
+ *  窗口多大、角色就多大，透明区只存在于角色图的镂空处（R01：尺寸与实际
+ *  挡鼠标的区域一致——窗口不留角色外面的大片空白） */
+const PET_WINDOW_SIZE = { width: 200, height: 260 }
+
+/**
+ * 创建桌宠窗口：无边框 + 全透明（03 §3）。和状态窗的关键差别：
+ * - frame: false 去掉标题栏和边框——桌宠不是「带标题栏的软件窗口」；
+ * - transparent: true 允许整窗透明：没画内容的像素直接露出桌面；
+ * - hasShadow: false 关掉系统投影——投影按矩形窗口算，会给透明的四角
+ *   投出「不存在的东西」，看起来像一圈脏边；
+ * - resizable: false 不给系统拖边框缩放——无边框窗没有边可拖，
+ *   缩放按规格走 Ctrl 滚轮（后续小步骤实现，03 §3）；
+ * - skipTaskbar: true 不占任务栏——任务栏位置归状态窗，桌宠常驻不抢位。
+ */
+function createPetWindow(): void {
+  const pet = new BrowserWindow({
+    ...PET_WINDOW_SIZE,
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    resizable: false,
+    skipTaskbar: true,
+    // 透明窗常用「先藏后亮」：等页面真正画完再显示，避免先白屏一闪
+    show: false,
+    webPreferences: {
+      // 和状态窗相同的三道安全开关：桌宠同样是纯网页，拿不到 Node 能力（03 §7）
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: join(__dirname, '../preload/index.js'),
+    },
+  })
+  pet.once('ready-to-show', () => {
+    pet.show()
+  })
+  // electron-vite 的约定：开发模式连本地开发服务器，正式版加载打包好的文件
+  if (process.env.ELECTRON_RENDERER_URL) {
+    // 多入口页面对应开发服务器上的「/pet.html」（见 electron.vite.config.ts 的 input）
+    void pet.loadURL(`${process.env.ELECTRON_RENDERER_URL}/pet.html`)
+  } else {
+    void pet.loadFile(join(__dirname, '../renderer/pet.html'))
   }
 }
 
@@ -163,6 +209,8 @@ async function startBackendWithSelfCheck(): Promise<void> {
 
   app.whenReady().then(() => {
     createWindow()
+    // 桌宠窗口紧随其后；它不依赖后台服务，后台起不来也不影响角色显示
+    createPetWindow()
     // 后台起不来不能连累窗口白屏：先记下来。重试和提示用户是以后的事
     startBackendWithSelfCheck().catch((error: unknown) => {
       const message = error instanceof Error ? error.message : 'unknown'

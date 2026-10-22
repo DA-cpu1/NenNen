@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- 桌宠窗口的入口页面：和 index.html 一样只做挂载点，不放业务。
+     与状态窗的区别：整个页面背景透明，桌面能透过窗口露出来（T02 透明角色小样）。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 与状态窗同源的防导航策略；多放行 img-src data: 是为第 2 步准备——
+         届时图片会以 data: 地址喂给 canvas 读像素做鼠标命中 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>桌宠</title>
+    <!-- 透明窗口的三件套：去掉默认白底、去掉页边距、不许出滚动条
+         （滚动条是不透明的，会把「透明窗口」变成「带滚动条的方块」） -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./pet/main.tsx"></script>
+  </body>
+</html>

@@ -38,7 +38,12 @@ export default defineConfig({
     plugins: [react()],
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/ui/index.html') },
+        // 两个界面入口：index 状态窗（T01）、pet 桌宠透明窗（T02 角色小样）。
+        // 开发服务器上多入口页面的地址就是「/入口名.html」
+        input: {
+          index: resolve(__dirname, 'src/ui/index.html'),
+          pet: resolve(__dirname, 'src/ui/pet.html'),
+        },
       },
     },
   },

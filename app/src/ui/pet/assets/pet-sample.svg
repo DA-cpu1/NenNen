@@ -1,0 +1,16 @@
+<!-- T02 透明窗口小样的占位角色图：自绘几何图形，不是正式角色（正式图片在 08 属未决事项）。
+     特意让头两侧、四角留出大片透明区：后续「透明区穿透、实心区可点」的命中检查要靠它们。 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 260" width="200" height="260">
+  <!-- 身体：梯形长裙，顶部比头窄，两侧与头之间留透明缺口 -->
+  <path d="M 64 148 Q 100 132 136 148 L 150 250 Q 100 262 50 250 Z" fill="#a8c8ec" />
+  <!-- 头：大圆，占画面主体 -->
+  <circle cx="100" cy="78" r="60" fill="#f7d6e0" />
+  <!-- 眼睛 -->
+  <ellipse cx="80" cy="80" rx="6" ry="9" fill="#4a3f3f" />
+  <ellipse cx="120" cy="80" rx="6" ry="9" fill="#4a3f3f" />
+  <!-- 腮红 -->
+  <ellipse cx="63" cy="98" rx="9" ry="5" fill="#f2a7b3" opacity="0.7" />
+  <ellipse cx="137" cy="98" rx="9" ry="5" fill="#f2a7b3" opacity="0.7" />
+  <!-- 占位标记：字样提醒这不是正式图 -->
+  <text x="100" y="242" text-anchor="middle" font-size="16" fill="#33517a">占位</text>
+</svg>
