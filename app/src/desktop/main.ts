@@ -4,7 +4,7 @@
  * 现在开两个窗口：T01 的状态窗 + T02 的透明桌宠窗（角色小样）；
  * 托盘留待后续小步骤。
  */
-import { app, BrowserWindow, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, screen } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { startBackend, type BackendHandle } from './backend'
@@ -93,6 +93,57 @@ function stopPetDrag(): void {
   }
   petDragOffset = undefined
 }
+
+/** 桌宠当前缩放比例：1 = 默认大小。限幅防止缩到看不见或盖满整屏 */
+let petScale = 1
+const PET_SCALE_MIN = 0.25
+const PET_SCALE_MAX = 3
+/** 每档缩放的倍数：向上滚一格放大 10%，向下滚缩小回 ~91% */
+const PET_SCALE_STEP = 1.1
+
+/**
+ * 把桌宠窗口改成指定比例。「钉住脚底」：底部中点不动，角色向上长大、
+ * 向下缩小——桌宠站在桌面上的感觉，而不是以窗口中心缩放。
+ * 为什么比例由主进程记：界面只是一张填满窗口的图，不需要知道比例；
+ * 状态少一份，两边对不上账的机会就少一个。
+ */
+function resizePetWindow(scale: number): void {
+  const pet = petWindow
+  if (!pet || pet.isDestroyed()) return
+  const width = Math.round(PET_WINDOW_SIZE.width * scale)
+  const height = Math.round(PET_WINDOW_SIZE.height * scale)
+  const bounds = pet.getBounds()
+  // 一次 setBounds 改位置和尺寸：分两次调会出现「先缩再挪」的中间帧，肉眼可见地抖
+  pet.setBounds({
+    x: Math.round(bounds.x + (bounds.width - width) / 2),
+    y: Math.round(bounds.y + bounds.height - height),
+    width,
+    height,
+  })
+}
+
+/** 右键菜单（01 §5 桌宠页）。目前只有一项：恢复默认位置和大小（R01） */
+function showPetMenu(): void {
+  const pet = petWindow
+  if (!pet || pet.isDestroyed()) return
+  Menu.buildFromTemplate([
+    {
+      label: '恢复默认位置和大小',
+      click: () => {
+        petScale = 1
+        // 放回主显示器工作区中央：与刚创建、还没指定坐标时的默认落点一致
+        const area = screen.getPrimaryDisplay().workArea
+        pet.setBounds({
+          x: area.x + Math.round((area.width - PET_WINDOW_SIZE.width) / 2),
+          y: area.y + Math.round((area.height - PET_WINDOW_SIZE.height) / 2),
+          width: PET_WINDOW_SIZE.width,
+          height: PET_WINDOW_SIZE.height,
+        })
+      },
+    },
+  ]).popup({ window: pet })
+}
+
 
 /** 桌宠窗口的初始尺寸，与占位图 pet-sample.svg 的 viewBox（200×260）一致：
  *  窗口多大、角色就多大，透明区只存在于角色图的镂空处（R01：尺寸与实际
@@ -265,6 +316,18 @@ async function startBackendWithSelfCheck(): Promise<void> {
   // 桌宠界面发来的拖动信号（preload 放行的固定操作，只带信号不带数据）
   ipcMain.on('pet:drag-start', () => startPetDrag())
   ipcMain.on('pet:drag-end', () => stopPetDrag())
+
+  // 缩放：方向只认 ±1，其余当垃圾丢弃——这是内部信号通道，不是给随意数值的门
+  ipcMain.on('pet:zoom', (_event, direction: unknown) => {
+    if (direction !== 1 && direction !== -1) return
+    const next = Math.min(
+      PET_SCALE_MAX,
+      Math.max(PET_SCALE_MIN, petScale * (direction === 1 ? PET_SCALE_STEP : 1 / PET_SCALE_STEP)),
+    )
+    petScale = next
+    resizePetWindow(next)
+  })
+  ipcMain.on('pet:menu', () => showPetMenu())
 
   app.whenReady().then(() => {
     createWindow()

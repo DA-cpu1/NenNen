@@ -13,4 +13,12 @@ interface Window {
     start: () => void
     stop: () => void
   }
+  /** 缩放一档：1 放大，-1 缩小（见 desktop/preload.ts） */
+  petZoom?: {
+    by: (direction: 1 | -1) => void
+  }
+  /** 请求弹出桌宠右键菜单 */
+  petMenu?: {
+    open: () => void
+  }
 }
