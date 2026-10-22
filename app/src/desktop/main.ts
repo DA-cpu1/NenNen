@@ -4,7 +4,7 @@
  * 现在开两个窗口：T01 的状态窗 + T02 的透明桌宠窗（角色小样）；
  * 托盘留待后续小步骤。
  */
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, ipcMain, screen } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { startBackend, type BackendHandle } from './backend'
@@ -48,6 +48,52 @@ function createWindow(): void {
   }
 }
 
+/** 桌宠窗口的引用；关闭时置空。拖动、缩放、右键菜单都通过它操作窗口 */
+let petWindow: BrowserWindow | undefined
+
+/** 拖动状态：定时器和「抓手点」偏移。二者存在 = 正在拖动 */
+let petDragTimer: NodeJS.Timeout | undefined
+let petDragOffset: { x: number; y: number } | undefined
+
+/**
+ * 手动拖动·开始：记下光标在窗口里的「抓手点」，然后开一个约每帧一次的
+ * 定时器，让窗口跟着光标走。
+ * 为什么不用 CSS 的 -webkit-app-region: drag：它把区域交给系统当「标题栏」，
+ * 右键和点击事件都会被吞——桌宠以后要靠点击开聊天、右键弹菜单（01 §5）。
+ * 为什么坐标不走界面进程：主进程直接向屏幕查询光标位置（系统统一的逻辑
+ * 像素单位），不在进程之间传坐标，也就不必做多屏缩放换算。
+ */
+function startPetDrag(): void {
+  if (petDragTimer) return
+  const pet = petWindow
+  if (!pet || pet.isDestroyed()) return
+  const bounds = pet.getBounds()
+  const cursor = screen.getCursorScreenPoint()
+  petDragOffset = { x: cursor.x - bounds.x, y: cursor.y - bounds.y }
+  petDragTimer = setInterval(() => {
+    const win = petWindow
+    if (!win || win.isDestroyed()) {
+      stopPetDrag()
+      return
+    }
+    const point = screen.getCursorScreenPoint()
+    // 抓手点相对光标保持不动：拖动时角色不会「跳」到光标中心
+    win.setPosition(
+      Math.round(point.x - (petDragOffset?.x ?? 0)),
+      Math.round(point.y - (petDragOffset?.y ?? 0)),
+    )
+  }, 16)
+}
+
+/** 手动拖动·结束：关定时器、清状态；重复调用无害 */
+function stopPetDrag(): void {
+  if (petDragTimer) {
+    clearInterval(petDragTimer)
+    petDragTimer = undefined
+  }
+  petDragOffset = undefined
+}
+
 /** 桌宠窗口的初始尺寸，与占位图 pet-sample.svg 的 viewBox（200×260）一致：
  *  窗口多大、角色就多大，透明区只存在于角色图的镂空处（R01：尺寸与实际
  *  挡鼠标的区域一致——窗口不留角色外面的大片空白） */
@@ -80,6 +126,14 @@ function createPetWindow(): void {
       nodeIntegration: false,
       preload: join(__dirname, '../preload/index.js'),
     },
+  })
+  // 存到模块级变量：拖动、后续的缩放/右键菜单都要靠它找到这个窗口
+  petWindow = pet
+  // 窗口关闭时清空引用，并兜底停掉拖动——防止界面没来得及发「结束」信号，
+  // 窗口就一直黏在光标上
+  pet.on('closed', () => {
+    petWindow = undefined
+    stopPetDrag()
   })
   pet.once('ready-to-show', () => {
     pet.show()
@@ -125,6 +179,7 @@ if (!app.requestSingleInstanceLock()) {
 
   // 程序退出前叫后台进程下班，不许留孤儿进程占着内存和端口
   app.on('will-quit', () => {
+    stopPetDrag()
     backend?.stop()
   })
 
@@ -206,6 +261,10 @@ async function startBackendWithSelfCheck(): Promise<void> {
     console.error(`[模型] 自测请求失败：${message}`)
   }
 }
+
+  // 桌宠界面发来的拖动信号（preload 放行的固定操作，只带信号不带数据）
+  ipcMain.on('pet:drag-start', () => startPetDrag())
+  ipcMain.on('pet:drag-end', () => stopPetDrag())
 
   app.whenReady().then(() => {
     createWindow()

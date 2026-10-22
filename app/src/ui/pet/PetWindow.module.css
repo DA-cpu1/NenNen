@@ -15,4 +15,10 @@
      不靠浏览器默认的「拖住图片」行为 */
   user-select: none;
   -webkit-user-drag: none;
+  /* 光标提示「这里可以抓住拖」；按住时变握拳 */
+  cursor: grab;
+}
+
+.pet:active {
+  cursor: grabbing;
 }
