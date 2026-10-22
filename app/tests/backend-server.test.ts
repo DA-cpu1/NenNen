@@ -184,6 +184,75 @@ describe('运行期换密钥 /model/key', () => {
   })
 })
 
+describe('数据库自测端点 /db/ping', () => {
+  // 与 /model/key 相同的固定令牌访问方式
+  const get = (port: number, token = TOKEN) =>
+    fetch(`http://127.0.0.1:${port}/db/ping`, { headers: { 'x-session-token': token } })
+  const post = (port: number, token = TOKEN) =>
+    fetch(`http://127.0.0.1:${port}/db/ping`, { method: 'POST', headers: { 'x-session-token': token } })
+
+  it('未带令牌返回 401，读写函数不被触碰', async () => {
+    let touched = false
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => { touched = true; return 0 },
+        bumpEpoch: () => { touched = true; return 1 },
+      },
+    })
+    extraServers.push(fake)
+    for (const res of [await get(fake.port, 'wrong-token'), await post(fake.port, 'wrong-token')]) {
+      expect(res.status).toBe(401)
+    }
+    expect(touched).toBe(false)
+  })
+
+  it('未接数据库时 GET 与 POST 都明确返回 503，不假装可用', async () => {
+    // 共享的 server 启动时没传 db，正好代表「入口没接库」的状态
+    const readRes = await get(server!.port)
+    expect(readRes.status).toBe(503)
+    expect(await readRes.json()).toEqual({ ok: false, code: 'DB_UNAVAILABLE' })
+    const writeRes = await post(server!.port)
+    expect(writeRes.status).toBe(503)
+    expect(await writeRes.json()).toEqual({ ok: false, code: 'DB_UNAVAILABLE' })
+  })
+
+  it('GET 读到注入函数返回的当前值', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      db: { readEpoch: () => 7, bumpEpoch: () => 8 },
+    })
+    extraServers.push(fake)
+    const res = await get(fake.port)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, globalMemoryEpoch: 7 })
+  })
+
+  it('POST 调用写入函数并返回新值', async () => {
+    let bumped = 0
+    const fake = await startBackendServer(TOKEN, {
+      db: { readEpoch: () => bumped, bumpEpoch: () => (bumped += 1) },
+    })
+    extraServers.push(fake)
+    const res = await post(fake.port)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, globalMemoryEpoch: 1 })
+    expect(bumped).toBe(1)
+  })
+
+  it('读写出错返回 502 DB_ERROR，不转发错误内容', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => { throw new Error('内部路径不应泄露') },
+        bumpEpoch: () => { throw new Error('内部路径不应泄露') },
+      },
+    })
+    extraServers.push(fake)
+    for (const res of [await get(fake.port), await post(fake.port)]) {
+      expect(res.status).toBe(502)
+      expect(await res.json()).toEqual({ ok: false, code: 'DB_ERROR' })
+    }
+  })
+})
+
 describe('模型自测端点 /model/ping', () => {
   it('未配置密钥返回 503 NO_KEY', async () => {
     const res = await fetch(`http://127.0.0.1:${server!.port}/model/ping`, {

@@ -29,6 +29,16 @@ export interface BackendOptions {
   pingAgent?: (signal: AbortSignal) => Promise<ModelCallResult>
   /** 运行期换密钥：由入口实现（整体替换 eve 进程）；测试注入假函数。 */
   rotateModelKey?: (newKey: string) => Promise<void>
+  /** 数据库自测读写：由后台入口提供（打开的真库）；测试注入假函数。
+   *  为什么做成注入函数而不是直接 import 数据库代码：总机这层只管
+   *  「接电话、对暗号、按规则回话」，库文件从哪来、怎么开是入口的事；
+   *  测试也因此能用假读写函数，不碰真实文件（07 §3 固定输入）。 */
+  db?: {
+    /** 读 app_state 表的共享记忆版本号（当前唯一的业务值） */
+    readEpoch(): number
+    /** 共享记忆版本号 +1 并返回新值——一次真实的业务写 */
+    bumpEpoch(): number
+  }
 }
 
 /** 请求体的体积上限：合法的换密钥请求只有几十字节，超大的一律当恶意丢弃 */
@@ -203,6 +213,36 @@ async function handleRequest(
     } catch {
       // 换钥失败只报错误码，不转发原始错误内容
       sendJson(res, 502, { ok: false, code: 'AGENT_ERROR' })
+    }
+    return
+  }
+  // 数据库自测（T01 贯通）：GET 读、POST 写。写的内容是真实业务值
+  // （app_state 的共享记忆版本号 +1）；「后台重启后 GET 仍读到 POST
+  // 写入的值」就是数据落了盘、不是只活在内存里的证据。这对端点是
+  // 贯通自测用的，T04 建正式应用接口时再收编或替换。
+  if (req.method === 'GET' && req.url === '/db/ping') {
+    if (!options.db) {
+      sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' })
+      return
+    }
+    try {
+      sendJson(res, 200, { ok: true, globalMemoryEpoch: options.db.readEpoch() })
+    } catch {
+      // 读失败只报错误码；数据库报错原文可能带表结构细节，不转发
+      sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
+    }
+    return
+  }
+  if (req.method === 'POST' && req.url === '/db/ping') {
+    if (!options.db) {
+      sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' })
+      return
+    }
+    try {
+      sendJson(res, 200, { ok: true, globalMemoryEpoch: options.db.bumpEpoch() })
+    } catch {
+      // 写失败同样只报错误码；失败绝不假装成功（01 R17）
+      sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
     }
     return
   }

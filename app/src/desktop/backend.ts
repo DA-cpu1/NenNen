@@ -5,6 +5,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
 
@@ -46,13 +47,22 @@ export function startBackend(modelApiKey?: string): Promise<BackendHandle> {
       ? join(process.resourcesPath, 'app.asar.unpacked', 'out', 'main', 'service.js')
       : join(__dirname, 'service.js')
 
+    // 数据库文件放 Electron 的用户数据目录（05 §1：用系统 API 取位置，
+    // 不硬编码用户名、不放安装目录——装在 Program Files 的话普通用户
+    // 根本没有写权限）。目录正常由 Electron 建好；再补一道递归建目录，
+    // 防的是「用户手动删了数据目录、应用从此起不来」这类小事故
+    const dataDir = app.getPath('userData')
+    mkdirSync(dataDir, { recursive: true })
+    const dbPath = join(dataDir, 'companion.db')
+
     // spawn = 启动一个全新进程。三根管子 = stdin/stdout/stderr：操作系统
     // 在父子进程之间接的"私有线"，流过的内容只有这两家看得见，不进任何
     // 文件、日志或系统记录——所以传机密只走这里
-    const child: ChildProcess = spawn(packaged ? process.execPath : 'node', [serviceEntry], {
+    const child: ChildProcess = spawn(packaged ? process.execPath : 'node', [serviceEntry, '--db', dbPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
       // 注意：暗号绝不放进启动参数或环境变量，唯一出路是下面的输入管子。
-      // 打包时多带的 ELECTRON_RUN_AS_NODE 是公开的运行方式开关，不是机密
+      // 启动参数里带的 --db 只是文件位置（不是机密）；打包时多带的
+      // ELECTRON_RUN_AS_NODE 也是公开的运行方式开关，不是机密
       ...(packaged ? { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } } : {}),
     })
 

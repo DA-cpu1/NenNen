@@ -1,19 +1,25 @@
 /**
  * T01 完整链路检查：真实后台进程和 eve 配本机假供应商，固定回复、零付费调用。
  * 连续启动两次：第一次含「运行期换密钥」（供应商只认新密钥后后台整体换 eve）；
- * 两次分别验证正常关闭和强制结束后台时密钥重传与 eve 无残留。
+ * 两次分别验证正常关闭和强制结束后台时密钥重传与 eve 无残留；
+ * 两轮共用同一个数据库文件：第一轮写入的值，第二轮重启后必须原样读到。
  */
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { spawn, execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
-import { readdir, readFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const appDir = resolve(import.meta.dirname, '..')
+// 两轮共用的临时数据库目录，结束时整体删除。放系统临时目录而不是仓库里：
+// 数据库开着 WAL 模式，旁边会多出 -wal/-shm 两个附属文件，别让它们混进项目
+const dbDir = await mkdtemp(join(tmpdir(), 'companion-db-probe-'))
+const dbPath = join(dbDir, 'probe.db')
 // 两把假密钥：A 是开机的，B 是运行期换上的
 const modelKeyA = randomBytes(32).toString('base64url')
 const modelKeyB = randomBytes(32).toString('base64url')
@@ -73,9 +79,10 @@ async function secretFiles(directory) {
   return matches
 }
 
-/** 启动真实业务后台，以两行 stdin 交付假机密，并等 READY。 */
+/** 启动真实业务后台，以两行 stdin 交付假机密，并等 READY。
+ *  数据库路径走命令行参数（不是机密，不占密钥管子），两轮传同一个文件。 */
 async function boot(token, modelKey, providerPort) {
-  const child = spawn(process.execPath, ['out/main/service.js'], {
+  const child = spawn(process.execPath, ['out/main/service.js', '--db', dbPath], {
     cwd: appDir,
     env: { ...process.env, COMPANION_MODEL_BASE_URL: `http://127.0.0.1:${providerPort}/v1` },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -134,6 +141,24 @@ try {
       assert.equal(calls, expectedCalls, '模拟模型请求数应与预期完全一致')
       console.log(JSON.stringify({ run: index + 1, unauthorized: 401, wrongOrOldToken: 401, replyMatches: true, inputTokens: 8, outputTokens: 2, elapsedMs: Date.now() - started }))
 
+      // ── 数据库持久化：第一轮写入业务值，第二轮重启后必须原样读到 ──
+      const dbRead = await fetch(`${url}/db/ping`, { headers: { 'x-session-token': tokens[index] } })
+      assert.equal(dbRead.status, 200)
+      const dbState = await dbRead.json()
+      if (index === 0) {
+        // 全新库：迁移建好 app_state 初始行，版本号从 0 开始
+        assert.deepEqual(dbState, { ok: true, globalMemoryEpoch: 0 })
+        const dbWrite = await fetch(`${url}/db/ping`, { method: 'POST', headers: { 'x-session-token': tokens[index] } })
+        assert.equal(dbWrite.status, 200)
+        assert.deepEqual(await dbWrite.json(), { ok: true, globalMemoryEpoch: 1 })
+        console.log(JSON.stringify({ run: 1, dbInitial: 0, dbWritten: 1 }))
+      } else {
+        // 上一轮的后台进程已整个退出：这里仍读到 1，才证明值写在文件里
+        // 而不是只活在内存里（T01 持久化验收的核心断言）
+        assert.deepEqual(dbState, { ok: true, globalMemoryEpoch: 1 }, '重启后必须读到上一轮写入的值')
+        console.log(JSON.stringify({ run: 2, dbPersisted: 1 }))
+      }
+
       // ── 运行期换密钥（只测第一轮）：供应商作废旧密钥 → 送新密钥进后台 ──
       if (index === 0) {
         acceptedKey = modelKeyB
@@ -183,4 +208,6 @@ try {
   console.log(JSON.stringify({ calls, authenticatedCalls, toolCount, secretFiles: leaks, logsClean: true }))
 } finally {
   await new Promise((done) => provider.close(done))
+  // 临时数据库目录整体清理；库文件内容不含机密，删除即止
+  await rm(dbDir, { recursive: true, force: true })
 }
