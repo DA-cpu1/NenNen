@@ -83,9 +83,13 @@ if (!app.requestSingleInstanceLock()) {
   })
 
 /**
- * 雇后台进程并当场自测，共两步：
+ * 雇后台进程并当场自测，共三步：
  * ① 拿暗号打 /health 应接通（200），不拿暗号应被拒（401）；
- * ② 配了密钥就打 /agent/ping——经过 eve 完成一轮，验证两跳密钥管道和模型调用。
+ * ② 打 /db/ping——先读共享记忆版本号、+1 写回、再读一次，两行数字进 stdout。
+ *    打包版没有外部检查口，重启后「读回上一轮写入的值」只能从这里观察
+ *    （持久化验收的观察窗）。版本号每次启动 +1 是贯通自测的已知行为，
+ *    T04 定正式接口时收编或重置；
+ * ③ 配了密钥就打 /agent/ping——经过 eve 完成一轮，验证两跳密钥管道和模型调用。
  * 日志只记状态码、耗时和用量数字——暗号、密钥、模型回复原文都不进日志（03 §7）
  */
 async function startBackendWithSelfCheck(): Promise<void> {
@@ -100,6 +104,31 @@ async function startBackendWithSelfCheck(): Promise<void> {
   console.log(
     `[后台] 端口 ${handle.port}；带令牌 ${withToken.status}（应 200）；未认证 ${withoutToken.status}（应 401）`,
   )
+
+  // 数据库自测：读 → 写（+1）→ 再读。第二次读到的新值若与写回的一致，
+  // 说明读写都真实落了库。失败只记状态码，库报错原文不进日志
+  try {
+    const readStart = await fetch(`http://127.0.0.1:${handle.port}/db/ping`, { headers: authHeader })
+    const readStartBody = (await readStart.json()) as { ok: boolean; globalMemoryEpoch?: number; code?: string }
+    if (readStart.status !== 200 || !readStartBody.ok) {
+      console.error(`[数据库] 自测读失败：${readStartBody.code ?? readStart.status}`)
+    } else {
+      const startEpoch = readStartBody.globalMemoryEpoch ?? -1
+      const writeRes = await fetch(`http://127.0.0.1:${handle.port}/db/ping`, {
+        method: 'POST',
+        headers: authHeader,
+      })
+      const writeBody = (await writeRes.json()) as { ok: boolean; globalMemoryEpoch?: number; code?: string }
+      if (writeRes.status !== 200 || !writeBody.ok) {
+        console.error(`[数据库] 自测写失败：${writeBody.code ?? writeRes.status}`)
+      } else {
+        console.log(`[数据库] 自测 200；globalMemoryEpoch ${startEpoch} → ${writeBody.globalMemoryEpoch}`)
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown'
+    console.error(`[数据库] 自测请求失败：${message}`)
+  }
 
   if (!modelKey) {
     console.log('[模型] app/local.key 不存在，跳过模型自测')
