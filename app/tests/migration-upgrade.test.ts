@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
-import { MIGRATIONS, runMigrations } from '../src/data/migrations'
+import { MIGRATIONS, runMigrations, type Migration } from '../src/data/migrations'
 import { initializeFirstCharacter } from '../src/data/character-init'
 import { appState } from '../src/data/tables'
 import { readSetting, writeSetting } from '../src/data/settings'
@@ -87,5 +87,65 @@ describe('最小旧库升级样例（T04 步骤⑧）', () => {
     expect(initial.created).toBe(true)
 
     upgraded.close()
+  })
+
+  it('坏单子中途炸：整体回滚，库停在旧版本，正确清单可恢复（05 §7.4）', () => {
+    const dbPath = join(dir, 'broken-upgrade.db')
+
+    // 同样的手法造 v1 旧库，老数据版本号 5
+    const old = openCompanionDatabase(dbPath)
+    runMigrations(old.sqlite, MIGRATIONS.slice(0, 1))
+    old.db
+      .update(appState)
+      .set({ globalMemoryEpoch: 5 })
+      .where(eq(appState.id, 1))
+      .run()
+    old.close()
+
+    const db = openCompanionDatabase(dbPath)
+    // 坏清单：v1 照旧；v2 是「半途炸」的单子——第一句建表能成功，
+    // 第二句引用不存在的表必然失败。模拟施工队干到一半发现图纸错了。
+    // 考验点：第一句已经做成的表，必须跟着第二句的失败一起消失
+    const badList: Migration[] = [
+      MIGRATIONS[0],
+      {
+        version: 2,
+        summary: '测试用坏单子：前半成功后半必炸',
+        sql: `
+CREATE TABLE doomed_ok (id INTEGER);
+INSERT INTO no_such_table VALUES (1);
+`,
+      },
+    ]
+    expect(() => runMigrations(db.sqlite, badList)).toThrow()
+
+    // 1) 库停在 v1：坏单子没记账（记账和施工绑在同一事务，见
+    //    migrations.ts 的注释），绝不能出现「记了账没施工」
+    const records = db.sqlite
+      .prepare('SELECT version FROM schema_migrations ORDER BY version')
+      .all() as Array<{ version: number }>
+    expect(records.map((r) => r.version)).toEqual([1])
+
+    // 2) 半套结构没留下：第一句建成的 doomed_ok 也被回滚。
+    //    留着它就是「半升级库」——程序以为没升过，表却存在，
+    //    下次补做真 v2 时对不上账，是最难查的那种事故
+    const leftover = db.sqlite
+      .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='doomed_ok'")
+      .get() as { n: number }
+    expect(leftover.n).toBe(0)
+
+    // 3) 旧数据完好：升级失败不许伤及用户内容
+    const state = db.db.select().from(appState).where(eq(appState.id, 1)).get()
+    expect(state?.globalMemoryEpoch).toBe(5)
+
+    // 4) 恢复：换回正确清单重跑，v2～v5 正常补齐——坏单子
+    //    没有把升级路堵死
+    runMigrations(db.sqlite)
+    const fixed = db.sqlite
+      .prepare('SELECT version FROM schema_migrations ORDER BY version')
+      .all() as Array<{ version: number }>
+    expect(fixed.map((r) => r.version)).toEqual([1, 2, 3, 4, 5])
+
+    db.close()
   })
 })
