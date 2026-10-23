@@ -4,13 +4,12 @@
  * 数据库不是机密（只是一个文件位置）：路径经命令行参数 --db 传入，在这里打开。
  */
 import { resolve } from 'node:path'
-import { eq, sql } from 'drizzle-orm'
 import { startBackendServer, type BackendOptions, type BackendServer } from './server'
 import { startEve, type EveHandle } from '../agent/eve-process'
 import { pingEve } from '../agent/eve-client'
 import { openCompanionDatabase, type CompanionDb } from '../data/db'
 import { runMigrations } from '../data/migrations'
-import { appState } from '../data/tables'
+import { bumpGlobalMemoryEpoch, readGlobalMemoryEpoch } from '../data/epochs'
 import { readSetting, writeSetting } from '../data/settings'
 import { PET_WINDOW_KEY, type PetWindowState } from '../shared/window-state'
 
@@ -56,29 +55,18 @@ function main(): void {
     rotateModelKey: (newKey) => rotateModelKey(newKey),
   }
 
-  /**
-   * 读共享记忆版本号。迁移正常跑过后 app_state 必有那一行；读不到说明
-   * 库被外部动过手脚，抛错让端点报 DB_ERROR，绝不默默当 0 把问题盖住
-   */
+  /** 读共享记忆版本号。实现统一收在 data/epochs.ts（app_state 缺初始行
+   *  时它抛错，绝不默默当 0 把问题盖住）；这里只保留「库还没打开」的守卫 */
   function readEpoch(): number {
     if (!database) throw new Error('E_DB_NOT_OPEN')
-    const row = database.db.select().from(appState).where(eq(appState.id, 1)).get()
-    if (!row) throw new Error('app_state 缺少初始行')
-    return row.globalMemoryEpoch
+    return readGlobalMemoryEpoch(database.db)
   }
 
-  /**
-   * 版本号 +1（一次真实的业务写）。用 SQL 自增而不是「先读出来再加」：
-   * 读和加合并成数据库里的一条原子操作，中间不会被别的写入插队改值
-   */
+  /** 版本号 +1（一次真实的业务写），同样复用 data 层的原子自增：
+   *  读和加在数据库里一步完成，不会被并发的其他写入插队改值 */
   function bumpEpoch(): number {
     if (!database) throw new Error('E_DB_NOT_OPEN')
-    database.db
-      .update(appState)
-      .set({ globalMemoryEpoch: sql`${appState.globalMemoryEpoch} + 1` })
-      .where(eq(appState.id, 1))
-      .run()
-    return readEpoch()
+    return bumpGlobalMemoryEpoch(database.db)
   }
 
   /** 只执行一次关闭：先停业务请求，再结束 eve，关数据库，最后退出。 */
