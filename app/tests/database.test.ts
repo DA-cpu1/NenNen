@@ -14,8 +14,10 @@ import {
   appState,
   characters,
   characterVersions,
+  companionSettings,
   conversations,
   messages,
+  toolOperations,
 } from '../src/data/tables'
 import { readSetting, writeSetting } from '../src/data/settings'
 import { eq } from 'drizzle-orm'
@@ -44,7 +46,7 @@ describe('基础设置', () => {
 })
 
 describe('迁移执行', () => {
-  it('全新库执行迁移：版本登记 4 条，app_state 初始单行', () => {
+  it('全新库执行迁移：版本登记 5 条，app_state 初始单行', () => {
     runMigrations(companion.sqlite)
     const records = companion.sqlite
       .prepare('SELECT version FROM schema_migrations')
@@ -54,6 +56,7 @@ describe('迁移执行', () => {
       { version: 2 },
       { version: 3 },
       { version: 4 },
+      { version: 5 },
     ])
     const rows = companion.db.select().from(appState).all()
     expect(rows).toEqual([{ id: 1, globalMemoryEpoch: 0 }])
@@ -64,7 +67,7 @@ describe('迁移执行', () => {
     const count = companion.sqlite
       .prepare('SELECT COUNT(*) AS n FROM schema_migrations')
       .get() as { n: number }
-    expect(count.n).toBe(4)
+    expect(count.n).toBe(5)
   })
 
   it('重开同一数据库文件后再跑迁移仍不重复', () => {
@@ -74,7 +77,7 @@ describe('迁移执行', () => {
       const count = second.sqlite
         .prepare('SELECT COUNT(*) AS n FROM schema_migrations')
         .get() as { n: number }
-      expect(count.n).toBe(4)
+      expect(count.n).toBe(5)
     } finally {
       second.close()
     }
@@ -371,6 +374,102 @@ describe('会话与消息表结构（T04 v4）', () => {
           content: '不该出现的角色',
           status: 'completed',
           createdAt: now,
+        })
+        .run(),
+    ).toThrow(/CHECK/)
+  })
+})
+
+describe('设置与工具操作表结构（T04 v5）', () => {
+  // 固定输入（07 §3）。设置表用自己的新角色；工具操作登记挂在
+  // v4 块建过的 conv-test-001 会话上（外键要求会话真实存在）
+  const characterId = 'char-test-settings-001'
+  const now = 1740000002000
+
+  it('主动陪伴默认行落库：总开关关、免打扰开（02 默认值）', () => {
+    companion.db
+      .insert(characters)
+      .values({ id: characterId, name: '设置测试角色', createdAt: now, updatedAt: now })
+      .run()
+    // 刻意不传有默认值的字段，验证数据库默认值真的落了地
+    companion.db
+      .insert(companionSettings)
+      .values({ characterId, timezone: 'Asia/Shanghai', updatedAt: now })
+      .run()
+
+    const row = companion.db
+      .select()
+      .from(companionSettings)
+      .where(eq(companionSettings.characterId, characterId))
+      .get()
+    // 总开关默认关：没人主动打开，角色绝不主动说话
+    expect(row?.enabled).toBe(0)
+    // 免打扰默认开（23:00～8:00）：宁可少说话，不半夜吵人
+    expect(row?.quietEnabled).toBe(1)
+    expect(row?.quietStartMinute).toBe(1380)
+    expect(row?.quietEndMinute).toBe(480)
+    expect(row?.intervalMinutes).toBe(120)
+  })
+
+  it('设置开关只认 0/1，写别的值被 CHECK 拦下', () => {
+    // 事故场景：把 enabled 当数字开关算出 2（比如布尔值和数字相加）
+    expect(() =>
+      companion.db
+        .insert(companionSettings)
+        .values({
+          characterId: 'char-test-001', // 复用 v3 块的角色（外键要求存在）
+          enabled: 2,
+          timezone: 'Asia/Shanghai',
+          updatedAt: now,
+        })
+        .run(),
+    ).toThrow(/CHECK/)
+  })
+
+  it('工具操作登记一行 pending，重复 operation_key 被 UNIQUE 拦下', () => {
+    companion.db
+      .insert(toolOperations)
+      .values({
+        id: 'op-test-001',
+        conversationId: 'conv-test-001',
+        operationKey: 'conv-test-001|msg-test-001|remember_explicit',
+        toolName: 'remember_explicit',
+        status: 'pending',
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run()
+
+    // 事故场景：网络卡了，同一个「记住」请求重放。第二个同编号登记
+    // 插不进来——防重不靠调用方自觉，靠数据库约束兜底（05 §5）
+    expect(() =>
+      companion.db
+        .insert(toolOperations)
+        .values({
+          id: 'op-test-002',
+          conversationId: 'conv-test-001',
+          operationKey: 'conv-test-001|msg-test-001|remember_explicit',
+          toolName: 'remember_explicit',
+          status: 'pending',
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run(),
+    ).toThrow(/UNIQUE/)
+  })
+
+  it('工具操作状态只认 pending/committed/failed，写别的值被 CHECK 拦下', () => {
+    expect(() =>
+      companion.db
+        .insert(toolOperations)
+        .values({
+          id: 'op-test-003',
+          conversationId: 'conv-test-001',
+          operationKey: 'conv-test-001|msg-test-001|forget_memory',
+          toolName: 'forget_memory',
+          status: 'done',
+          createdAt: now,
+          updatedAt: now,
         })
         .run(),
     ).toThrow(/CHECK/)

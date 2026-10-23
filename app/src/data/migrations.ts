@@ -110,6 +110,41 @@ CREATE TABLE messages (
 );
 `,
   },
+  {
+    version: 5,
+    summary:
+      '工具与设置两表：companion_settings 主动陪伴规则 + tool_operations 操作防重登记（T04，05 §2/§5）',
+    sql: `
+CREATE TABLE companion_settings (
+  character_id TEXT PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
+  enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
+  interval_minutes INTEGER NOT NULL DEFAULT 120 CHECK (interval_minutes >= 15),
+  quiet_start_minute INTEGER NOT NULL DEFAULT 1380 CHECK (quiet_start_minute BETWEEN 0 AND 1439),
+  quiet_end_minute INTEGER NOT NULL DEFAULT 480 CHECK (quiet_end_minute BETWEEN 0 AND 1439),
+  quiet_enabled INTEGER NOT NULL DEFAULT 1 CHECK (quiet_enabled IN (0,1)),
+  timezone TEXT NOT NULL,
+  daily_eval_limit INTEGER NOT NULL DEFAULT 6 CHECK (daily_eval_limit >= 0),
+  daily_send_limit INTEGER NOT NULL DEFAULT 4 CHECK (daily_send_limit >= 0),
+  next_due_at INTEGER,
+  last_sent_at INTEGER,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE tool_operations (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  request_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  operation_key TEXT NOT NULL UNIQUE,
+  tool_name TEXT NOT NULL,
+  target_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('pending','committed','failed')),
+  result_json TEXT,
+  error_code TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+`,
+  },
 ]
 
 /** 给一份 SQL 算"指纹"（sha256）：同样的内容永远得到同一串字符，

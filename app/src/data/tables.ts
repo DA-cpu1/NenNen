@@ -140,3 +140,70 @@ export const messages = sqliteTable('messages', {
   excludedFromContext: integer('excluded_from_context').notNull().default(0),
   createdAt: integer('created_at').notNull(),
 })
+
+/** 「主动陪伴设置」表：每个角色一行，管她什么时候可以主动开口——
+ *  开关、间隔、免打扰时段、时区、每天次数上限（05 §2）。默认总开关
+ *  关闭（enabled=0）：用户没主动打开就绝不打扰（02）。主动互动的完整
+ *  流程是 T10 的活，这张表先由角色初始化函数建出默认行 */
+export const companionSettings = sqliteTable('companion_settings', {
+  /** 属于哪个角色。一个角色只有一行设置，直接拿角色 ID 当主键，
+   *  不另发号——找设置时不用多记一个 ID */
+  characterId: text('character_id')
+    .primaryKey()
+    .references(() => characters.id, { onDelete: 'cascade' }),
+  /** 主动陪伴总开关：0 关 1 开，默认关 */
+  enabled: integer('enabled').notNull().default(0),
+  /** 两次检查之间的间隔（分钟），最短不许低于 15 */
+  intervalMinutes: integer('interval_minutes').notNull().default(120),
+  /** 免打扰时段开始：当天第几分钟（1380 = 23:00），跨午夜到结束点 */
+  quietStartMinute: integer('quiet_start_minute').notNull().default(1380),
+  /** 免打扰时段结束：当天第几分钟（480 = 8:00） */
+  quietEndMinute: integer('quiet_end_minute').notNull().default(480),
+  /** 免打扰开关，默认开——宁可少说话，不半夜吵人 */
+  quietEnabled: integer('quiet_enabled').notNull().default(1),
+  /** 用户时区名（如 Asia/Shanghai）：主动消息按用户当地作息算，不按 UTC */
+  timezone: text('timezone').notNull(),
+  /** 每天最多评估几次（评估=问一次模型「现在要不要说句话」） */
+  dailyEvalLimit: integer('daily_eval_limit').notNull().default(6),
+  /** 每天最多真发几次 */
+  dailySendLimit: integer('daily_send_limit').notNull().default(4),
+  /** 下次该检查主动开口的时间（UTC 毫秒），没启用时为空 */
+  nextDueAt: integer('next_due_at'),
+  /** 上次真的发出主动消息的时间（UTC 毫秒） */
+  lastSentAt: integer('last_sent_at'),
+  /** 最后更新时间（UTC 毫秒数字） */
+  updatedAt: integer('updated_at').notNull(),
+})
+
+/** 「工具操作」表：模型调工具（记住/纠正/忘记）时的「回执登记簿」。
+ *  每次操作登记一行；operation_key 是「同一件事」的编号——同一个请求
+ *  重试、网络重放都带同一个 key，数据库 UNIQUE 拦下第二次，已成功的
+ *  重复到达直接返回第一次的结果，做到「重试不重复写」（05 §5） */
+export const toolOperations = sqliteTable('tool_operations', {
+  id: text('id').primaryKey(),
+  /** 在哪段会话里发生的（外键：删会话时登记一起删） */
+  conversationId: text('conversation_id')
+    .notNull()
+    .references(() => conversations.id, { onDelete: 'cascade' }),
+  /** 触发这次操作的消息（比如用户那句「记住我叫阿达」），可为空 */
+  requestMessageId: text('request_message_id').references(() => messages.id, {
+    onDelete: 'set null',
+  }),
+  /** 同一语义操作的唯一编号：程序拼接（会话+消息+工具+目标），不是随机数
+   *  ——随机数每次都不同，起不到「认出是同一件事」的作用（05 §5） */
+  operationKey: text('operation_key').notNull(),
+  /** 工具名：remember_explicit / correct_memory / forget_memory 等（04 §4） */
+  toolName: text('tool_name').notNull(),
+  /** 操作对象（比如目标记忆的 ID），可为空 */
+  targetId: text('target_id'),
+  /** 执行状态：pending 执行中 / committed 已成功落库 / failed 失败。
+   *  注意没有「已取消」——取消的操作停在 pending，重试时重新执行 */
+  status: text('status').notNull(),
+  /** 成功时的结果（JSON 文本）：重复到达同一编号时原样返回它 */
+  resultJson: text('result_json'),
+  /** 失败时的错误码（04 §4 的 INVALID_INPUT 等）；只存码，
+   *  不复制正文——忘记操作的结果里不该残留被忘记的内容（05 §6） */
+  errorCode: text('error_code'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+})
