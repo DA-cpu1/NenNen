@@ -77,6 +77,39 @@ CREATE UNIQUE INDEX one_active_character_version
   ON character_versions(character_id) WHERE is_active = 1;
 `,
   },
+  {
+    version: 4,
+    summary:
+      '会话域两表：conversations 聊天容器 + messages 消息原文，含请求编号防重约束（T04，05 §2/§5）',
+    sql: `
+CREATE TABLE conversations (
+  id TEXT PRIMARY KEY,
+  character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  mode TEXT NOT NULL DEFAULT 'normal' CHECK (mode IN ('normal','preview')),
+  runtime_session_id TEXT,
+  context_epoch INTEGER NOT NULL DEFAULT 0,
+  last_processed_seq INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  last_message_at INTEGER NOT NULL
+);
+CREATE INDEX conversations_by_character ON conversations(character_id, last_message_at);
+
+CREATE TABLE messages (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL CHECK (seq > 0),
+  role TEXT NOT NULL CHECK (role IN ('user','assistant','proactive')),
+  content TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending','streaming','completed','cancelled','failed')),
+  client_request_id TEXT,
+  reply_to_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  excluded_from_context INTEGER NOT NULL DEFAULT 0 CHECK (excluded_from_context IN (0,1)),
+  created_at INTEGER NOT NULL,
+  UNIQUE (conversation_id, seq),
+  UNIQUE (conversation_id, client_request_id)
+);
+`,
+  },
 ]
 
 /** 给一份 SQL 算"指纹"（sha256）：同样的内容永远得到同一串字符，

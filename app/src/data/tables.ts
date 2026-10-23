@@ -4,7 +4,7 @@
  * 结构和 docs/sdd/schema.sql 样稿保持一致。
  * 表跟着各自的功能任务再加，一次铺 15 张只会留下一堆没人用、没法验证的死代码。
  */
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { integer, sqliteTable, text, type AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
 
 /** 「共享记忆版本」表：整个库只有一行、一个数字，像电梯里的检修标签——
  *  用户改了跨角色共享的资料，数字就 +1；后台任务看到数字变了，
@@ -76,5 +76,67 @@ export const characterVersions = sqliteTable('character_versions', {
   /** 是否当前生效：1 是、0 否；同一角色最多一行 1（见表注释里的唯一索引） */
   isActive: integer('is_active').notNull().default(0),
   /** 这版人设的创建时间（UTC 毫秒数字） */
+  createdAt: integer('created_at').notNull(),
+})
+
+/** 「会话」表：一段连续聊天的「容器」。首版每个角色只有一条 mode='normal'
+ *  的正式会话（服务层初始化时保证，见 T04 初始化函数），试聊走独立的
+ *  preview 会话、绝不写正式记忆（05 §3）。runtime_session_id 存的是 eve
+ *  框架那边的会话 ID，和本表自己的 id（应用会话 ID）是两回事：前者只是
+ *  联系方式，换框架、清运行缓存后可以换成新的；用户看到的「同一段聊天」
+ *  由后者决定，换联系方式时不变（04 §3） */
+export const conversations = sqliteTable('conversations', {
+  /** 应用自己的会话 ID，程序生成的不重复字符串 */
+  id: text('id').primaryKey(),
+  /** 这段聊天属于哪个角色（外键：删角色时会话一起删） */
+  characterId: text('character_id')
+    .notNull()
+    .references(() => characters.id, { onDelete: 'cascade' }),
+  /** 会话类型：normal 正式聊天 / preview 试聊。数据库 CHECK 只认这两个值 */
+  mode: text('mode').notNull().default('normal'),
+  /** eve 框架的会话 ID，可空可换：它只是「当前用哪个框架会话」的便签，
+   *  丢了重建即可，不当作聊天记录的依据（05 §1） */
+  runtimeSessionId: text('runtime_session_id'),
+  /** 该会话「可用内容」的版本号：忘记、排除来源时 +1，依赖旧内容的
+   *  后台整理任务看到数字变了就作废（05 §4） */
+  contextEpoch: integer('context_epoch').notNull().default(0),
+  /** 已整理到第几条消息：后台记忆整理的「进度书签」，T07 使用 */
+  lastProcessedSeq: integer('last_processed_seq').notNull().default(0),
+  /** 会话创建时间（UTC 毫秒数字） */
+  createdAt: integer('created_at').notNull(),
+  /** 最后一条消息的时间：按「最近聊过」排序会话时用 */
+  lastMessageAt: integer('last_message_at').notNull(),
+})
+
+/** 「消息」表：会话里逐条的消息原文——用户的话、角色的回复、主动问候，
+ *  都按顺序存在这张表里。防重的关键在 client_request_id：界面给每次用户
+ *  输入配一个唯一编号，网络卡了用户连点重试时，同一个编号的第二条插不
+ *  进来（数据库 UNIQUE 约束兜底），做到「重试不重复写」（05 §5） */
+export const messages = sqliteTable('messages', {
+  id: text('id').primaryKey(),
+  /** 属于哪段会话（外键：删会话时消息一起删） */
+  conversationId: text('conversation_id')
+    .notNull()
+    .references(() => conversations.id, { onDelete: 'cascade' }),
+  /** 会话内的顺序号（第 1 条、第 2 条……），同一会话内不许重复 */
+  seq: integer('seq').notNull(),
+  /** 谁说的：user 用户 / assistant 角色回复 / proactive 主动问候 */
+  role: text('role').notNull(),
+  /** 消息正文 */
+  content: text('content').notNull(),
+  /** 完成状态：pending 等待中 / streaming 生成中 / completed 完成 /
+   *  cancelled 已取消 / failed 失败（流式回复中断时就停在中间状态） */
+  status: text('status').notNull(),
+  /** 界面生成的唯一请求编号，重试沿用同一个号防重复；角色消息没有编号，
+   *  留空。SQLite 的唯一约束不理会空值，多条角色消息同时为空不冲突 */
+  clientRequestId: text('client_request_id'),
+  /** 本条回复关联的上一条消息（如主动问候标注它回应的语境），可为空。
+   *  自引用（引用同表的 id），写法上要延迟取值，见 AnySQLiteColumn */
+  replyToId: text('reply_to_id').references((): AnySQLiteColumn => messages.id, {
+    onDelete: 'set null',
+  }),
+  /** 是否已排除出模型上下文：忘记某事后相关原文不再发给模型，但历史
+   *  记录里仍保留这行（只打标记，不删行），T08 使用（05 §6） */
+  excludedFromContext: integer('excluded_from_context').notNull().default(0),
   createdAt: integer('created_at').notNull(),
 })

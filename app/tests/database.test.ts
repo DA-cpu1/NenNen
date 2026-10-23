@@ -10,7 +10,13 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { MIGRATIONS, runMigrations, type Migration } from '../src/data/migrations'
-import { appState, characters, characterVersions } from '../src/data/tables'
+import {
+  appState,
+  characters,
+  characterVersions,
+  conversations,
+  messages,
+} from '../src/data/tables'
 import { readSetting, writeSetting } from '../src/data/settings'
 import { eq } from 'drizzle-orm'
 
@@ -38,12 +44,17 @@ describe('基础设置', () => {
 })
 
 describe('迁移执行', () => {
-  it('全新库执行迁移：版本登记 3 条，app_state 初始单行', () => {
+  it('全新库执行迁移：版本登记 4 条，app_state 初始单行', () => {
     runMigrations(companion.sqlite)
     const records = companion.sqlite
       .prepare('SELECT version FROM schema_migrations')
       .all() as Array<{ version: number }>
-    expect(records).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }])
+    expect(records).toEqual([
+      { version: 1 },
+      { version: 2 },
+      { version: 3 },
+      { version: 4 },
+    ])
     const rows = companion.db.select().from(appState).all()
     expect(rows).toEqual([{ id: 1, globalMemoryEpoch: 0 }])
   })
@@ -53,7 +64,7 @@ describe('迁移执行', () => {
     const count = companion.sqlite
       .prepare('SELECT COUNT(*) AS n FROM schema_migrations')
       .get() as { n: number }
-    expect(count.n).toBe(3)
+    expect(count.n).toBe(4)
   })
 
   it('重开同一数据库文件后再跑迁移仍不重复', () => {
@@ -63,7 +74,7 @@ describe('迁移执行', () => {
       const count = second.sqlite
         .prepare('SELECT COUNT(*) AS n FROM schema_migrations')
         .get() as { n: number }
-      expect(count.n).toBe(3)
+      expect(count.n).toBe(4)
     } finally {
       second.close()
     }
@@ -221,6 +232,148 @@ describe('角色表结构（T04 v3）', () => {
         })
         .run(),
     ).toThrow(/FOREIGN KEY/)
+  })
+})
+
+describe('会话与消息表结构（T04 v4）', () => {
+  // 固定输入（07 §3）。为了不跟「角色表结构」块的数据搅在一起，
+  // 这里给测试单独建一个新角色和它的会话
+  const characterId = 'char-test-conv-001'
+  const conversationId = 'conv-test-001'
+  const now = 1740000001000
+
+  it('角色、正式会话、一问一答四层落库并回读', () => {
+    companion.db
+      .insert(characters)
+      .values({ id: characterId, name: '测试角色', createdAt: now, updatedAt: now })
+      .run()
+    // 正式会话（mode 用默认值 normal），框架会话 ID 先留空——
+    // 没聊过天时还没有 eve 会话，「联系方式」可以后补（04 §3）
+    companion.db
+      .insert(conversations)
+      .values({
+        id: conversationId,
+        characterId,
+        createdAt: now,
+        lastMessageAt: now,
+      })
+      .run()
+    // 用户消息带唯一请求编号 clientRequestId
+    companion.db
+      .insert(messages)
+      .values({
+        id: 'msg-test-001',
+        conversationId,
+        seq: 1,
+        role: 'user',
+        content: '在吗？',
+        status: 'completed',
+        clientRequestId: 'req-test-001',
+        createdAt: now,
+      })
+      .run()
+    // 角色回复没有请求编号（编号只防「用户重复发送」这一种事故）
+    companion.db
+      .insert(messages)
+      .values({
+        id: 'msg-test-002',
+        conversationId,
+        seq: 2,
+        role: 'assistant',
+        content: '在的。',
+        status: 'completed',
+        createdAt: now,
+      })
+      .run()
+
+    const conversation = companion.db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .get()
+    expect(conversation?.mode).toBe('normal')
+    expect(conversation?.runtimeSessionId).toBeNull()
+    expect(conversation?.contextEpoch).toBe(0)
+    const rows = companion.db.select().from(messages).all()
+    // 只数本会话的消息——角色表结构块没有插过消息，但按会话过滤更稳
+    const own = rows.filter((m) => m.conversationId === conversationId)
+    expect(own).toHaveLength(2)
+    expect(own.find((m) => m.seq === 1)?.clientRequestId).toBe('req-test-001')
+    expect(own.find((m) => m.seq === 2)?.clientRequestId).toBeNull()
+  })
+
+  it('同一请求编号重复插入被 UNIQUE(conversation_id, client_request_id) 拦下', () => {
+    // 事故场景：网络卡了，界面把同一条用户输入（同一个请求编号）发了两次。
+    // 第二条插不进来，库里的聊天记录不会出现两段一模一样的话（05 §5）
+    expect(() =>
+      companion.db
+        .insert(messages)
+        .values({
+          id: 'msg-test-003',
+          conversationId,
+          seq: 3,
+          role: 'user',
+          content: '在吗？（重试重复发的那份）',
+          status: 'completed',
+          clientRequestId: 'req-test-001',
+          createdAt: now,
+        })
+        .run(),
+    ).toThrow(/UNIQUE/)
+  })
+
+  it('同一会话重复顺序号被 UNIQUE(conversation_id, seq) 拦下', () => {
+    // 事故场景：并发时两条消息都算出自己是「第 1 条」。顺序号唯一，
+    // 聊天历史顺序才可信
+    expect(() =>
+      companion.db
+        .insert(messages)
+        .values({
+          id: 'msg-test-004',
+          conversationId,
+          seq: 1,
+          role: 'user',
+          content: '抢第 1 条位置的消息',
+          status: 'completed',
+          clientRequestId: 'req-test-002',
+          createdAt: now,
+        })
+        .run(),
+    ).toThrow(/UNIQUE/)
+  })
+
+  it('会话类型只认 normal/preview，写别的值被 CHECK 拦下', () => {
+    // 事故场景：代码里把 mode 拼错成 'casual'。CHECK 约束当场报错，
+    // 而不是让一个谁都不认识的类型混进数据里，后面到处判空
+    expect(() =>
+      companion.db
+        .insert(conversations)
+        .values({
+          id: 'conv-test-002',
+          characterId,
+          mode: 'casual',
+          createdAt: now,
+          lastMessageAt: now,
+        })
+        .run(),
+    ).toThrow(/CHECK/)
+  })
+
+  it('消息角色只认 user/assistant/proactive，写别的值被 CHECK 拦下', () => {
+    expect(() =>
+      companion.db
+        .insert(messages)
+        .values({
+          id: 'msg-test-005',
+          conversationId,
+          seq: 4,
+          role: 'system',
+          content: '不该出现的角色',
+          status: 'completed',
+          createdAt: now,
+        })
+        .run(),
+    ).toThrow(/CHECK/)
   })
 })
 
