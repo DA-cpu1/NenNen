@@ -197,9 +197,10 @@ describe('数据库自测端点 /db/ping', () => {
       db: {
         readEpoch: () => { touched = true; return 0 },
         bumpEpoch: () => { touched = true; return 1 },
-        // 本组用例只关心 epoch 函数；窗口位置函数放无害存根补齐接口
+        // 本组用例只关心 epoch 函数；窗口位置与会话函数放无害存根补齐接口
         readWindowState: () => undefined,
         writeWindowState: () => {},
+        readFormalConversation: () => { touched = true; return null },
       },
     })
     extraServers.push(fake)
@@ -226,6 +227,7 @@ describe('数据库自测端点 /db/ping', () => {
         bumpEpoch: () => 8,
         readWindowState: () => undefined,
         writeWindowState: () => {},
+        readFormalConversation: () => null,
       },
     })
     extraServers.push(fake)
@@ -242,6 +244,7 @@ describe('数据库自测端点 /db/ping', () => {
         bumpEpoch: () => (bumped += 1),
         readWindowState: () => undefined,
         writeWindowState: () => {},
+        readFormalConversation: () => null,
       },
     })
     extraServers.push(fake)
@@ -258,6 +261,7 @@ describe('数据库自测端点 /db/ping', () => {
         bumpEpoch: () => { throw new Error('内部路径不应泄露') },
         readWindowState: () => { throw new Error('内部路径不应泄露') },
         writeWindowState: () => { throw new Error('内部路径不应泄露') },
+        readFormalConversation: () => { throw new Error('内部路径不应泄露') },
       },
     })
     extraServers.push(fake)
@@ -283,6 +287,7 @@ describe('窗口状态端点 /window-state（T02 位置恢复）', () => {
     bumpEpoch: () => 1,
     readWindowState: read,
     writeWindowState: write as (value: never) => void,
+    readFormalConversation: () => null,
   })
 
   it('未带令牌返回 401，读写函数不被触碰', async () => {
@@ -374,6 +379,87 @@ describe('窗口状态端点 /window-state（T02 位置恢复）', () => {
     const writeRes = await put(fake.port, { x: 1, y: 2, width: 3, height: 4 })
     expect(writeRes.status).toBe(502)
     expect(await writeRes.json()).toEqual({ ok: false, code: 'DB_ERROR' })
+  })
+})
+
+describe('正式会话端点 /formal-conversation（T04 应用接口）', () => {
+  const get = (port: number, token = TOKEN) =>
+    fetch(`http://127.0.0.1:${port}/formal-conversation`, {
+      headers: { 'x-session-token': token },
+    })
+
+  it('未带令牌返回 401', async () => {
+    const res = await fetch(`http://127.0.0.1:${server!.port}/formal-conversation`)
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ ok: false, code: 'UNAUTHORIZED' })
+  })
+
+  it('未接数据库时明确 503，不假装可用', async () => {
+    // 共享的 server 启动时没传 db，正好代表「入口没接库」的状态
+    const res = await get(server!.port)
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ ok: false, code: 'DB_UNAVAILABLE' })
+  })
+
+  it('已初始化时返回角色与会话信息（框架 ID 可为 null）', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => ({
+          characterId: 'char-x',
+          conversationId: 'conv-x',
+          runtimeSessionId: null,
+          contextEpoch: 0,
+        }),
+      },
+    })
+    extraServers.push(fake)
+    const res = await get(fake.port)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      ok: true,
+      conversation: {
+        characterId: 'char-x',
+        conversationId: 'conv-x',
+        runtimeSessionId: null,
+        contextEpoch: 0,
+      },
+    })
+  })
+
+  it('还没初始化角色时 conversation 明确为 null，不是 500', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+      },
+    })
+    extraServers.push(fake)
+    const res = await get(fake.port)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, conversation: null })
+  })
+
+  it('读函数抛错返回 502 DB_ERROR，不转发错误内容', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => { throw new Error('内部路径不应泄露') },
+      },
+    })
+    extraServers.push(fake)
+    const res = await get(fake.port)
+    expect(res.status).toBe(502)
+    expect(await res.json()).toEqual({ ok: false, code: 'DB_ERROR' })
   })
 })
 

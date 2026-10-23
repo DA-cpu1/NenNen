@@ -14,6 +14,7 @@
  */
 import { and, asc, eq } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
+import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import {
   characters,
@@ -47,6 +48,19 @@ export interface InitializedCharacter {
 }
 
 /**
+ * 取库中最早创建的角色（首版只有一个角色，它就是「当前角色」）。
+ * 服务层解析正式会话前先问它；返回 undefined 表示还没初始化过。
+ * 参数类型用 drizzle 的基类型 BaseSQLiteDatabase：普通连接和事务里的
+ * tx 都能传（事务对象就是「去掉了嵌套开事务能力的连接」）。
+ */
+export function getFirstCharacter(db: BaseSQLiteDatabase<'sync', unknown>): {
+  id: string
+  createdAt: number
+} | undefined {
+  return db.select().from(characters).orderBy(asc(characters.createdAt)).get()
+}
+
+/**
  * 初始化首个角色；库中已有角色时什么都不建、直接复用。
  * @param db 数据库连接（需已跑过迁移）
  * @param options 角色内容与时区
@@ -63,7 +77,7 @@ export function initializeFirstCharacter(
   return db.transaction((tx) => {
     // 首版只有一个角色：按创建时间取最早的那个。重入认「库里有没有」，
     // 不认参数——参数变了（比如占位人设换正式卡）也不会建第二个角色
-    const existing = tx.select().from(characters).orderBy(asc(characters.createdAt)).get()
+    const existing = getFirstCharacter(tx)
     if (existing) {
       // 复用已有角色，但要确认它有正式会话：万一上次初始化被外力删过
       // 半套，这里当场补上，让「每个角色必有正式会话」永远成立

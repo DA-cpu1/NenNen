@@ -20,6 +20,18 @@ export interface BackendServer {
   stop(): Promise<void>
 }
 
+/** 正式会话的对外信息形状（GET /formal-conversation 返回的内容） */
+export interface FormalConversationInfo {
+  /** 角色 ID */
+  characterId: string
+  /** 应用自己的会话 ID——聊天记录挂在它上面，永不更换（04 §3） */
+  conversationId: string
+  /** 当前框架（eve）会话 ID；没建过或刚作废时为 null，随时可换 */
+  runtimeSessionId: string | null
+  /** 该会话内容版本号：忘记等操作会 +1（05 §4） */
+  contextEpoch: number
+}
+
 /** 启动选项：模型密钥 + 可替换的模型调用函数（测试塞假的，不真花钱） */
 export interface BackendOptions {
   /** 模型密钥；没有就只起基础服务，/model/ping 返回 NO_KEY */
@@ -43,6 +55,9 @@ export interface BackendOptions {
     readWindowState(): unknown
     /** 保存桌宠窗口位置（值已过格式关卡） */
     writeWindowState(value: PetWindowState): void
+    /** 读首个角色正式会话的信息（T04 应用接口，04 §1）；
+     *  还没初始化角色时返回 null */
+    readFormalConversation(): FormalConversationInfo | null
   }
 }
 
@@ -289,6 +304,25 @@ async function handleRequest(
       sendJson(res, 200, { ok: true })
     } catch {
       // 写失败绝不回 ok（01 R17：失败不假装成功）
+      sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
+    }
+    return
+  }
+  // 正式会话解析（T04 应用接口，04 §1）：打开聊天窗口时经这条通道拿
+  // 「当前角色 + 它唯一的正式会话」，接着上次的聊、不新建。只读——
+  // 更换框架会话 ID 的写通道等 T06 重建上下文时再开，现在没人调用
+  if (req.method === 'GET' && req.url === '/formal-conversation') {
+    if (!options.db) {
+      sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' })
+      return
+    }
+    try {
+      sendJson(res, 200, {
+        ok: true,
+        conversation: options.db.readFormalConversation() ?? null,
+      })
+    } catch {
+      // 读失败只报错误码；数据库报错原文可能带表结构细节，不转发
       sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
     }
     return

@@ -10,6 +10,8 @@ import { pingEve } from '../agent/eve-client'
 import { openCompanionDatabase, type CompanionDb } from '../data/db'
 import { runMigrations } from '../data/migrations'
 import { bumpGlobalMemoryEpoch, readGlobalMemoryEpoch } from '../data/epochs'
+import { getFirstCharacter, initializeFirstCharacter } from '../data/character-init'
+import { getFormalConversation } from '../data/conversations'
 import { readSetting, writeSetting } from '../data/settings'
 import { PET_WINDOW_KEY, type PetWindowState } from '../shared/window-state'
 
@@ -100,6 +102,16 @@ function main(): void {
       database = openCompanionDatabase(dbPath)
       // 迁移抛错不在这里接：让它顺着 start 的 catch 统一走 E_START 退出
       runMigrations(database.sqlite)
+      // 首个角色初始化（05 §8）：库是空的就一个事务建齐四件套，已有则
+      // 复用。人设先用占位文本——T03 写好的角色卡到 T06 才接入；
+      // 时区按用户系统取（如 Asia/Shanghai），取不到退 UTC 不卡启动。
+      // 初始化失败同样顺着 catch 走 E_START：没有正式会话的库不值得启动
+      initializeFirstCharacter(database.db, {
+        name: '六花',
+        personaText: '（占位人设：T03 正式角色卡在 T06 接入）',
+        initialRelationship: '恋人',
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+      })
       options.db = {
         readEpoch,
         bumpEpoch,
@@ -115,6 +127,23 @@ function main(): void {
         writeWindowState: (value: PetWindowState) => {
           if (!database) throw new Error('E_DB_NOT_OPEN')
           writeSetting(database.db, PET_WINDOW_KEY, value)
+        },
+        // 正式会话解析（04 §1）：每次现查库，不信启动时缓存的旧值——
+        // 中途重建上下文换了框架会话 ID 后，这里能拿到新的
+        readFormalConversation: () => {
+          if (!database) throw new Error('E_DB_NOT_OPEN')
+          const character = getFirstCharacter(database.db)
+          if (!character) return null
+          // 初始化保证正式会话存在；万一被外力删掉，返回明确的 null
+          // 让调用方知道「没有」，而不是让意外错误顺着 HTTP 冒出去
+          const conversation = getFormalConversation(database.db, character.id)
+          if (!conversation) return null
+          return {
+            characterId: character.id,
+            conversationId: conversation.id,
+            runtimeSessionId: conversation.runtimeSessionId,
+            contextEpoch: conversation.contextEpoch,
+          }
         },
       }
     }
