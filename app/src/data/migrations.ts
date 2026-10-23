@@ -47,6 +47,36 @@ CREATE TABLE app_settings (
 );
 `,
   },
+  {
+    version: 3,
+    summary:
+      '角色域两表：characters 角色入口 + character_versions 人设历史（T04，05 §2）',
+    sql: `
+CREATE TABLE characters (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  desktop_image_path TEXT,
+  portrait_image_path TEXT,
+  memory_epoch INTEGER NOT NULL DEFAULT 0 CHECK (memory_epoch >= 0),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE character_versions (
+  id TEXT PRIMARY KEY,
+  character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  version_no INTEGER NOT NULL CHECK (version_no > 0),
+  persona_text TEXT NOT NULL,
+  initial_relationship TEXT NOT NULL,
+  dialogue_examples_json TEXT NOT NULL DEFAULT '[]',
+  is_active INTEGER NOT NULL DEFAULT 0 CHECK (is_active IN (0,1)),
+  created_at INTEGER NOT NULL,
+  UNIQUE (character_id, version_no)
+);
+CREATE UNIQUE INDEX one_active_character_version
+  ON character_versions(character_id) WHERE is_active = 1;
+`,
+  },
 ]
 
 /** 给一份 SQL 算"指纹"（sha256）：同样的内容永远得到同一串字符，
