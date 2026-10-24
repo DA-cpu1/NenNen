@@ -1,0 +1,18 @@
+Use case: ui-mockup
+Asset type: complete first-release role settings full-text editing page screenshot board, high fidelity native Windows 11, Simplified Chinese.
+Create a large beautiful landscape board matching referenced role settings design: warm white surface, pale lavender controls, deep navy text, thin dividers and refined native rounded Windows window titled “桌面陪伴”. Outside top label “21  角色设置 · 完整文本”, outside bottom corner “完整首版界面 · 设计稿”. This is the actual target of the existing “完整文本” mode, not a new unrelated editor. Complete functional-looking product, no skeleton or future labels.
+Same fixed narrow left nav exactly “聊天 / 角色设置 / 记忆 / 设置”, “角色设置” selected. Main header “角色设置” and small amber pill “有未保存的修改”. Tabs “基本信息与人设” selected / “情境示例” / “人设版本”. Two-column layout: large 75 percent width editable content and a slim right context panel. Main top “初始关系” with FREE TEXT multi-line field “已经确定恋人关系；以现在的相处为起点。” Helper “自由填写，不会自动升级关系。” Do not use a relationship dropdown.
+Section heading “人设与表达”, segmented switch “分区填写 / 完整文本” with “完整文本” selected purple. Below a large realistic scrollable textarea, scrollbar clearly visible. Show long well-typeset editable prose with clear plain-text section headings “核心性格”, “语言习惯”, “背景边界” inside one unified text editor. Text content exact meaning, in natural Simplified Chinese:
+“核心性格
+认真维护自己的幻想小世界；在亲近的人面前会放松，也有自己的判断与坚持。面对开心的分享，可以用郑重的小宣告回应，再认真追问用户在意的部分。面对严肃倾诉，先收起玩笑，听清发生了什么，不急着替用户下结论。
+
+语言习惯
+用自然中文，按情境选择简短直说或郑重的小宣告；口头禅不必每句出现。
+称呼方式：遵循用户明确的称呼要求；没有明确要求时自然称呼，不擅自更改已确认的称呼。
+同一句话不要机械重复，停顿与语气要服务于当前对话。
+
+背景边界
+沿用动画版角色；暂不指定剧情时期，不把原作事件当成与用户的共同经历。没有依据时承认不确定，不编造约会、承诺或已经发生的共同经历。记忆以用户实际说过的话和有效记录为准。”
+The editor should appear sufficiently long to scroll, with the last paragraph partly reaching the bottom, but all three section headings and the “称呼方式” clause must remain clearly visible. Do not add Markdown preview, import/export, AI rewrite, templates or token meters.
+Slim right column card “编辑说明” with readable items: “用户明确的称呼可在记忆页纠正或忘记。” and a small button “前往记忆”; “情境示例在单独页面编辑。” and small button “编辑情境示例”. Next card “版本保存范围” exact text “人设、初始关系与示例形成版本；名字与图片独立更新。” Below a lavender locked strip “共同原则 · 始终生效” with items “不编造共同经历 / 不用内疚迫使你聊天 / 操作成功后才确认”. Do not add a direct user nickname input; do not hardcode “你 / 小陈” as an overriding identity field.
+Sticky bottom action bar with helper “保存后从下一轮聊天生效”, buttons “取消修改”, “试聊当前草稿”, “保存人设版本”. All enabled complete controls. No future/not-connected text. No change to historical chats is implied. No full-body art needed; a small same 六花 circular avatar may appear in navigation, but keep visual focus on a legible unified text editor. Correct eyepatch on viewer left if character appears. Crisp Chinese text, spacious, high-end restrained interface.

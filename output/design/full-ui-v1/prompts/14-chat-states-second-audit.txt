@@ -1,0 +1,6 @@
+Use case: text-localization
+Asset type: existing complete first-release desktop chat states design board.
+Precisely edit only TWO text areas in the referenced image. Preserve the entire 10-panel board, all other text, controls, characters, icon positions, spacing, colors and exact composition. No new panels or features.
+Change 1: In panel 03 “等待首字超过30秒”, replace the small helper below the waiting dots with exactly: “等待首字已超过30秒，单轮总上限90秒”. Use two clean lines if needed so the text is readable and does not overlap the “继续等待 / 停止” buttons. The 90-second limit is fixed and clicking “继续等待” does not extend it; this must not be implied otherwise.
+Change 2: In panel 09 “输入与人设限制”, subpanel B, replace the small heading “人设超预算” with “合计超出预算”. Replace the explanatory copy inside subpanel B with exactly: “必要人设与当前消息合计超出可用预算，请缩短消息或设定”. It may wrap into 4 short readable lines. Preserve the “去角色设置” button, subpanel A “消息过长”, “8001 / 8000” and all other elements unchanged.
+All text in Simplified Chinese, clear and correctly spelled. Keep full image, no cropped panels. This is a surgical text update, not a visual redesign.

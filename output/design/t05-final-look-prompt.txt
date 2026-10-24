@@ -1,0 +1,44 @@
+Use case: ui-mockup. Revise the supplied existing future-product mockup into a polished, HONEST T05 milestone final UI concept board for a Windows desktop anime companion. The supplied picture is the visual design reference: preserve its warm white / soft lavender / dark indigo palette, premium native Windows simplicity, and recognizable Rikka character appearance. This is an image rendering task, not implementation.
+
+Create one crisp large landscape 16:10 board, target 2560x1600 or larger, straight-on digital screenshots with legible simplified Chinese. Carefully aligned layout: a minimal header, TWO main screenshot panels side by side, and a modest bottom strip for TWO native popup-menu details. This is one concept board showing DIFFERENT STATES OF THE SAME WINDOW, not extra simultaneous application windows. NO marketing claims, NO code, NO physical device frame, NO arrows clutter.
+
+Header on a quiet near-white background:
+large dark text "T05 完成后的界面"
+smaller text "同一窗口的两种页面状态"
+small top-right tag "界面概念示意 · 角色素材待确认"
+
+LEFT PANEL about 55 percent width, caption "01  桌宠与聊天窗口".
+Show a tidy Windows 11 desktop region with a subtle cream-periwinkle abstract wallpaper and a slim realistic taskbar, a rounded native application window occupying most of this region, with a separate transparent full-body chibi desktop pet in the remaining right margin standing just above the taskbar. Pet has no rectangular background, no speech bubble, no action lines, no animation.
+Main window title "桌面陪伴" plus minimize and close controls. A narrow navigation rail with ONLY two icon-label entries "聊天" and "角色设置", chat selected; no other nav entries.
+Main chat page: split illustration-and-chat layout. Left 40 percent full-height art area: tasteful full-body Rikka Takanashi from Love, Chunibyo & Other Delusions, complete head-to-shoes with clear feet visible, short deep indigo hair with small side ponytail and yellow ribbon, white eyepatch over HER RIGHT eye (viewer-left), visible teal-blue left eye, dark school blazer, white blouse, red neck ribbon, charcoal plaid pleated skirt, black knee socks, brown loafers, relaxed friendly pose, fully clothed, no sexualization. Airy faint lavender ring motif behind illustration. Small character name "六花" below.
+Right 60 percent: header "六花". Completely EMPTY conversation area, NO fake messages or memory confirmations. Centered small quiet line "聊天界面已就绪", secondary muted line "聊天功能将在 T06 接入". At bottom show a visually disabled chat composer placeholder "聊天功能将在 T06 接入" and pale disabled "发送" button. Do not include stop/retry/history functions or an online indicator.
+Separate chibi pet is exactly the same character and uniform, 2.5-head cute proportions and one visible eye, complete body; respect the supplied reference aesthetic. The taskbar includes one tiny lavender app tray icon.
+
+RIGHT PANEL about 45 percent width, caption "02  角色设置".
+A larger readable screenshot of the SAME native app window and SAME navigation rail, with "角色设置" selected. This is an alternate page state. Main form heading "角色设置", small subtext "修改设定，保留每一版人设".
+Readable simple form with compact restrained spacing, not lots of cards:
+top row two fields labeled "角色名字" with value "六花", and "初始关系" with value "恋人";
+next single field labeled "称呼设定", subdued placeholder "希望角色怎样称呼你";
+medium multiline field "人设" with subdued sample placeholder "性格、表达习惯与背景边界";
+medium multiline field "示例对话" with subdued sample placeholder "添加用户与角色的对话示例";
+section "角色图片" with TWO side-by-side clean preview thumbnails: first uses fullbody chibi on transparency checkerboard and label "桌面形象" plus button "更换图片", second uses fullbody anime standing illustration on checkerboard and label "聊天立绘" plus button "更换图片". Keep thumbnail fully clothed and full-body.
+Compact version row "当前人设：v2" followed by a dropdown "历史版本 v1" and a small button "回退人设版本".
+Bottom action bar: neutral "取消编辑" and accent lavender "保存人设版本".
+Do not imply that name/images are versioned; human-readable persona-version wording only. No trial-chat button yet, no model selector, no database IDs, no filepaths, no credit/token counters.
+
+BOTTOM STRIP: two concise labelled native Windows popup-menu closeups and a small behavioral sentence. Keep all text legible and aligned. The menus are separate detail insets, not two simultaneously open menus on the desktop.
+Inset left heading "桌宠右键菜单", popup items exactly:
+"打开聊天"
+"角色设置"
+separator
+"放大"
+"缩小"
+"恢复默认位置和大小"
+Inset right heading "托盘菜单", popup items:
+"打开聊天"
+"角色设置"
+separator
+"退出"
+Along bottom small plain dark grey text "关闭窗口后桌宠继续常驻 · 重启恢复位置、图片与设定 · 重复启动复用已有窗口"
+
+Visual quality: convincing high-fidelity desktop app design with subtle borders and shadows, elegant legible Chinese sans-serif UI type, optical alignment and generous but efficient whitespace. Fine lavender selection fills, charcoal primary text, quiet slate secondary text. Keep illustration visually engaging, UI practical and buildable with React and CSS Modules, not a futuristic HUD. All requested Chinese text rendered accurately. No new conversation, no clear history, no memory navigation, no memory/AI success badges, no proactive greetings, no voice, no Live2D, no character switching, no currency or relationship meters, no watermark. This image must only communicate the fifteen T05 steps, with actual messaging deliberately unavailable until T06.

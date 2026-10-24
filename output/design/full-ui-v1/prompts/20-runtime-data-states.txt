@@ -1,0 +1,36 @@
+Use case: ui-mockup. Create a detailed COMPLETE FIRST-RELEASE state sheet for a Windows anime desktop companion, to fill user-visible process and error states missing from a reviewed design set. ONE large PORTRAIT canvas, about 1800x2400, TWO columns by FOUR rows, EIGHT roomy equally sized native UI state panels. Each panel is a substantial modal/component screenshot, not a tiny full desktop. Preserve warm white / pale lavender / deep indigo, realistic Windows rounded titlebars "桌面陪伴", clear simplified Chinese text, amber/red errors and quiet green success. No huge decorative character illustrations: use only a small Rikka avatar where needed. Outside header "20  运行异常与资料操作过程", small caption "完整首版界面 · 设计稿". This is a design sheet, not currently implemented software. No code, database IDs, stack traces, raw keys, new conversation, clear chat, multiple characters, voice or auto-start.
+
+Eight clearly numbered panels in exact reading order:
+
+01 "单轮总超时"
+Native chat component with a fictional user message "陪我聊一会儿吧。" and a short partial character reply. An amber label "未完成". Status "本轮已达到 90 秒上限，已结束等待与生成。" Secondary line "已完成的保存操作会保留，重试不会重复写入。". Actions "重试回复" and "继续聊天". This is the final deadline, not another indefinite continue-waiting choice. User-visible partial text remains.
+
+02 "本地后台暂不可用"
+Native chat component with a red banner "本地服务暂时不可用", body "已收到的文字已保留并标为未完成。暂不发送新请求。", label "历史记录仍可查看"; an unobtrusive "重新连接" button and "退出应用" action. Do NOT present this as merely an internet/network disconnect. Do NOT promise a crashed model call can resume in place or re-send automatically. No lost-data claim.
+
+03 "升级前快照与检查"
+A native blocking progress modal "正在备份并检查资料", step list "创建升级前快照 → 验证快照 → 升级资料", first or second step active. Body "完成前暂不聊天或修改资料，请等待。". Disabled primary "处理中". A separately labelled small failure strip WITHIN this same panel: "快照校验失败：尚未开始升级，原资料保留。". No claim a usable backup exists when snapshot validation failed. This is upgrade preparation, not recurring automatic backups.
+
+04 "资料升级失败"
+Native warning modal "本次资料升级未完成", body "已回退本次升级；旧资料与升级前快照均已保留。暂不继续写入或启动聊天。". Actions "选择已验证的备份" and "退出". Small note "也可使用兼容的应用版本处理。". Do NOT say corrupted database, silently initialize an empty database, or start a new conversation.
+
+05 "导出备份进行中"
+Native export progress modal "正在创建并校验备份", body "请勿重复点击导出，完成后会显示保存结果。", steps "创建一致的备份" and "检查可读取性"; disabled "导出中". Small clear footer "成功或失败后才更新备份状态". No API keys in backup. The detailed export success/error surfaces already exist in design 11; don't invent extra export scopes.
+
+06 "恢复资料进行中"
+Native blocking restoration modal showing selected filename "companion-2026-10-23.backup" and "备份时间：2026-10-23 14:00（示例）". Steps "检查备份 → 恢复到独立位置 → 验证并切换", middle step active. Body "恢复完成前暂不聊天或修改资料。原资料仍保留，失败不会覆盖。". Disabled primary "正在恢复". The final success/failure is shown elsewhere in the design set; no false green success while still restoring.
+
+07 "清空角色的处理与结果"
+This panel has TWO clearly separated sub-states, each large enough to read.
+In-progress: "正在停止六花的回复并清理资料…" and "此时暂不接受新消息", disabled button "清理中".
+Completed: green "六花的指定资料已清空", subtext "已清理聊天、人设版本、私有记忆与运行文件；全局共享资料保留。", action "返回角色设置".
+Do NOT call this a clear-chat function, global wipe, or delete other roles. These are data clearing states after the previously designed explicit confirmation.
+
+08 "卸载的处理与结果"
+A native Windows uninstall progress component "正在卸载桌面陪伴", text "正在按你选择的范围处理应用与资料…", disabled "处理中".
+Below two separately LABELLED completion paths:
+"保留数据路径" — "应用已卸载，保留的资料可在重装后继续使用。"
+"删除应用管理资料路径" — "应用管理的资料已删除；外部导出文件与原始图片保留。"
+One native "完成" button at bottom. Do not conflate these two outcomes or claim deletion on the keep-data path. Actual deletion failure remains an error surface, not this successful completion.
+
+Make all eight labels and their essential body copy legible. Use two-column four-row PORTRAIT layout; do not squeeze eight panels into a shallow landscape page. Exact useful state semantics over decoration. Keep a calm professional desktop-app design family consistent with supplied reference images.

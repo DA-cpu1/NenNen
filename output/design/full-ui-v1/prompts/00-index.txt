@@ -1,0 +1,25 @@
+Use case: ui-mockup / design overview. Create a beautiful, highly legible INDEX SHEET for a complete first-release Windows anime desktop companion UI design set. The supplied five pictures are reference designs from THIS SAME set. Use them to accurately preserve the application's warm white, pale lavender, indigo, native Windows visual family and Rikka character identity. This index is a visual table of contents, not a new app dashboard or new feature page.
+
+One landscape 2560x1800 design board, straight-on, restrained ivory-lavender background, refined dark indigo Chinese typography. Header large "完整首版 · 全界面设计总览". Secondary line "桌宠与托盘、全部功能页面、关键操作与异常状态". Small right header badge "图片设计稿 · 非运行截图". A quiet line under header "统一入口：聊天 / 角色设置 / 记忆 / 设置".
+
+Main area a meticulously aligned 4-by-4 grid of SIXTEEN equal tiles with generous margins. Each tile has a subtle thin border and soft rounded corners, a representative MINIATURE UI SCREENSHOT (faithfully using the same application frame, rail and content style), a prominent TWO-DIGIT number in lavender, and the exact Chinese title below. The index tiles must not contain long unreadable body paragraphs. All full details exist in separate images. Keep the character tasteful, fully clothed, nonsexual.
+Tiles in EXACT numerical reading order, left-to-right then next row:
+"01 桌面、聊天与托盘" — miniature of supplied desktop/chat overview with fullbody standing Rikka and separate chibi.
+"02 角色设定" — miniature persona text form with two image previews, matching supplied settings reference.
+"03 情境示例与人设版本" — miniature paired example fields and version history.
+"04 独立试聊" — miniature chat with distinct lavender "试聊" banner.
+"05 记忆管理与来源" — miniature memory list and source detail matching supplied memory image.
+"06 纠正、忘记与删除原文" — miniature confirmation dialog with an independent unchecked checkbox.
+"07 模型与凭据" — miniature model settings with masked API key, matching supplied reference.
+"08 主动陪伴" — miniature settings with toggle OFF and quiet-time controls.
+"09 桌面与窗口" — miniature chibi and size slider / restore controls.
+"10 用量与整理预算" — miniature usage table and budget controls, no fake money headline.
+"11 备份与恢复" — miniature supplied backup settings and restoration modal.
+"12 角色清理与卸载" — miniature two distinct confirmation surfaces, one product data clearing and one Windows uninstall.
+"13 首次使用引导" — miniature four-step onboarding.
+"14 聊天状态图册" — miniature 2-column state panels with streaming, stop and error.
+"15 启动异常与恢复" — miniature damaged-data warning and backup choice.
+"16 关于与隐私" — miniature privacy information settings page.
+
+Footer concise "完整首版设计稿 · 按编号查看详细图片 · 保持后续实现与界面一致".
+Never insert T05/T06未接入, feature-not-built banners, a character switcher, new conversation, clear history, voice, Live2D, relationship levels, currencies, auto-start setting or account sign-in. No empty template tiles. Do not mix numbers, duplicate tiles or omit any of the sixteen. Native-app consistent design, not a marketing poster full of arrows.

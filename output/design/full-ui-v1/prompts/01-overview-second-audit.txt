@@ -1,0 +1,4 @@
+Use case: text-localization
+Asset type: existing complete desktop companion UI screenshot design board.
+Edit the referenced image with one precise text correction only. In EVERY Windows taskbar date shown in this image (main desktop and both lower small taskbar examples), replace the existing date “2024/11/28” with exactly “2026/10/23”. Keep every time “14:24” unchanged. Do not change anything else.
+Preserve all other pixels as closely as possible: entire composition, app window, full-body 六花 illustration and chibi, eyepatch on viewer left, all Chinese text, all bubbles, menus, navigation, colors, icons, sizing and whitespace. No new controls, no cropping, no extra abilities. This is a date correction, not a redesign. The THREE visible Windows dates must all read “2026/10/23”.

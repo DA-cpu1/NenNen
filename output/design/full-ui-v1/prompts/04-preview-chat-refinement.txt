@@ -1,0 +1,4 @@
+Use case: precise-object-edit
+Input image: already completed first-release role trial-chat design board.
+Change exactly ONE tiny UI symbol: in the BOTTOM LEFT supplementary panel titled “生成中”, the purple “停止” button currently has a white right-pointing PLAY TRIANGLE. Replace that triangle with a small WHITE SOLID SQUARE, the standard stop icon. Keep Chinese label “停止” unchanged.
+Preserve EVERYTHING ELSE pixel-faithfully: all Chinese text, both windows/panels, exact page composition, color palette, whitespace, character full-body pose and eyepatch, all controls and text. Do not add new content, do not change typography, do not crop or resize the composition. Only turn the one white play triangle into one white square.

@@ -1,0 +1,29 @@
+Use case: UI design table of contents. Redraw the supplied index into a clean complete REVIEWED directory for a Windows anime companion UI set. Keep its warm white, pale lavender and deep indigo aesthetic and one small tasteful Rikka character accent in the header. This index is NOT a product screen. It is only a visual directory of the actual detailed designs.
+
+Landscape large board with enough height for six rows. Header "完整首版界面 · 全套目录", subheading "22 张详细设计图 · 页面、弹窗与关键状态". Small tag "设计稿 · 非运行截图". Header helper "目录用于定位；具体界面以编号详细图为准。"
+Use EXACTLY TWENTY-TWO tidy numbered cards, in reading order. Four columns for the first FIVE rows (20 cards), then TWO wide cards in the sixth row (21 and 22). Every card contains a prominent two-digit number, the exact Chinese title, a large simple relevant line icon, and at most one short subtitle. NO mini product screenshots, NO pretend interactive buttons, NO tiny invented form text or messages. The previous mini screenshots could accidentally imply different UI behavior: replace them ALL with simple illustrative icons and the exact labels. This is a polished usable contents image, not a SaaS dashboard.
+Cards and optional brief subtitles:
+01 "桌面、聊天与托盘" — "日常桌面与窗口入口"
+02 "角色设定" — "基本信息、人设与两张图片"
+03 "情境示例与人设版本" — "多轮示例、查看与回退"
+04 "独立试聊" — "草稿预览与正式聊天隔离"
+05 "记忆管理与来源" — "列表、筛选、来源与历史变化"
+06 "纠正与忘记" — "默认保留原文的操作分支"
+07 "模型与凭据" — "配置、测试与连接状态"
+08 "主动陪伴" — "机会间隔、免打扰与安静"
+09 "桌面与窗口" — "大小、位置与找回桌宠"
+10 "用量与整理预算" — "统计、价格与整理条件"
+11 "备份与恢复" — "范围确认与失败提示"
+12 "角色清理与卸载" — "保留与删除的准确范围"
+13 "首次使用引导" — "角色、连接、预览与开始"
+14 "聊天状态图册" — "等待、停止、重试与输入限制"
+15 "启动异常与恢复" — "损坏、版本不兼容与备份"
+16 "关于与隐私" — "本地资料、联网与服务商边界"
+17 "完整历史与主动消息" — "较早消息、来源定位与回到最新"
+18 "共享资料与已忘记状态" — "明确共享与已清理正文"
+19 "凭据操作与保存反馈" — "更换、删除、估算与保存结果"
+20 "运行异常与资料操作" — "超时、后台、升级与处理过程"
+21 "完整人设文本编辑" — "长篇人设的直接编辑模式"
+22 "同时删除原文" — "勾选后的确认、处理与结果"
+Footer "完整首版已定范围 · 统一入口：聊天 / 角色设置 / 记忆 / 设置".
+All Chinese exact, large and readable. Exactly 22 cards with no missing/duplicate number. No claim actual software tests passed. No extra future-scope features. No tools, source code, privacy policy inventions or new product control labels.

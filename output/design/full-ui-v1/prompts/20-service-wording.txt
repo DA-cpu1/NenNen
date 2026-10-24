@@ -1,0 +1,5 @@
+Use case: ui-mockup. Correct ONLY TWO sentences in PANEL 02 "本地后台暂不可用" of this eight-panel state sheet. Preserve every other panel, layout, numbers, steps, colors, icons, buttons and text exactly.
+Because the local service is unavailable, the UI can still display history ALREADY LOADED, but cannot directly open the database to fetch all older history.
+1. In the red message, use EXACTLY "已收到的文字仍保留在窗口中，并标为未完成。暂不发送新请求。". This must refer to visible text retained in the window, not falsely claim it was persisted.
+2. In the pale informational strip below, replace "历史记录仍可查看。" with EXACTLY "已加载的历史仍可查看，已保存的资料保留。". Wrap to two lines if needed while maintaining comfortable text.
+The "重新连接" and "退出应用" actions remain unchanged. No other edits. Crisp Chinese, high fidelity exact correction.

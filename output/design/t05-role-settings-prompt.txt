@@ -1,0 +1,64 @@
+Use case: ui-mockup. Edit and expand the ROLE SETTINGS portion of the supplied T05 concept board into ONE new, detailed, spacious, high-fidelity ROLE SETTINGS PAGE design. Preserve the supplied design's Rikka character appearance, lavender/ivory/indigo palette, native Windows titlebar and visual family. The previous cramped form was too sparse: the user needs to SEE what complete persona editing actually contains. This is a standalone detailed page concept, not a feature marketing poster.
+
+Output one large crisp 4:3 landscape image, target 2560x1920. Straight-on digital app screenshot with a modest outer framing border and small concept caption. The central entire app window should occupy 94 percent of the image. All text is simplified Chinese, legible, coherent and carefully aligned; avoid tiny unreadable type. Use a sufficiently tall native desktop window to show the page without clipping. No physical laptop/monitor, no perspective, no desktop wallpaper needed.
+
+Outside the app at very top, modest caption "角色设置 · 详细设计稿", and on the right small caption "T05 界面概念 · 内容与素材仅作示意". No other headline or long explanatory annotations outside UI.
+
+Native window titlebar "桌面陪伴" with minimize and close buttons. A narrow left application navigation rail with only "聊天" and "角色设置", role settings selected in soft lavender. Do not add memory, software settings, character switcher, import/export, model selector, chat-session list or any paid features.
+
+Inside the window, a wide MAIN EDITING column (roughly 70 percent content width) and a RIGHT PREVIEW column (30 percent), separated by a subtle fine rule. Warm white surfaces with restrained lavender accents, deep indigo headings, excellent Chinese sans-serif typography, clear natural hierarchy, thin borders and modest corner radius. Desktop software style, not a SaaS dashboard, not a mobile app.
+
+Main page header "角色设置"
+subtext "把性格、说话方式与相处起点写清楚。"
+Small muted status pill "有未保存的修改".
+Compact subsection anchors below header: "基本信息" "人设与表达" "对话示例" "人设版本".
+
+MAIN EDITING COLUMN:
+SECTION 1 heading "基本信息".
+Three labeled fields: "角色名字" populated "六花"; "初始关系" populated "已经确定恋人关系", as a FREE TEXT input with NO dropdown arrow and no rigid relationship choices; third field "称呼设定" with placeholder "希望角色怎样称呼你；留空时自然称呼". Place first two fields in one row, third on the next full-width row. Optional quiet one-line helper "这里填写相处的起点，聊天中不会自动升级关系。"
+
+SECTION 2 heading "人设与表达". To the right of this section heading a compact two-option segmented control: selected "分区填写", secondary "完整文本". This indicates a convenient alternative to editing one giant text box, without constraining long persona text.
+Show THREE distinct sizeable multiline textareas with readable text and meaningful guidance, each large enough for actual writing. Labels and content:
+"核心性格"
+text "认真维护自己的幻想小世界；在亲近的人面前会放松，也有自己的判断与坚持。"
+helper below label "她在乎什么、怎样表达关心、遇事会怎么反应。"
+"语言习惯"
+text "用自然中文，按情境选择简短直说或郑重的小宣布；口头禅不必每句出现。"
+helper "句长、用词、比喻与表达习惯。"
+"背景边界"
+text "沿用动画版角色；暂不指定剧情时期，不把原作事件当成与用户的共同经历。"
+helper "哪些背景沿用，哪些未知，哪些不能当成共同往事。"
+Use the supplied character concept as visual context, but all persona content is an illustrative draft, not a confirmed saved character card.
+Below these textareas a small READ-ONLY expanded disclosure headed "共同原则", with a tiny lock icon and a short line "不编造共同经历 · 不用内疚催促聊天 · 操作成功后才确认". No toggles or checkboxes to disable these principles.
+
+SECTION 3 heading "情境对话示例" with small right-aligned "+ 添加示例" button.
+Small helper "用具体对话展示她会怎样回应，不要求每次照抄。"
+Two clean editing groups side by side, each with a short editable scene label and two paired inputs "用户" / "角色", plus a modest remove icon.
+First group scene label "分享开心的事":
+User text "今天终于把界面弄完了。"
+Character text "哼哼，今天的结界突破了。最难缠的那一块，也拿下了吗？"
+Second group scene label "想认真倾诉":
+User text "别开玩笑，我今天真的挺难受。"
+Character text "……嗯，这次认真听。发生了什么？"
+Keep both groups fully readable, clearly editing examples rather than live chat bubbles. Do not show fixed permitted-joke lists, emotional score sliders or personality test meters.
+
+SECTION 4 heading "人设版本".
+A compact native-style version list with two rows:
+"v2   当前生效" and a small "查看" button;
+"v1   最初版本" and a small "回退人设版本" button.
+Helper line "保留历史人设，修改不重写过去的聊天。"
+Do not imply that image or name edits are versioned together with persona.
+
+RIGHT PREVIEW COLUMN:
+Section heading "角色图片"
+helper "桌面形象与聊天立绘分别设置".
+Upper image region labeled "桌面形象": a tasteful large thumbnail with subtle transparency checkerboard and a fullbody 2.5-head chibi Rikka. Short dark indigo hair, tiny ponytail with yellow ribbon, white eyepatch over HER RIGHT eye (viewer-left), one visible teal-blue eye, dark blazer white blouse red ribbon plaid pleated skirt black knee socks brown loafers. Fully clothed, no sexualization. Underneath a "更换桌面图片" button.
+Lower, taller image region labeled "聊天立绘": a beautiful complete HEAD-TO-SHOES fullbody anime Rikka in the same uniform and identity, rendered with proper long adult-proportioned standing illustration style as in reference (not chibi); hands relaxed, one visible teal-blue eye, same white eyepatch, no crop at feet. Subtle transparency checkerboard backdrop, NO illustrated environment. Underneath a "更换聊天立绘" button.
+Small quiet helper near bottom "当前角色图仅作效果示意".
+Do not add an affinity value, animation preview controls, video, voice, mood system, level, or relationship evolution.
+
+BOTTOM ACTION BAR spans page, pinned at bottom with a subtle top border. Left small muted text "保存后生成新的人设版本". Right secondary button "取消编辑" and lavender primary button "保存人设版本".
+Outside or under app at bottom, quiet caption "角色试聊在 T06 接入".
+No enabled trial-chat button. No model API configuration or memory editing within role settings.
+
+Quality constraints: a coherent polished native desktop UI, comfortable information density and readable form content, meticulous alignment, realistic and buildable. Use simple labeled textareas and controls, not arbitrary invented functionality. Preserve reference character aesthetic. Do not cram the form into a miniature right-hand panel; this image is dedicated to the settings page. Never show actual streaming replies or real chat message history. No watermark.
