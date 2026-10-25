@@ -197,10 +197,13 @@ describe('数据库自测端点 /db/ping', () => {
       db: {
         readEpoch: () => { touched = true; return 0 },
         bumpEpoch: () => { touched = true; return 1 },
-        // 本组用例只关心 epoch 函数；窗口位置与会话函数放无害存根补齐接口
+        // 本组用例只关心 epoch 函数；窗口位置、会话与角色函数放无害存根补齐接口
         readWindowState: () => undefined,
         writeWindowState: () => {},
         readFormalConversation: () => { touched = true; return null },
+        readCharacterOverview: () => { touched = true; return undefined },
+        readChatWindowState: () => { touched = true; return undefined },
+        writeChatWindowState: () => { touched = true },
       },
     })
     extraServers.push(fake)
@@ -228,6 +231,9 @@ describe('数据库自测端点 /db/ping', () => {
         readWindowState: () => undefined,
         writeWindowState: () => {},
         readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
       },
     })
     extraServers.push(fake)
@@ -245,6 +251,9 @@ describe('数据库自测端点 /db/ping', () => {
         readWindowState: () => undefined,
         writeWindowState: () => {},
         readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
       },
     })
     extraServers.push(fake)
@@ -262,6 +271,9 @@ describe('数据库自测端点 /db/ping', () => {
         readWindowState: () => { throw new Error('内部路径不应泄露') },
         writeWindowState: () => { throw new Error('内部路径不应泄露') },
         readFormalConversation: () => { throw new Error('内部路径不应泄露') },
+        readCharacterOverview: () => { throw new Error('内部路径不应泄露') },
+        readChatWindowState: () => { throw new Error('内部路径不应泄露') },
+        writeChatWindowState: () => { throw new Error('内部路径不应泄露') },
       },
     })
     extraServers.push(fake)
@@ -281,13 +293,17 @@ describe('窗口状态端点 /window-state（T02 位置恢复）', () => {
       headers: { 'content-type': 'application/json', 'x-session-token': token },
       body: typeof body === 'string' ? body : JSON.stringify(body),
     })
-  /** 省得每个用例都抄四遍注入函数：给两个可观察行为的假实现 */
+  /** 省得每个用例都抄四遍注入函数：给两个可观察行为的假实现；
+   *  其余端点的函数放无害存根补齐接口（本组不关心它们） */
   const fakeDb = (read: () => unknown, write: (value: unknown) => void) => ({
     readEpoch: () => 0,
     bumpEpoch: () => 1,
     readWindowState: read,
     writeWindowState: write as (value: never) => void,
     readFormalConversation: () => null,
+    readCharacterOverview: () => undefined,
+    readChatWindowState: () => undefined,
+    writeChatWindowState: () => {},
   })
 
   it('未带令牌返回 401，读写函数不被触碰', async () => {
@@ -414,6 +430,9 @@ describe('正式会话端点 /formal-conversation（T04 应用接口）', () => 
           runtimeSessionId: null,
           contextEpoch: 0,
         }),
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
       },
     })
     extraServers.push(fake)
@@ -438,6 +457,9 @@ describe('正式会话端点 /formal-conversation（T04 应用接口）', () => 
         readWindowState: () => undefined,
         writeWindowState: () => {},
         readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
       },
     })
     extraServers.push(fake)
@@ -454,6 +476,9 @@ describe('正式会话端点 /formal-conversation（T04 应用接口）', () => 
         readWindowState: () => undefined,
         writeWindowState: () => {},
         readFormalConversation: () => { throw new Error('内部路径不应泄露') },
+        readCharacterOverview: () => { throw new Error('内部路径不应泄露') },
+        readChatWindowState: () => { throw new Error('内部路径不应泄露') },
+        writeChatWindowState: () => { throw new Error('内部路径不应泄露') },
       },
     })
     extraServers.push(fake)
@@ -519,5 +544,180 @@ describe('模型自测端点 /model/ping', () => {
   it('不带令牌打 /model/ping 同样 401', async () => {
     const res = await fetch(`http://127.0.0.1:${server!.port}/model/ping`)
     expect(res.status).toBe(401)
+  })
+})
+
+describe('角色编辑端点 /character（T05，01 R05）', () => {
+  const get = (port: number, token = TOKEN) =>
+    fetch(`http://127.0.0.1:${port}/character`, { headers: { 'x-session-token': token } })
+
+  it('未带令牌返回 401，读函数不被触碰', async () => {
+    let touched = false
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => { touched = true; return undefined },
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
+      },
+    })
+    extraServers.push(fake)
+    const res = await fetch(`http://127.0.0.1:${fake.port}/character`)
+    expect(res.status).toBe(401)
+    expect(touched).toBe(false)
+  })
+
+  it('未接数据库时明确 503', async () => {
+    const res = await get(server!.port)
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ ok: false, code: 'DB_UNAVAILABLE' })
+  })
+
+  it('返回注入的完整概览（当前版本 + 版本列表）', async () => {
+    const overview = {
+      characterId: 'char-x',
+      name: '六花',
+      desktopImagePath: null,
+      portraitImagePath: 'characters/char-x/portrait.png',
+      activeVersion: {
+        versionNo: 2,
+        personaText: '【核心性格】\n认真维护幻想小世界。',
+        initialRelationship: '已经确定恋人关系',
+        userNickname: '阿达',
+        dialogueExamples: [
+          { scene: '分享开心的事', user: '界面弄完了。', character: '结界突破了。' },
+        ],
+      },
+      versions: [
+        { versionNo: 2, isActive: true, createdAt: 1740000100000 },
+        { versionNo: 1, isActive: false, createdAt: 1740000000000 },
+      ],
+    }
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => overview,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
+      },
+    })
+    extraServers.push(fake)
+    const res = await get(fake.port)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, character: overview })
+  })
+
+  it('读函数抛错返回 502，不转发错误内容', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => { throw new Error('内部路径不应泄露') },
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
+      },
+    })
+    extraServers.push(fake)
+    const res = await get(fake.port)
+    expect(res.status).toBe(502)
+    expect(await res.json()).toEqual({ ok: false, code: 'DB_ERROR' })
+  })
+})
+
+describe('聊天窗口状态端点 /chat-window-state（T05 位置保存）', () => {
+  const get = (port: number, token = TOKEN) =>
+    fetch(`http://127.0.0.1:${port}/chat-window-state`, { headers: { 'x-session-token': token } })
+  const put = (port: number, body: unknown, token = TOKEN) =>
+    fetch(`http://127.0.0.1:${port}/chat-window-state`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-session-token': token },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    })
+
+  it('GET 未存过返回 state:null；PUT 合法值写入且函数收到解析后的对象', async () => {
+    let saved: unknown
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => (saved ?? undefined),
+        writeChatWindowState: (value) => { saved = value },
+      },
+    })
+    extraServers.push(fake)
+    const first = await get(fake.port)
+    expect(await first.json()).toEqual({ ok: true, state: null })
+
+    const payload = { x: 120, y: 80, width: 980, height: 640, maximized: false }
+    const putRes = await put(fake.port, payload)
+    expect(putRes.status).toBe(200)
+    expect(await putRes.json()).toEqual({ ok: true })
+    // 写入函数收到的是过完 Zod 关卡的对象，不是原始 JSON 字符串
+    expect(saved).toEqual(payload)
+
+    const second = await get(fake.port)
+    expect(await second.json()).toEqual({ ok: true, state: payload })
+  })
+
+  it('缺 maximized 或负尺寸过不了格式关卡，返回 400 不写入', async () => {
+    let writes = 0
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => { writes += 1 },
+      },
+    })
+    extraServers.push(fake)
+    for (const bad of [
+      { x: 1, y: 1, width: 100, height: 100 }, // 缺 maximized
+      { x: 1, y: 1, width: -5, height: 100, maximized: false }, // 尺寸非正
+      { x: 1.5, y: 1, width: 100, height: 100, maximized: false }, // 坐标非整数
+      '不是对象',
+    ]) {
+      const res = await put(fake.port, bad)
+      expect(res.status).toBe(400)
+      expect(await res.json()).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    }
+    expect(writes).toBe(0)
+  })
+
+  it('写入失败返回 502，不假装成功（01 R17）', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => { throw new Error('库写入失败') },
+      },
+    })
+    extraServers.push(fake)
+    const res = await put(fake.port, { x: 0, y: 0, width: 100, height: 100, maximized: true })
+    expect(res.status).toBe(502)
+    expect(await res.json()).toEqual({ ok: false, code: 'DB_ERROR' })
   })
 })

@@ -25,3 +25,23 @@ export const petWindowStateSchema = z.strictObject({
 
 /** 从上面的 Zod 描述自动推出的 TypeScript 类型：四个整数字段 */
 export type PetWindowState = z.infer<typeof petWindowStateSchema>
+
+/** 聊天窗口状态存 app_settings 表里用的键名（T05） */
+export const CHAT_WINDOW_KEY = 'chatWindow'
+
+/**
+ * 聊天（主）窗口的状态：比桌宠多记一个 maximized——用户把窗口最大化
+ * 后关掉，下次启动应该还原成最大化，而不是退回一个普通小窗。
+ * 字段含义与 petWindowStateSchema 相同，另见那份的注释。
+ */
+export const chatWindowStateSchema = z.strictObject({
+  x: z.number().int(),
+  y: z.number().int(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  /** 是否最大化保存；恢复时先按矩形落位再最大化 */
+  maximized: z.boolean(),
+})
+
+/** 聊天窗口状态类型（同样由 Zod 描述自动推出） */
+export type ChatWindowState = z.infer<typeof chatWindowStateSchema>

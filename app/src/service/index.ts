@@ -11,9 +11,10 @@ import { openCompanionDatabase, type CompanionDb } from '../data/db'
 import { runMigrations } from '../data/migrations'
 import { bumpGlobalMemoryEpoch, readGlobalMemoryEpoch } from '../data/epochs'
 import { getFirstCharacter, initializeFirstCharacter } from '../data/character-init'
+import { getCharacterOverview } from '../data/character-edit'
 import { getFormalConversation } from '../data/conversations'
 import { readSetting, writeSetting } from '../data/settings'
-import { PET_WINDOW_KEY, type PetWindowState } from '../shared/window-state'
+import { CHAT_WINDOW_KEY, PET_WINDOW_KEY, type ChatWindowState, type PetWindowState } from '../shared/window-state'
 
 /** 应用根目录：编译产物在 out/main/，往上两级正好是 app/ */
 const APP_DIR = resolve(__dirname, '../..')
@@ -144,6 +145,23 @@ function main(): void {
             runtimeSessionId: conversation.runtimeSessionId,
             contextEpoch: conversation.contextEpoch,
           }
+        },
+        // 角色编辑概览（T05，01 R05）：每次现查库。data 层负责把
+        // dialogue_examples_json 解析成数组、挑出当前生效版本，这里只搬运
+        readCharacterOverview: () => {
+          if (!database) throw new Error('E_DB_NOT_OPEN')
+          return getCharacterOverview(database.db)
+        },
+        // 聊天窗口状态（T05）：存 app_settings 的 chatWindow 键。
+        // 与 petWindow 同款「读出原值不在这验格式」的分工：总机搬运，
+        // 消费方（主进程）自己过 Zod 关卡
+        readChatWindowState: () => {
+          if (!database) throw new Error('E_DB_NOT_OPEN')
+          return readSetting(database.db, CHAT_WINDOW_KEY)
+        },
+        writeChatWindowState: (value: ChatWindowState) => {
+          if (!database) throw new Error('E_DB_NOT_OPEN')
+          writeSetting(database.db, CHAT_WINDOW_KEY, value)
         },
       }
     }

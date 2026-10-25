@@ -10,7 +10,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { timingSafeEqual } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import { callModelOnce, type ModelCallResult } from '../agent/model'
-import { petWindowStateSchema, type PetWindowState } from '../shared/window-state'
+import {
+  chatWindowStateSchema,
+  petWindowStateSchema,
+  type ChatWindowState,
+  type PetWindowState,
+} from '../shared/window-state'
+import type { CharacterOverview } from '../data/character-edit'
 
 /** 总机句柄：端口号 + 关机方法 */
 export interface BackendServer {
@@ -58,6 +64,13 @@ export interface BackendOptions {
     /** 读首个角色正式会话的信息（T04 应用接口，04 §1）；
      *  还没初始化角色时返回 null */
     readFormalConversation(): FormalConversationInfo | null
+    /** 读首个角色的编辑概览（T05，01 R05）：名字、图片、当前人设版本、
+     *  版本列表。还没初始化角色时返回 undefined */
+    readCharacterOverview(): CharacterOverview | undefined
+    /** 读聊天窗口状态；没存过返回 undefined（T05 位置恢复） */
+    readChatWindowState(): unknown
+    /** 保存聊天窗口状态（值已过格式关卡） */
+    writeChatWindowState(value: ChatWindowState): void
   }
 }
 
@@ -323,6 +336,65 @@ async function handleRequest(
       })
     } catch {
       // 读失败只报错误码；数据库报错原文可能带表结构细节，不转发
+      sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
+    }
+    return
+  }
+  // 角色编辑概览（T05，01 R05）：打开角色设置页时一次拿齐名字、图片、
+  // 当前人设版本与版本列表。写通道（保存/回退）在 /character/version*
+  if (req.method === 'GET' && req.url === '/character') {
+    if (!options.db) {
+      sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' })
+      return
+    }
+    try {
+      sendJson(res, 200, {
+        ok: true,
+        // 还没初始化角色（理论上只有启动顺序异常才会发生）给 null，
+        // 界面按「读不到」处理，不猜一份假数据
+        character: options.db.readCharacterOverview() ?? null,
+      })
+    } catch {
+      sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
+    }
+    return
+  }
+  // 聊天窗口状态（T05）：与 /window-state 同款的读存对，多一个 maximized。
+  // 桌宠与聊天窗口各一个键、各一条通道——值形状不同，不共用一条路硬塞参数
+  if (req.method === 'GET' && req.url === '/chat-window-state') {
+    if (!options.db) {
+      sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' })
+      return
+    }
+    try {
+      sendJson(res, 200, { ok: true, state: options.db.readChatWindowState() ?? null })
+    } catch {
+      sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
+    }
+    return
+  }
+  if (req.method === 'PUT' && req.url === '/chat-window-state') {
+    if (!options.db) {
+      sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' })
+      return
+    }
+    let parsed: unknown
+    try {
+      parsed = await readJsonBody(req)
+    } catch {
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    const check = chatWindowStateSchema.safeParse(parsed)
+    if (!check.success) {
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    try {
+      options.db.writeChatWindowState(check.data)
+      sendJson(res, 200, { ok: true })
+    } catch {
+      // 写失败绝不回 ok（01 R17：失败不假装成功）
       sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
     }
     return
