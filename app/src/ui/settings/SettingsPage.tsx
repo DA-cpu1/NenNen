@@ -8,6 +8,7 @@ import { bodyFromDraft, draftFromCharacter, validateDraft, type CharacterDraft }
 import PersonaFields from './PersonaFields'
 import ExamplesEditor from './ExamplesEditor'
 import ConfirmationDialog from './ConfirmationDialog'
+import CharacterImages from './CharacterImages'
 import styles from './SettingsPage.module.css'
 
 interface SettingsProps extends CharacterProps {
@@ -40,7 +41,8 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
-  const [needsRefresh, setNeedsRefresh] = useState(false)
+  const [imageBusy, setImageBusy] = useState(false)
+  const [needsRefresh, setNeedsRefresh] = useState(loadError !== null)
   const [cancelRequested, setCancelRequested] = useState(false)
   const [activateNo, setActivateNo] = useState<number | null>(null)
   // ref 是跨渲染保留的小盒子：连点发生在按钮来得及变灰前，也只能发一次请求。
@@ -52,9 +54,9 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
 
   useEffect(() => {
     if (!leaving) return
-    if (busy) { setError('正在保存，请稍候再离开。'); onStay() }
+    if (busy || imageBusy) { setError('正在保存，请稍候再离开。'); onStay() }
     else if (!dirty) onLeave()
-  }, [leaving, busy, dirty, onLeave, onStay])
+  }, [leaving, busy, imageBusy, dirty, onLeave, onStay])
 
   /** 修改后的内容是新请求；保持同一内容时失败重试才复用原编号。 */
   function changeDraft(next: CharacterDraft): void {
@@ -151,14 +153,15 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
     operationRunning.current = true
     setBusy(true)
     try {
-    const fresh = await reload()
-    if (fresh && blocked) {
-      const next = draftFromCharacter(fresh)
-      setDraft(next)
-      setSavedDraft(next)
-      setNeedsRefresh(false)
-      setNotice('已重新读取当前设定。')
-    }
+      const fresh = await reload()
+      // 只有保存/回退已改变版本才换稿；单纯换图后读失败不能吃掉人设草稿。
+      if (fresh && needsRefresh) {
+        const next = draftFromCharacter(fresh)
+        setDraft(next)
+        setSavedDraft(next)
+        setNeedsRefresh(false)
+        setNotice('已重新读取当前设定。')
+      }
     } finally { operationRunning.current = false; setBusy(false) }
   }
 
@@ -173,8 +176,10 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
     {error && <p role="alert" className={styles.error}>{error}</p>}
     {notice && <p role="status" className={styles.notice}>{notice}</p>}
     {(loadError || needsRefresh) && <p className={styles.error}>资料刷新失败。<button disabled={busy} onClick={() => void refresh()}>重新读取</button></p>}
-    <fieldset className={styles.scroll} disabled={busy || blocked} aria-busy={busy}>
-      {tab === 'basic' && <PersonaFields draft={draft} onChange={changeDraft} onError={setError} />}
+    <fieldset className={styles.scroll} disabled={busy || blocked || imageBusy} aria-busy={busy || imageBusy}>
+      {tab === 'basic' && <div className={styles.settingsColumns}><div>
+        <PersonaFields draft={draft} onChange={changeDraft} onError={setError} />
+      </div><CharacterImages character={character} reload={reload} onBusy={setImageBusy} /></div>}
       {tab === 'examples' && <ExamplesEditor examples={draft.dialogueExamples} onChange={(dialogueExamples) => changeDraft({ ...draft, dialogueExamples })} />}
       {tab === 'versions' && <section className={styles.card}><h2>已保存的人设版本</h2>
         <p className={styles.hint}>回退恢复人设、关系、称呼与示例；名字和图片保持当前设置。</p>
@@ -186,8 +191,8 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
       </section>}
     </fieldset>
     <footer className={styles.footer}><p>保存生成新版本，从下一轮聊天生效。</p><div>
-      <button type="button" className={styles.secondary} disabled={busy || !dirty} onClick={() => setCancelRequested(true)}>取消修改</button>
-      <button type="button" className={styles.primary} disabled={busy || blocked || !dirty} onClick={() => void save()}>{busy ? '正在处理…' : '保存人设版本'}</button>
+      <button type="button" className={styles.secondary} disabled={busy || imageBusy || !dirty} onClick={() => setCancelRequested(true)}>取消修改</button>
+      <button type="button" className={styles.primary} disabled={busy || imageBusy || blocked || !dirty} onClick={() => void save()}>{busy ? '正在处理…' : '保存人设版本'}</button>
     </div></footer>
     {(cancelRequested || (leaving && dirty && !busy)) && <ConfirmationDialog title="有未保存的修改"
       onCancel={() => { setCancelRequested(false); onStay() }}

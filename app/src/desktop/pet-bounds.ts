@@ -17,6 +17,18 @@ export interface WorkArea {
 }
 
 /**
+ * 按原图比例确定默认尺寸，避免宽图或大像素图片直接盖满桌面。
+ * @param width 图片宽度
+ * @param height 图片高度
+ * @returns 不超过 360×260 逻辑像素、保持比例的尺寸
+ */
+export function petImageSize(width: number, height: number): { width: number; height: number } {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return { width: 200, height: 260 }
+  const factor = Math.min(360 / width, 260 / height)
+  return { width: Math.max(1, Math.round(width * factor)), height: Math.max(1, Math.round(height * factor)) }
+}
+
+/**
  * 把保存的位置拉回可见区。
  * 规则：找与窗口重叠面积最大的一块工作区——
  * - 与任何工作区都完全没有重叠（显示器被拔了）→ 返回 null，

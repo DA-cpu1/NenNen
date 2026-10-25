@@ -47,6 +47,12 @@ contextBridge.exposeInMainWorld('appApi', {
    * slot 'desktop' = 桌面形象，'portrait' = 聊天立绘
    */
   pickImage: (slot: 'desktop' | 'portrait') => ipcRenderer.invoke('character:pick-image', slot),
+  /** 后台就绪或图片更新后通知两窗口重读；通知本身不携带角色资料。 */
+  onCharacterChanged: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('character:changed', listener)
+    return () => ipcRenderer.removeListener('character:changed', listener)
+  },
   /**
    * 订阅「切到某页」的指令（托盘/桌宠菜单点「打开聊天/角色设置」时，
    * 主进程把窗口亮出来的同时通知界面切页）。返回取消订阅的函数。

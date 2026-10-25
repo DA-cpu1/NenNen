@@ -5,11 +5,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- 与状态窗同源的防导航策略；多放行 img-src data: 是为第 2 步准备——
-         届时图片会以 data: 地址喂给 canvas 读像素做鼠标命中 -->
+    <!-- 图片只能来自应用自身与受限本地图片协议，不能任意加载外部图片。 -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: app-asset:"
     />
     <title>桌宠</title>
     <!-- 透明窗口的三件套：去掉默认白底、去掉页边距、不许出滚动条

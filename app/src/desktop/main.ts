@@ -19,7 +19,8 @@ import {
   petWindowStateSchema,
   type ChatWindowState,
 } from '../shared/window-state'
-import { clampPetBounds, defaultPetBounds, type WorkArea } from './pet-bounds'
+import { clampPetBounds, defaultPetBounds, petImageSize, type WorkArea } from './pet-bounds'
+import { managedImagePathSchema } from '../shared/character-schema'
 
 /** 开发期的密钥文件位置（app/local.key，git 已挡住不进仓库）。
  * 打包后主程序住在 resources/app.asar/out/main 里，「往上两级」会指到
@@ -233,8 +234,8 @@ function zoomPet(direction: 1 | -1): void {
 function resizePetWindow(scale: number): void {
   const pet = petWindow
   if (!pet || pet.isDestroyed()) return
-  const width = Math.round(PET_WINDOW_SIZE.width * scale)
-  const height = Math.round(PET_WINDOW_SIZE.height * scale)
+  const width = Math.max(1, Math.round(petBaseSize.width * scale))
+  const height = Math.max(1, Math.round(petBaseSize.height * scale))
   const bounds = pet.getBounds()
   // 一次 setBounds 改位置和尺寸：分两次调会出现「先缩再挪」的中间帧，肉眼可见地抖
   pet.setBounds({
@@ -262,8 +263,8 @@ function showPetMenu(): void {
         petScale = 1
         pet.setBounds(
           defaultPetBounds(
-            PET_WINDOW_SIZE.width,
-            PET_WINDOW_SIZE.height,
+            petBaseSize.width,
+            petBaseSize.height,
             screen.getPrimaryDisplay().workArea,
           ),
         )
@@ -292,8 +293,8 @@ function keepPetVisible(): void {
   } else {
     pet.setBounds(
       defaultPetBounds(
-        PET_WINDOW_SIZE.width,
-        PET_WINDOW_SIZE.height,
+        petBaseSize.width,
+        petBaseSize.height,
         screen.getPrimaryDisplay().workArea,
       ),
     )
@@ -354,6 +355,8 @@ async function restorePetBounds(handle: BackendHandle): Promise<void> {
     const clamped = clampPetBounds(check.data, areas)
     if (!clamped) return
     pet.setBounds(clamped)
+    // 矩形恢复后同步比例，否则第一次滚轮会从默认 1 倍突然跳起。
+    petScale = Math.min(PET_SCALE_MAX, Math.max(PET_SCALE_MIN, clamped.height / petBaseSize.height))
   } catch {
     // 后台未就绪等瞬时原因：保持默认位置，本次不恢复
   }
@@ -364,6 +367,34 @@ async function restorePetBounds(handle: BackendHandle): Promise<void> {
  *  窗口多大、角色就多大，透明区只存在于角色图的镂空处（R01：尺寸与实际
  *  挡鼠标的区域一致——窗口不留角色外面的大片空白） */
 const PET_WINDOW_SIZE = { width: 200, height: 260 }
+/** 换图后缩放、复位共用的新基准；占位图仍用原始默认尺寸。 */
+let petBaseSize = { ...PET_WINDOW_SIZE }
+
+/** 两窗口收到通知后各自读取需要的字段，不在通知里传角色资料。 */
+function notifyCharacterChanged(): void {
+  for (const win of [chatWindow, petWindow]) {
+    if (win && !win.isDestroyed()) win.webContents.send('character:changed')
+  }
+}
+
+/**
+ * 启动时先读图片比例，再恢复窗口尺寸；图片缺失时用占位尺寸。
+ * @param handle 已就绪后台的请求句柄
+ */
+async function restorePetImageSize(handle: BackendHandle): Promise<void> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/character`, { headers: { 'x-session-token': handle.token } })
+    const body = await res.json() as { ok: boolean; character?: { desktopImagePath?: string | null } }
+    const path = body.character?.desktopImagePath
+    if (!res.ok || !body.ok || !managedImagePathSchema.safeParse(path).success) return
+    const image = nativeImage.createFromPath(join(app.getPath('userData'), path!))
+    if (!image.isEmpty()) {
+      const size = image.getSize()
+      petBaseSize = petImageSize(size.width, size.height)
+      resizePetWindow(petScale)
+    }
+  } catch { /* 保持占位尺寸；界面会给出图片无法读取的说明。 */ }
+}
 
 /**
  * 创建桌宠窗口：无边框 + 全透明（03 §3）。和状态窗的关键差别：
@@ -520,8 +551,10 @@ async function startBackendWithSelfCheck(): Promise<void> {
 
   // 两窗口位置恢复：只依赖后台服务本身，不依赖模型密钥。第一件事就做
   // ——自测再快也要几个来回，晚恢复一拍用户就多看一眼「先中后跳」
+  await restorePetImageSize(handle)
   await restorePetBounds(handle)
   await restoreChatWindowState(handle)
+  notifyCharacterChanged()
 
   const authHeader = { 'x-session-token': handle.token }
   const withToken = await fetch(`http://127.0.0.1:${handle.port}/health`, {
@@ -613,7 +646,15 @@ async function startBackendWithSelfCheck(): Promise<void> {
     // 传「取值函数」而不是句柄：注册时后台多半还没雇好，通道每次
     // 处理请求时现取，后台没就绪的空档会得到明确的 BACKEND_NOT_READY
     registerBridgeRequests(() => backend)
-    registerCharacterImagePicking(() => backend)
+    registerCharacterImagePicking(() => backend, (slot, width, height) => {
+      if (slot === 'desktop') {
+        petBaseSize = petImageSize(width, height)
+        resizePetWindow(petScale)
+        keepPetVisible()
+        void savePetBounds()
+      }
+      notifyCharacterChanged()
+    })
     // screen 模块要等应用就绪后才能用（Electron 规矩），所以这两个
     // 监听在这里注册而不是文件顶层
     screen.on('display-metrics-changed', () => keepPetVisible())

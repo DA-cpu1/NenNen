@@ -73,6 +73,8 @@ export default function App() {
   useEffect(() => {
     void reload()
   }, [reload])
+  // 启动时的第一次请求可能赶在后台就绪前；收到通知再读，不靠反复轮询。
+  useEffect(() => window.appApi?.onCharacterChanged(() => void reload()), [reload])
 
   // 托盘/桌宠菜单点「打开聊天/角色设置」：主进程把窗口亮出来的同时
   // 发来切页指令，这里跟着切（订阅函数返回「取消订阅」，交给 React 卸载时调）

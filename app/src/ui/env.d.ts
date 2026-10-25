@@ -50,6 +50,8 @@ interface Window {
       height?: number
       code?: string
     }>
+    /** 后台就绪和图片保存后重读角色资料；返回取消监听函数。 */
+    onCharacterChanged: (callback: () => void) => () => void
     /** 订阅主进程的切页指令；返回取消订阅函数 */
     onNavGoto: (callback: (page: 'chat' | 'settings') => void) => () => void
   }

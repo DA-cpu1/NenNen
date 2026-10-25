@@ -6,7 +6,7 @@
  * 应用自己的协议名，把 app-asset://… 翻译成「读 userData 下的某个文件」，
  * 页面加载图片就与加载普通网络图无异。
  *
- * 安全边界：协议只放行 characters/ 开头、不含「..」的相对路径——
+ * 安全边界：协议只放行角色目录下的 PNG 文件名，不认反斜杠或回头路——
  * 界面无论传什么，最终能读到的文件都出不了 userData/characters 这个
  * 院子（路径穿越被挡在门口，与后台 PUT /character/images 的校验同一条线）。
  */
@@ -14,6 +14,7 @@ import { app, net, protocol } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { APP_ASSET_SCHEME } from '../shared/asset-url'
+import { managedImagePathSchema } from '../shared/character-schema'
 
 /**
  * 声明「这是一个标准协议」。必须在 app 就绪（whenReady）之前调用，
@@ -33,20 +34,20 @@ export function registerAppAssetSchemePrivileges(): void {
  * 标准的 Response（协议处理器要求的返回形状），大文件自动走流式。
  */
 export function registerAppAssetProtocol(): void {
-  protocol.handle(APP_ASSET_SCHEME, (request) => {
-    const url = new URL(request.url)
+  protocol.handle(APP_ASSET_SCHEME, async (request) => {
+    try {
+      const url = new URL(request.url)
     // 只认 app-asset://app/… 这一种写法；主机名乱写一律拒
-    if (url.hostname !== 'app') {
-      return new Response(null, { status: 403 })
-    }
+      if (url.hostname !== 'app') return new Response(null, { status: 403 })
     // pathname 形如 /characters/char-x/desktop.png；中文或空格会被编码，
     // 先解码回原样再拼路径
-    const relative = decodeURIComponent(url.pathname).replace(/^\//, '')
-    if (!relative.startsWith('characters/') || relative.includes('..')) {
-      return new Response(null, { status: 403 })
+      const relative = decodeURIComponent(url.pathname).replace(/^\//, '')
+      if (!managedImagePathSchema.safeParse(relative).success) return new Response(null, { status: 403 })
+      const absolute = join(app.getPath('userData'), relative)
+      return await net.fetch(pathToFileURL(absolute).toString())
+    } catch {
+      // 坏编码或文件不存在时只返回失败状态，不能让协议处理器抛出路径原文。
+      return new Response(null, { status: 404 })
     }
-    const absolute = join(app.getPath('userData'), relative)
-    // net.fetch 失败（文件不存在等）自己会返回 4xx/5xx 的 Response，不炸进程
-    return net.fetch(pathToFileURL(absolute).toString())
   })
 }

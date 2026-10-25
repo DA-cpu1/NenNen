@@ -64,6 +64,7 @@ export const managedImagePathSchema = z
   .string()
   .refine((value) => value.startsWith('characters/'), { message: '只接受 characters/ 开头的相对路径' })
   .refine((value) => !value.includes('..'), { message: '路径不许包含 ..' })
+  .refine((value) => /^characters\/[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+\.png$/.test(value), { message: '只接受角色目录中的 PNG 文件名' })
 
 /** 更新图片的请求体（PUT /character/images）：null=清除，缺省=不动 */
 export const updateCharacterImagesSchema = z.strictObject({
