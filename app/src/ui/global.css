@@ -1,0 +1,50 @@
+/**
+ * 全局样式与颜色变量（两个窗口页面共用）。
+ * 变量定义在 :root（文档根元素）上，组件样式里用 var(--名字) 取用——
+ * 颜色只在这一处定义，将来调整主题色不用满文件搜替换。
+ * 取值按界面设计稿（output/design/full-ui-v1）的暖白 / 淡紫 / 深靛蓝。
+ */
+:root {
+  /* 暖白底色（页面背景） */
+  --bg: #faf9f6;
+  /* 纯白面板（导航栏、卡片面） */
+  --panel: #ffffff;
+  /* 深靛蓝：主文字 */
+  --ink: #2f2b4a;
+  /* 灰蓝：次级文字 */
+  --muted: #6d6a87;
+  /* 淡紫：主题强调色（按钮、选中态、托盘图标同色系） */
+  --accent: #a78fe0;
+  /* 更淡的紫：选中填充 */
+  --accent-soft: #ece7f9;
+  /* 最淡的紫：装饰（圆环等）与悬停 */
+  --accent-soft-weak: #f4f1fc;
+  /* 边框与禁用底 */
+  --border: #e3e0ee;
+  /* 危险/错误文字 */
+  --danger: #b3564d;
+}
+
+/* 基础重置：去掉浏览器给 body 的默认边距，字体用系统 UI 栈 */
+body {
+  margin: 0;
+  font-family:
+    'Segoe UI',
+    'Microsoft YaHei',
+    system-ui,
+    sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+/* 文本框与文本域的通用手感：聚焦时淡紫描边 */
+input,
+textarea {
+  font-family: inherit;
+}
+
+input:focus,
+textarea:focus {
+  outline: 2px solid var(--accent-soft);
+  border-color: var(--accent);
+}

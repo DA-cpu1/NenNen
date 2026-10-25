@@ -4,9 +4,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- 阻止界面内导航到外部地址（03 §7 限制导航） -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
-    <title>二次元女友</title>
+    <!-- 阻止界面内导航到外部地址（03 §7 限制导航）。img-src 额外放行
+         app-asset:（应用自己的本地图片协议，T05）——没有它，default-src
+         'self' 会把角色立绘当跨域资源拦下 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' app-asset: data:; style-src 'self' 'unsafe-inline'"
+    />
+    <title>桌面陪伴</title>
   </head>
   <body>
     <div id="root"></div>

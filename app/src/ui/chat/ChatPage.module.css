@@ -1,0 +1,142 @@
+/**
+ * 聊天页布局：左 40% 立绘 / 右 60% 对话（设计稿 full-ui-v1 01）。
+ * T05 阶段对话区是空状态；样式名先按最终结构起，T06 接消息流时不用翻修。
+ */
+
+/* 页面两栏铺满 */
+.page {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+}
+
+/* ── 左：立绘区 ── */
+.art {
+  width: 40%;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 24px 12px 18px;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* 设计稿的「淡紫圆环」背景装饰：一个大空心圆藏在立绘后面 */
+.ring {
+  position: absolute;
+  width: 78%;
+  aspect-ratio: 1; /* 圆不随窗口拉成椭圆 */
+  border-radius: 50%;
+  border: 14px solid var(--accent-soft-weak);
+  bottom: -8%;
+  pointer-events: none; /* 装饰不吃点击 */
+}
+
+/* 立绘：完整身高贴底显示（contain 保持比例，不裁头不裁脚） */
+.portrait {
+  position: relative;
+  max-height: calc(100% - 40px);
+  max-width: 100%;
+  object-fit: contain;
+  user-select: none;
+}
+
+/* 没设立绘时的占位块：低调说明，不画假人物 */
+.portraitPlaceholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  width: 80%;
+  margin-bottom: 24px;
+}
+
+.artName {
+  margin-top: 10px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+/* ── 右：对话区 ── */
+.chat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.header {
+  padding: 16px 20px;
+  font-size: 17px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 空会话区：两行说明居中 */
+.messages {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.ready {
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.hint {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* 底部输入行：T05 禁用（disabled 样式由浏览器打灰，这里再压一层淡） */
+.composer {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.input {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.input:disabled {
+  background: var(--panel);
+}
+
+.send {
+  padding: 8px 18px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.send:disabled {
+  background: var(--border);
+  color: var(--muted);
+  cursor: default;
+}

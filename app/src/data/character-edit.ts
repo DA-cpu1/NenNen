@@ -19,6 +19,15 @@ import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { characters, characterVersions } from './tables'
 import { getFirstCharacter } from './character-init'
 import type { DialogueExample } from '../shared/character-schema'
+import type {
+  ActiveVersionContent,
+  CharacterOverview,
+  CharacterVersionSummary,
+} from '../shared/data-types'
+
+// 概览形状的定义已挪到 shared/data-types.ts（界面也要用同一份）；
+// 这里 re-export 一次，服务层等既有引用不用改路径
+export type { ActiveVersionContent, CharacterOverview, CharacterVersionSummary }
 
 /** 一次「保存人设版本」的输入。人设正文是拼好的纯文本
  *  （分区 ↔ 文本的互转在上游完成，见 shared/persona-format.ts），
@@ -47,40 +56,6 @@ export interface SaveCharacterVersionResult {
   versionNo: number
   /** true=本次新建了版本；false=同编号重复到达，复用已有版本 */
   created: boolean
-}
-
-/** 一条人设版本在列表里的样子（界面版本列表用；不含人设正文，省流量） */
-export interface CharacterVersionSummary {
-  versionNo: number
-  /** 是否当前生效 */
-  isActive: boolean
-  /** 创建时间（UTC 毫秒数字） */
-  createdAt: number
-}
-
-/** 当前生效版本的完整内容（界面打开编辑页时填表单用） */
-export interface ActiveVersionContent {
-  versionNo: number
-  personaText: string
-  initialRelationship: string
-  /** null = 未设定称呼 */
-  userNickname: string | null
-  dialogueExamples: DialogueExample[]
-}
-
-/** 角色概览：GET /character 一口气要发的全部内容 */
-export interface CharacterOverview {
-  characterId: string
-  name: string
-  /** 桌面形象图片相对路径；null = 未设置（显示占位图） */
-  desktopImagePath: string | null
-  /** 聊天立绘相对路径；null = 未设置 */
-  portraitImagePath: string | null
-  /** 当前生效版本（角色初始化保证存在；万一被外力删掉则此处为 null，
-   *  界面按空表单处理，保存时自然会建出第 2 版） */
-  activeVersion: ActiveVersionContent | null
-  /** 全部版本，新版本在前 */
-  versions: CharacterVersionSummary[]
 }
 
 /**

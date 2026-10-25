@@ -1,0 +1,20 @@
+/* 设置页占位样式（T05⑨ 换成完整表单布局） */
+.placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.note {
+  font-size: 13px;
+  color: var(--muted);
+}

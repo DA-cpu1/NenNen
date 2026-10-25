@@ -1,25 +1,68 @@
-/* 根组件样式（CSS Modules；规格要求不引入其他样式方案） */
+/**
+ * 应用壳的样式：暖白底、左侧窄导航、右侧页面区。
+ * 颜色变量定义在 index.html 的 :root（全窗口共用一套），模块里只写布局。
+ * CSS Modules 是「每个组件一份 CSS 文件、类名自动加哈希后缀」的方案——
+ * 不同文件里都叫 .shell 的类不会互相覆盖（03 §2 界面约定）。
+ */
 
-/* 用 fixed 全屏铺底，避开浏览器默认 body 边距 */
+/* 整窗两栏：导航 88px + 页面占满其余 */
 .shell {
-  position: fixed;
-  inset: 0;
+  display: flex;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+/* 左侧窄导航：竖排两个入口，图标在上文字在下 */
+.rail {
+  width: 88px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 10px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+}
+
+/* 导航按钮：无按钮默认样式的文字块，自己画选中态 */
+.railItem,
+.railItemActive {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  background: #fafafa;
-  color: #333;
-  font-family: 'Microsoft YaHei', system-ui, sans-serif;
+  gap: 6px;
+  padding: 10px 4px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
 }
 
-.title {
-  margin: 0 0 8px;
-  font-size: 22px;
+.railItem:hover {
+  background: var(--accent-soft-weak);
 }
 
-.note {
-  margin: 0;
-  font-size: 13px;
-  color: #888;
+/* 选中项：淡紫填充 + 深靛蓝文字（设计稿的 lavender selection fill） */
+.railItemActive {
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* 图标尺寸：随文字颜色走（fill 用 currentColor 在 SVG 里继承） */
+.railItem svg,
+.railItemActive svg {
+  width: 22px;
+  height: 22px;
+  fill: currentColor;
+}
+
+/* 右侧页面区：让当前页组件自己铺满 */
+.body {
+  flex: 1;
+  min-width: 0; /* 允许子内容收缩换行，不把导航挤歪 */
+  display: flex;
 }
