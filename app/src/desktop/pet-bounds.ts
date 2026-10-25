@@ -86,3 +86,19 @@ export function defaultPetBounds(
     height: naturalHeight,
   }
 }
+
+/**
+ * 聊天窗从已拔掉的副屏找回，或缩小到当前屏幕可容纳的尺寸。
+ * @param saved 上次保存的普通窗口矩形
+ * @param areas 当前全部工作区
+ * @param primary 无任何重叠时使用的主屏工作区
+ * @returns 可见的窗口矩形；不含最大化标志
+ */
+export function fitChatBounds(saved: PetWindowState, areas: WorkArea[], primary: WorkArea): PetWindowState {
+  const clamped = clampPetBounds(saved, areas)
+  const area = clamped ? areas.find((item) => clamped.x >= item.x && clamped.x < item.x + item.width && clamped.y >= item.y && clamped.y < item.y + item.height) ?? primary : primary
+  const width = Math.min(area.width, Math.max(720, saved.width))
+  const height = Math.min(area.height, Math.max(480, saved.height))
+  if (!clamped) return defaultPetBounds(width, height, area)
+  return clampPetBounds({ ...clamped, width, height }, [area]) ?? defaultPetBounds(width, height, area)
+}

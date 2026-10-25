@@ -4,7 +4,7 @@
  * 半个身子跑出屏幕、保存的位置在被拔掉的显示器上、窗口放大到比屏还宽……
  */
 import { describe, expect, it } from 'vitest'
-import { clampPetBounds, defaultPetBounds } from '../src/desktop/pet-bounds'
+import { clampPetBounds, defaultPetBounds, fitChatBounds } from '../src/desktop/pet-bounds'
 import type { PetWindowState } from '../src/shared/window-state'
 
 /** 造一个保存值：默认 100,100 处的 200×260，测试只改关心的字段 */
@@ -18,6 +18,20 @@ const saved = (over: Partial<PetWindowState> = {}): PetWindowState => ({
 
 /** 单屏 1920×1080 去掉任务栏后的典型工作区 */
 const DESK = { x: 0, y: 0, width: 1920, height: 1040 }
+
+describe('聊天窗从旧显示器找回', () => {
+  it('副屏已拔时回主屏，并保留合理普通尺寸', () => {
+    expect(fitChatBounds({ x: 4000, y: 100, width: 980, height: 660 }, [DESK], DESK)).toEqual({ x: 470, y: 190, width: 980, height: 660 })
+  })
+  it('保存尺寸大于屏幕时缩到当前工作区内', () => {
+    expect(fitChatBounds({ x: 100, y: 100, width: 3000, height: 2000 }, [DESK], DESK)).toEqual({ x: 0, y: 0, width: 1920, height: 1040 })
+  })
+  it('仍存在的副屏上保留原位置，不误搬回主屏', () => {
+    const second = { x: 1920, y: 0, width: 1920, height: 1040 }
+    const state = { x: 2200, y: 100, width: 980, height: 660 }
+    expect(fitChatBounds(state, [DESK, second], DESK)).toEqual(state)
+  })
+})
 
 describe('clampPetBounds 放回可见区', () => {
   it('位置完全在工作区内：原样返回，不做任何移动', () => {

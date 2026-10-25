@@ -14,7 +14,7 @@ import styles from './PetWindow.module.css'
 // 开发时指向开发服务器上的文件，打包后指向输出目录里的文件
 import petSampleUrl from './assets/pet-sample.svg'
 
-/** 桌宠组件：一张占位图铺满整个窗口；可拖动、Ctrl+滚轮缩放、右键弹菜单 */
+/** 桌宠组件：显示所选图片；轻点开聊天、拖动、Ctrl+滚轮缩放、右键弹菜单。 */
 export default function PetWindow() {
   const [imageUrl, setImageUrl] = useState(petSampleUrl)
   const [name, setName] = useState('占位角色')
@@ -69,6 +69,15 @@ export default function PetWindow() {
         className={styles.pet}
         src={imageError ? petSampleUrl : imageUrl}
         alt={name}
+        role="button"
+        tabIndex={0}
+        aria-label={`打开${name}的聊天`}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            window.petChat?.open()
+          }
+        }}
         title={imageError ? '图片无法读取，暂用占位图；可在角色设置重新选择。' : name}
         onError={() => setImageError(true)}
         draggable={false}
@@ -82,7 +91,8 @@ export default function PetWindow() {
           event.currentTarget.setPointerCapture(event.pointerId)
           window.petDrag?.start()
         }}
-        onPointerUp={() => window.petDrag?.stop()}
+        onPointerUp={(event) => { if (event.button === 0) window.petDrag?.release() }}
+        onPointerCancel={() => window.petDrag?.stop()}
         // 捕获被系统收回（比如窗口失焦）时的兜底；和上面重复停一次无害
         onLostPointerCapture={() => window.petDrag?.stop()}
         onContextMenu={(event) => {

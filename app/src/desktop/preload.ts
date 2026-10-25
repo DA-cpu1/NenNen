@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('petDrag', {
   start: () => ipcRenderer.send('pet:drag-start'),
   /** 松开或取消时调用；多调几次无害 */
   stop: () => ipcRenderer.send('pet:drag-end'),
+  /** 左键正常松开：主进程按屏幕移动距离区分点击和拖动。 */
+  release: () => ipcRenderer.send('pet:release'),
 })
 
 /** 缩放控制（页面里用 window.petZoom 访问） */
@@ -27,6 +29,11 @@ contextBridge.exposeInMainWorld('petZoom', {
 contextBridge.exposeInMainWorld('petMenu', {
   /** 请求在光标处弹出桌宠菜单 */
   open: () => ipcRenderer.send('pet:menu'),
+})
+
+/** 键盘也能打开聊天；只放行这个固定动作，不接受网址或任意窗口参数。 */
+contextBridge.exposeInMainWorld('petChat', {
+  open: () => ipcRenderer.send('pet:open-chat'),
 })
 
 /**

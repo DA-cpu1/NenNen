@@ -19,7 +19,7 @@ import {
   petWindowStateSchema,
   type ChatWindowState,
 } from '../shared/window-state'
-import { clampPetBounds, defaultPetBounds, petImageSize, type WorkArea } from './pet-bounds'
+import { clampPetBounds, defaultPetBounds, fitChatBounds, petImageSize, type WorkArea } from './pet-bounds'
 import { managedImagePathSchema } from '../shared/character-schema'
 
 /** 开发期的密钥文件位置（app/local.key，git 已挡住不进仓库）。
@@ -44,6 +44,39 @@ let chatWindow: BrowserWindow | undefined
  *  聊天窗的 close 拦截靠它区分「收起」和「退出前的关闭」 */
 let quitting = false
 
+/** 页面画好与位置读完是两件事；两件都完成后才允许初次显示，避免先中后跳。 */
+let startupFinished = false
+let startupTimer: ReturnType<typeof setTimeout> | undefined
+const readyWindows = new WeakSet<BrowserWindow>()
+const shownWindows = new WeakSet<BrowserWindow>()
+let pendingChatOpen = false
+let pendingChatPage: 'chat' | 'settings' | undefined
+let pendingMaximized = false
+
+/** 页面和位置都就绪时显示；桌宠不取得焦点，用户明确打开聊天才聚焦。 */
+function showInitialWindows(): void {
+  if (!startupFinished) return
+  const chat = chatWindow
+  if (chat && readyWindows.has(chat) && !shownWindows.has(chat)) {
+    shownWindows.add(chat)
+    if (pendingMaximized) chat.maximize()
+    else chat.showInactive()
+    if (pendingChatOpen) showChatWindow(pendingChatPage)
+  }
+  const pet = petWindow
+  if (pet && readyWindows.has(pet) && !shownWindows.has(pet)) {
+    shownWindows.add(pet)
+    pet.showInactive()
+  }
+}
+
+/** 后台失败或等待超过八秒也放行默认窗口，不能让用户一直面对空桌面。 */
+function finishStartup(): void {
+  startupFinished = true
+  clearTimeout(startupTimer)
+  showInitialWindows()
+}
+
 /** 创建聊天主窗口；开发时连本地开发服务器，正式版加载打包好的文件 */
 function createChatWindow(): void {
   const win = new BrowserWindow({
@@ -53,6 +86,7 @@ function createChatWindow(): void {
     minHeight: 480,
     title: '桌面陪伴',
     autoHideMenuBar: true,
+    show: false,
     webPreferences: {
       // 三道安全开关：把界面当纯网页对待，拿不到 Node 能力、碰不了文件和数据库（03 §7）
       sandbox: true,
@@ -63,6 +97,7 @@ function createChatWindow(): void {
   })
 
   chatWindow = win
+  win.once('ready-to-show', () => { readyWindows.add(win); showInitialWindows() })
   // 点窗口的 × 不退出程序：只是收起（01 R02「收起继续常驻」）。
   // 不拦的话窗口一关就触发 window-all-closed，托盘还在但主窗口
   // 再也打不开——除非再双击图标，可那也只是聚焦一个已销毁的窗口
@@ -93,6 +128,12 @@ function createChatWindow(): void {
  */
 function showChatWindow(page?: 'chat' | 'settings'): void {
   const win = chatWindow
+  if (!startupFinished || (win && !readyWindows.has(win))) {
+    pendingChatOpen = true
+    pendingChatPage = page
+    return
+  }
+  pendingChatOpen = false
   if (win && !win.isDestroyed()) {
     if (win.isMinimized()) win.restore()
     win.show()
@@ -100,20 +141,20 @@ function showChatWindow(page?: 'chat' | 'settings'): void {
     // 菜单点的是「角色设置」时告诉界面直接切到那一页（React 侧监听）
     if (page) win.webContents.send('nav:goto', page)
   }
-  petWindow?.show()
+  if (petWindow && readyWindows.has(petWindow)) petWindow.showInactive()
 }
 
 /**
  * 保存聊天窗口位置（经后台服务入库，桌宠位置同款三条「没有就不存」）。
- * maximized 时 getBounds 拿到的是普通态的矩形——正好：恢复时先按它
- * 落位再最大化，两次启动看到的效果一致
+ * 最大化时也要保存普通态矩形；getNormalBounds 专门返回最大化前的尺寸，
+ * 否则下次取消最大化可能仍是一块铺满屏幕的大窗。
  */
 async function saveChatWindowState(): Promise<void> {
   const win = chatWindow
   const handle = backend
   if (!win || win.isDestroyed() || !handle) return
   const check = chatWindowStateSchema.safeParse({
-    ...win.getBounds(),
+    ...win.getNormalBounds(),
     maximized: win.isMaximized(),
   })
   if (!check.success) return
@@ -151,8 +192,12 @@ async function restoreChatWindowState(handle: BackendHandle): Promise<void> {
     if (!body.ok || body.state === null) return
     const check = chatWindowStateSchema.safeParse(body.state)
     if (!check.success) return
-    win.setBounds(check.data)
-    if (check.data.maximized) win.maximize()
+    if (startupFinished) return
+    const areas = screen.getAllDisplays().map((display) => display.workArea)
+    const restored = fitChatBounds(check.data, areas, screen.getPrimaryDisplay().workArea)
+    win.setBounds(restored)
+    // maximize 会把隐藏窗口亮出来，必须留到位置和页面都就绪之后执行。
+    pendingMaximized = check.data.maximized
   } catch {
     // 后台未就绪等瞬时原因：保持默认位置，本次不恢复
   }
@@ -164,6 +209,8 @@ let petWindow: BrowserWindow | undefined
 /** 拖动状态：定时器和「抓手点」偏移。二者存在 = 正在拖动 */
 let petDragTimer: NodeJS.Timeout | undefined
 let petDragOffset: { x: number; y: number } | undefined
+let petPointerStart: { x: number; y: number } | undefined
+let petPointerMoved = false
 
 /**
  * 手动拖动·开始：记下光标在窗口里的「抓手点」，然后开一个约每帧一次的
@@ -179,6 +226,8 @@ function startPetDrag(): void {
   if (!pet || pet.isDestroyed()) return
   const bounds = pet.getBounds()
   const cursor = screen.getCursorScreenPoint()
+  petPointerStart = cursor
+  petPointerMoved = false
   petDragOffset = { x: cursor.x - bounds.x, y: cursor.y - bounds.y }
   petDragTimer = setInterval(() => {
     const win = petWindow
@@ -187,6 +236,7 @@ function startPetDrag(): void {
       return
     }
     const point = screen.getCursorScreenPoint()
+    if (petPointerStart && Math.hypot(point.x - petPointerStart.x, point.y - petPointerStart.y) > 5) petPointerMoved = true
     // 抓手点相对光标保持不动：拖动时角色不会「跳」到光标中心
     win.setPosition(
       Math.round(point.x - (petDragOffset?.x ?? 0)),
@@ -202,8 +252,19 @@ function stopPetDrag(): void {
     petDragTimer = undefined
   }
   petDragOffset = undefined
+  petPointerStart = undefined
+  petPointerMoved = false
   // 拖完顺手保存位置：重启后角色停在用户放的地方（T02 位置恢复）
   void savePetBounds()
+}
+
+/** 只有真正松开左键才判定点击；取消、失焦与退出的清理不能误开聊天。 */
+function releasePetPointer(): void {
+  const point = screen.getCursorScreenPoint()
+  const clicked = petPointerStart !== undefined && !petPointerMoved &&
+    Math.hypot(point.x - petPointerStart.x, point.y - petPointerStart.y) <= 5
+  stopPetDrag()
+  if (clicked) showChatWindow('chat')
 }
 
 /** 桌宠当前缩放比例：1 = 默认大小。限幅防止缩到看不见或盖满整屏 */
@@ -291,6 +352,7 @@ function keepPetVisible(): void {
   if (clamped) {
     pet.setBounds(clamped)
   } else {
+    petScale = 1
     pet.setBounds(
       defaultPetBounds(
         petBaseSize.width,
@@ -332,8 +394,7 @@ async function savePetBounds(): Promise<void> {
  * 四道防线，任何一道不过都停在默认位置，绝不拿脏数据设窗口：
  * ① 请求失败；② 没存过（state 为 null）；③ 存的值过不了格式关卡；
  * ④ 位置在当前桌面布局里完全不可见（显示器被拔，clamp 返回 null）。
- * 已知取舍：窗口先按默认位显示、恢复数据到位后跳过去——后台就绪要几秒，
- * 与其让角色迟到，不如让它先出现再挪窝（T05 再优化启动顺序）。
+ * 初次显示前先落位；若等待超时已显示默认窗口，就不再用迟到结果挪动它。
  */
 async function restorePetBounds(handle: BackendHandle): Promise<void> {
   const pet = petWindow
@@ -353,7 +414,7 @@ async function restorePetBounds(handle: BackendHandle): Promise<void> {
     // 工作区矩形（Rectangle）与 WorkArea 字段相同，结构上直接兼容
     const areas: WorkArea[] = screen.getAllDisplays().map((display) => display.workArea)
     const clamped = clampPetBounds(check.data, areas)
-    if (!clamped) return
+    if (!clamped || startupFinished) return
     pet.setBounds(clamped)
     // 矩形恢复后同步比例，否则第一次滚轮会从默认 1 倍突然跳起。
     petScale = Math.min(PET_SCALE_MAX, Math.max(PET_SCALE_MIN, clamped.height / petBaseSize.height))
@@ -391,7 +452,11 @@ async function restorePetImageSize(handle: BackendHandle): Promise<void> {
     if (!image.isEmpty()) {
       const size = image.getSize()
       petBaseSize = petImageSize(size.width, size.height)
-      resizePetWindow(petScale)
+      if (!startupFinished) resizePetWindow(petScale)
+      else if (petWindow) {
+        // 超时后用户可能已经拖过窗口；只记新比例，不让迟到结果重新挪动它。
+        petScale = Math.min(PET_SCALE_MAX, Math.max(PET_SCALE_MIN, petWindow.getBounds().height / petBaseSize.height))
+      }
     }
   } catch { /* 保持占位尺寸；界面会给出图片无法读取的说明。 */ }
 }
@@ -442,7 +507,8 @@ function createPetWindow(): void {
     stopPetDrag()
   })
   pet.once('ready-to-show', () => {
-    pet.show()
+    readyWindows.add(pet)
+    showInitialWindows()
   })
   // electron-vite 的约定：开发模式连本地开发服务器，正式版加载打包好的文件
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -533,9 +599,9 @@ if (!app.requestSingleInstanceLock()) {
   })
 
 /**
- * 雇后台进程并当场自测，共三步：
+ * 雇后台进程并当场自测，共四步：
  * ① 恢复两个窗口的位置（T02 桌宠、T05 聊天窗）——放在自测之前：
- *    后台一报到就恢复，用户看到的「先中后跳」窗口期最短；
+ *    后台一报到就恢复，页面和位置都就绪后才允许初次显示；
  * ② 拿暗号打 /health 应接通（200），不拿暗号应被拒（401）；
  * ③ 打 /db/ping——先读共享记忆版本号、+1 写回、再读一次，两行数字进 stdout。
  *    打包版没有外部检查口，重启后「读回上一轮写入的值」只能从这里观察
@@ -550,11 +616,12 @@ async function startBackendWithSelfCheck(): Promise<void> {
   backend = handle
 
   // 两窗口位置恢复：只依赖后台服务本身，不依赖模型密钥。第一件事就做
-  // ——自测再快也要几个来回，晚恢复一拍用户就多看一眼「先中后跳」
+  // ——先落位再显示，后面的认证与模型自测不阻挡窗口出现。
   await restorePetImageSize(handle)
   await restorePetBounds(handle)
   await restoreChatWindowState(handle)
   notifyCharacterChanged()
+  finishStartup()
 
   const authHeader = { 'x-session-token': handle.token }
   const withToken = await fetch(`http://127.0.0.1:${handle.port}/health`, {
@@ -626,6 +693,8 @@ async function startBackendWithSelfCheck(): Promise<void> {
   // 桌宠界面发来的拖动信号（preload 放行的固定操作，只带信号不带数据）
   ipcMain.on('pet:drag-start', () => startPetDrag())
   ipcMain.on('pet:drag-end', () => stopPetDrag())
+  ipcMain.on('pet:release', () => releasePetPointer())
+  ipcMain.on('pet:open-chat', () => showChatWindow('chat'))
 
   // 缩放：方向只认 ±1，其余当垃圾丢弃——这是内部信号通道，不是给随意数值的门
   ipcMain.on('pet:zoom', (_event, direction: unknown) => {
@@ -635,8 +704,12 @@ async function startBackendWithSelfCheck(): Promise<void> {
   ipcMain.on('pet:menu', () => showPetMenu())
 
   app.whenReady().then(() => {
+    startupTimer = setTimeout(() => {
+      console.error('[窗口] E_STARTUP_STATE_TIMEOUT')
+      finishStartup()
+    }, 8_000)
     createChatWindow()
-    // 桌宠窗口紧随其后；它不依赖后台服务，后台起不来也不影响角色显示
+    // 两窗先在隐藏状态画好，位置读完再显示；失败/超时也会放行默认窗口。
     createPetWindow()
     // 托盘立起来，用户随时能找回窗口或退出（01 R02）
     createTray()
@@ -660,9 +733,9 @@ async function startBackendWithSelfCheck(): Promise<void> {
     screen.on('display-metrics-changed', () => keepPetVisible())
     screen.on('display-removed', () => keepPetVisible())
     // 后台起不来不能连累窗口白屏：先记下来。重试和提示用户是以后的事
-    startBackendWithSelfCheck().catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : 'unknown'
-      console.error(`[后台] 启动失败：${message}`)
+    startBackendWithSelfCheck().catch(() => {
+      console.error('[后台] E_STARTUP_FAILED')
+      finishStartup()
     })
   })
 }

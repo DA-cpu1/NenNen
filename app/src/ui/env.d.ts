@@ -12,6 +12,7 @@ interface Window {
   petDrag?: {
     start: () => void
     stop: () => void
+    release: () => void
   }
   /** 缩放一档：1 放大，-1 缩小（见 desktop/preload.ts） */
   petZoom?: {
@@ -21,6 +22,8 @@ interface Window {
   petMenu?: {
     open: () => void
   }
+  /** 桌宠获得键盘焦点后，Enter/空格打开聊天。 */
+  petChat?: { open: () => void }
   /** 应用数据代办通道（desktop/preload.ts 的 appApi；通道实现见
    *  bridge/requests.ts 与 desktop/character-images.ts） */
   appApi?: {
