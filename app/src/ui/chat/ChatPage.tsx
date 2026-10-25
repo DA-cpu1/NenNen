@@ -1,14 +1,15 @@
 /**
- * 聊天页（T05 版）：只有「壳」没有「聊天」——消息收发是 T06 的活。
+ * 聊天页：展示正式历史；消息收发仍由后续独立步骤接入。
  * 左边 40% 是全高立绘区（角色图没设时显示占位说明），右边是
- * 「已就绪」空状态 + 禁用的输入框（设计稿 full-ui-v1 的 01 状态）。
+ * 历史列表 + 暂时禁用的输入框（沿用设计稿 full-ui-v1 的结构）。
  */
 import type { CharacterProps } from '../App'
 import { assetUrl } from '../../shared/asset-url'
 import styles from './ChatPage.module.css'
+import ChatHistory from './ChatHistory'
 
-/** 聊天页组件：展示角色名与立绘；输入区禁用到 T06 接入 */
-export default function ChatPage({ character, loadError }: CharacterProps) {
+/** 聊天页组件：展示角色名、立绘和历史，发送功能后续接入。 */
+export default function ChatPage({ character, loadError, reload }: CharacterProps) {
   // 立绘路径 → app-asset URL；没设图片时为 null，显示占位块
   const portraitUrl = assetUrl(character?.portraitImagePath)
   const displayName = character?.name ?? ''
@@ -26,19 +27,18 @@ export default function ChatPage({ character, loadError }: CharacterProps) {
         <p className={styles.artName}>{displayName || '　'}</p>
       </aside>
 
-      {/* 右：对话区。T05 阶段为空状态 */}
+      {/* 右：正式历史；角色变化时用 key 重建列表，避免短暂显示旧角色的记录。 */}
       <section className={styles.chat}>
         <header className={styles.header}>{displayName || '　'}</header>
-        <div className={styles.messages}>
-          <p className={styles.ready}>聊天界面已就绪</p>
-          <p className={styles.hint}>聊天功能将在 T06 接入</p>
-          {/* 概览都取不到时如实说，不假装一切正常（01 §3 未配置不伪装） */}
-          {loadError && <p className={styles.error}>角色数据读取失败（{loadError}）</p>}
-        </div>
+        {loadError ? <div className={styles.historyError} role="alert">
+          <p>角色资料读取失败（{loadError}）</p>
+          <button type="button" onClick={() => void reload()}>重试读取角色</button>
+        </div> : <ChatHistory key={character?.characterId ?? 'loading'} characterId={character?.characterId}
+          displayName={displayName} />}
         <footer className={styles.composer}>
           <input
             className={styles.input}
-            placeholder="聊天功能将在 T06 接入"
+            placeholder="当前仅可查看聊天记录"
             disabled
             readOnly
           />
