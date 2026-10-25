@@ -204,6 +204,9 @@ describe('数据库自测端点 /db/ping', () => {
         readCharacterOverview: () => { touched = true; return undefined },
         readChatWindowState: () => { touched = true; return undefined },
         writeChatWindowState: () => { touched = true },
+        saveCharacterVersion: () => { touched = true; return { characterId: 'x', versionNo: 1, created: true } },
+        activateCharacterVersion: () => { touched = true; return { characterId: 'x', versionNo: 1 } },
+        updateCharacterImages: () => { touched = true },
       },
     })
     extraServers.push(fake)
@@ -234,6 +237,9 @@ describe('数据库自测端点 /db/ping', () => {
         readCharacterOverview: () => undefined,
         readChatWindowState: () => undefined,
         writeChatWindowState: () => {},
+        saveCharacterVersion: () => ({ characterId: 'char-stub', versionNo: 1, created: true }),
+        activateCharacterVersion: () => ({ characterId: 'char-stub', versionNo: 1 }),
+        updateCharacterImages: () => {},
       },
     })
     extraServers.push(fake)
@@ -254,6 +260,9 @@ describe('数据库自测端点 /db/ping', () => {
         readCharacterOverview: () => undefined,
         readChatWindowState: () => undefined,
         writeChatWindowState: () => {},
+        saveCharacterVersion: () => ({ characterId: 'char-stub', versionNo: 1, created: true }),
+        activateCharacterVersion: () => ({ characterId: 'char-stub', versionNo: 1 }),
+        updateCharacterImages: () => {},
       },
     })
     extraServers.push(fake)
@@ -274,6 +283,9 @@ describe('数据库自测端点 /db/ping', () => {
         readCharacterOverview: () => { throw new Error('内部路径不应泄露') },
         readChatWindowState: () => { throw new Error('内部路径不应泄露') },
         writeChatWindowState: () => { throw new Error('内部路径不应泄露') },
+        saveCharacterVersion: () => { throw new Error('内部路径不应泄露') },
+        activateCharacterVersion: () => { throw new Error('内部路径不应泄露') },
+        updateCharacterImages: () => { throw new Error('内部路径不应泄露') },
       },
     })
     extraServers.push(fake)
@@ -304,6 +316,9 @@ describe('窗口状态端点 /window-state（T02 位置恢复）', () => {
     readCharacterOverview: () => undefined,
     readChatWindowState: () => undefined,
     writeChatWindowState: () => {},
+    saveCharacterVersion: () => ({ characterId: 'char-stub', versionNo: 1, created: true }),
+    activateCharacterVersion: () => ({ characterId: 'char-stub', versionNo: 1 }),
+    updateCharacterImages: () => {},
   })
 
   it('未带令牌返回 401，读写函数不被触碰', async () => {
@@ -433,6 +448,9 @@ describe('正式会话端点 /formal-conversation（T04 应用接口）', () => 
         readCharacterOverview: () => undefined,
         readChatWindowState: () => undefined,
         writeChatWindowState: () => {},
+        saveCharacterVersion: () => ({ characterId: 'char-stub', versionNo: 1, created: true }),
+        activateCharacterVersion: () => ({ characterId: 'char-stub', versionNo: 1 }),
+        updateCharacterImages: () => {},
       },
     })
     extraServers.push(fake)
@@ -460,6 +478,9 @@ describe('正式会话端点 /formal-conversation（T04 应用接口）', () => 
         readCharacterOverview: () => undefined,
         readChatWindowState: () => undefined,
         writeChatWindowState: () => {},
+        saveCharacterVersion: () => ({ characterId: 'char-stub', versionNo: 1, created: true }),
+        activateCharacterVersion: () => ({ characterId: 'char-stub', versionNo: 1 }),
+        updateCharacterImages: () => {},
       },
     })
     extraServers.push(fake)
@@ -479,6 +500,9 @@ describe('正式会话端点 /formal-conversation（T04 应用接口）', () => 
         readCharacterOverview: () => { throw new Error('内部路径不应泄露') },
         readChatWindowState: () => { throw new Error('内部路径不应泄露') },
         writeChatWindowState: () => { throw new Error('内部路径不应泄露') },
+        saveCharacterVersion: () => { throw new Error('内部路径不应泄露') },
+        activateCharacterVersion: () => { throw new Error('内部路径不应泄露') },
+        updateCharacterImages: () => { throw new Error('内部路径不应泄露') },
       },
     })
     extraServers.push(fake)
@@ -563,6 +587,9 @@ describe('角色编辑端点 /character（T05，01 R05）', () => {
         readCharacterOverview: () => { touched = true; return undefined },
         readChatWindowState: () => undefined,
         writeChatWindowState: () => {},
+        saveCharacterVersion: () => { touched = true; return { characterId: 'x', versionNo: 1, created: true } },
+        activateCharacterVersion: () => { touched = true; return { characterId: 'x', versionNo: 1 } },
+        updateCharacterImages: () => { touched = true },
       },
     })
     extraServers.push(fake)
@@ -607,6 +634,9 @@ describe('角色编辑端点 /character（T05，01 R05）', () => {
         readCharacterOverview: () => overview,
         readChatWindowState: () => undefined,
         writeChatWindowState: () => {},
+        saveCharacterVersion: () => ({ characterId: 'char-x', versionNo: 2, created: true }),
+        activateCharacterVersion: () => ({ characterId: 'char-x', versionNo: 2 }),
+        updateCharacterImages: () => {},
       },
     })
     extraServers.push(fake)
@@ -626,6 +656,9 @@ describe('角色编辑端点 /character（T05，01 R05）', () => {
         readCharacterOverview: () => { throw new Error('内部路径不应泄露') },
         readChatWindowState: () => undefined,
         writeChatWindowState: () => {},
+        saveCharacterVersion: () => { throw new Error('内部路径不应泄露') },
+        activateCharacterVersion: () => { throw new Error('内部路径不应泄露') },
+        updateCharacterImages: () => { throw new Error('内部路径不应泄露') },
       },
     })
     extraServers.push(fake)
@@ -657,6 +690,9 @@ describe('聊天窗口状态端点 /chat-window-state（T05 位置保存）', ()
         readCharacterOverview: () => undefined,
         readChatWindowState: () => (saved ?? undefined),
         writeChatWindowState: (value) => { saved = value },
+        saveCharacterVersion: () => ({ characterId: 'x', versionNo: 1, created: true }),
+        activateCharacterVersion: () => ({ characterId: 'x', versionNo: 1 }),
+        updateCharacterImages: () => {},
       },
     })
     extraServers.push(fake)
@@ -686,6 +722,9 @@ describe('聊天窗口状态端点 /chat-window-state（T05 位置保存）', ()
         readCharacterOverview: () => undefined,
         readChatWindowState: () => undefined,
         writeChatWindowState: () => { writes += 1 },
+        saveCharacterVersion: () => ({ characterId: 'x', versionNo: 1, created: true }),
+        activateCharacterVersion: () => ({ characterId: 'x', versionNo: 1 }),
+        updateCharacterImages: () => {},
       },
     })
     extraServers.push(fake)
@@ -713,11 +752,304 @@ describe('聊天窗口状态端点 /chat-window-state（T05 位置保存）', ()
         readCharacterOverview: () => undefined,
         readChatWindowState: () => undefined,
         writeChatWindowState: () => { throw new Error('库写入失败') },
+        saveCharacterVersion: () => ({ characterId: 'x', versionNo: 1, created: true }),
+        activateCharacterVersion: () => ({ characterId: 'x', versionNo: 1 }),
+        updateCharacterImages: () => {},
       },
     })
     extraServers.push(fake)
     const res = await put(fake.port, { x: 0, y: 0, width: 100, height: 100, maximized: true })
     expect(res.status).toBe(502)
     expect(await res.json()).toEqual({ ok: false, code: 'DB_ERROR' })
+  })
+})
+
+describe('保存人设版本端点 POST /character/version（T05，01 R05）', () => {
+  const post = (port: number, body: unknown, token = TOKEN) =>
+    fetch(`http://127.0.0.1:${port}/character/version`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-token': token },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    })
+  /** 完整合法的分区模式请求体（固定输入，07 §3） */
+  const validBody = {
+    requestId: 'req-001',
+    name: '六花',
+    personaSections: { core: '认真维护幻想小世界。', speech: '自然中文。', background: '沿用动画版。' },
+    initialRelationship: '已经确定恋人关系',
+    userNickname: '  阿达  ',
+    dialogueExamples: [{ scene: '分享开心的事', user: '界面弄完了。', character: '结界突破了。' }],
+  }
+
+  it('未带令牌返回 401，写函数不被触碰', async () => {
+    let touched = false
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
+        saveCharacterVersion: () => { touched = true; return { characterId: 'x', versionNo: 1, created: true } },
+        activateCharacterVersion: () => ({ characterId: 'x', versionNo: 1 }),
+        updateCharacterImages: () => {},
+      },
+    })
+    extraServers.push(fake)
+    const res = await post(fake.port, validBody, 'wrong-token')
+    expect(res.status).toBe(401)
+    expect(touched).toBe(false)
+  })
+
+  it('分区模式：服务端拼接 personaText、称呼空白归一为「阿达」后交给 data 层', async () => {
+    let received: unknown
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
+        saveCharacterVersion: (input) => {
+          received = input
+          return { characterId: 'char-x', versionNo: 3, created: true }
+        },
+        activateCharacterVersion: () => ({ characterId: 'x', versionNo: 1 }),
+        updateCharacterImages: () => {},
+      },
+    })
+    extraServers.push(fake)
+    const res = await post(fake.port, validBody)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, versionNo: 3, created: true })
+    // data 层收到的是：拼好标题的 personaText + 归一后的称呼（首尾空白去掉）
+    expect(received).toMatchObject({
+      name: '六花',
+      userNickname: '阿达',
+      initialRelationship: '已经确定恋人关系',
+    })
+    expect((received as { personaText: string }).personaText).toContain('【核心性格】')
+    expect((received as { personaText: string }).personaText).toContain('认真维护幻想小世界。')
+  })
+
+  it('完整文本模式：原文 trim 后保存；同一请求重复到达返回 created:false', async () => {
+    const results = [
+      { characterId: 'char-x', versionNo: 2, created: true },
+      { characterId: 'char-x', versionNo: 2, created: false },
+    ]
+    let calls = 0
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
+        saveCharacterVersion: () => results[calls++],
+        activateCharacterVersion: () => ({ characterId: 'x', versionNo: 1 }),
+        updateCharacterImages: () => {},
+      },
+    })
+    extraServers.push(fake)
+    const body = { ...validBody, personaSections: undefined, personaFullText: '  一段完整人设  ' }
+    const first = await post(fake.port, body)
+    expect(await first.json()).toEqual({ ok: true, versionNo: 2, created: true })
+    const again = await post(fake.port, body)
+    expect(await again.json()).toEqual({ ok: true, versionNo: 2, created: false })
+    expect(calls).toBe(2)
+  })
+
+  it('坏输入一律 400 不写入：人设全空、两种模式都带、名字空白、示例缺句', async () => {
+    let writes = 0
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
+        saveCharacterVersion: () => { writes += 1; return { characterId: 'x', versionNo: 1, created: true } },
+        activateCharacterVersion: () => ({ characterId: 'x', versionNo: 1 }),
+        updateCharacterImages: () => {},
+      },
+    })
+    extraServers.push(fake)
+    const badBodies: unknown[] = [
+      { ...validBody, personaSections: { core: '  ', speech: '', background: ' ' } }, // 分区全空
+      { ...validBody, personaFullText: '两种模式都带' }, // sections 和 fullText 同时在
+      { ...validBody, name: '   ' }, // 名字空白
+      { ...validBody, dialogueExamples: [{ scene: '缺角色句', user: '只有用户句', character: ' ' }] },
+      { ...validBody, initialRelationship: '' },
+      '不是对象',
+    ]
+    for (const bad of badBodies) {
+      const res = await post(fake.port, bad)
+      expect(res.status, `应拒绝：${JSON.stringify(bad).slice(0, 60)}`).toBe(400)
+      expect(await res.json()).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    }
+    expect(writes).toBe(0)
+  })
+})
+
+describe('回退版本端点 POST /character/version/activate（T05）', () => {
+  const post = (port: number, body: unknown, token = TOKEN) =>
+    fetch(`http://127.0.0.1:${port}/character/version/activate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-token': token },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    })
+
+  it('合法版本号交给 data 层并回显；收到 1 号', async () => {
+    let received = 0
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
+        saveCharacterVersion: () => ({ characterId: 'x', versionNo: 1, created: true }),
+        activateCharacterVersion: (versionNo) => {
+          received = versionNo
+          return { characterId: 'char-x', versionNo }
+        },
+        updateCharacterImages: () => {},
+      },
+    })
+    extraServers.push(fake)
+    const res = await post(fake.port, { versionNo: 1 })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, versionNo: 1 })
+    expect(received).toBe(1)
+  })
+
+  it('版本不存在返回 404 VERSION_NOT_FOUND；库错误返回 502', async () => {
+    const notFound = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
+        saveCharacterVersion: () => ({ characterId: 'x', versionNo: 1, created: true }),
+        activateCharacterVersion: () => { throw new Error('E_VERSION_NOT_FOUND') },
+        updateCharacterImages: () => {},
+      },
+    })
+    extraServers.push(notFound)
+    const res404 = await post(notFound.port, { versionNo: 99 })
+    expect(res404.status).toBe(404)
+    expect(await res404.json()).toEqual({ ok: false, code: 'VERSION_NOT_FOUND' })
+
+    const broken = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
+        saveCharacterVersion: () => ({ characterId: 'x', versionNo: 1, created: true }),
+        activateCharacterVersion: () => { throw new Error('内部路径不应泄露') },
+        updateCharacterImages: () => {},
+      },
+    })
+    extraServers.push(broken)
+    const res502 = await post(broken.port, { versionNo: 1 })
+    expect(res502.status).toBe(502)
+    expect(await res502.json()).toEqual({ ok: false, code: 'DB_ERROR' })
+  })
+
+  it('非正整数版本号 400', async () => {
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
+        saveCharacterVersion: () => ({ characterId: 'x', versionNo: 1, created: true }),
+        activateCharacterVersion: () => ({ characterId: 'x', versionNo: 1 }),
+        updateCharacterImages: () => {},
+      },
+    })
+    extraServers.push(fake)
+    for (const bad of [{ versionNo: 0 }, { versionNo: -1 }, { versionNo: 1.5 }, {}]) {
+      const res = await post(fake.port, bad)
+      expect(res.status).toBe(400)
+    }
+  })
+})
+
+describe('图片路径端点 PUT /character/images（T05 图片设置）', () => {
+  const put = (port: number, body: unknown, token = TOKEN) =>
+    fetch(`http://127.0.0.1:${port}/character/images`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-session-token': token },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    })
+
+  it('合法相对路径与 null（清除）交给 data 层；越界路径 400 不写入', async () => {
+    let received: unknown
+    let writes = 0
+    const fake = await startBackendServer(TOKEN, {
+      db: {
+        readEpoch: () => 0,
+        bumpEpoch: () => 1,
+        readWindowState: () => undefined,
+        writeWindowState: () => {},
+        readFormalConversation: () => null,
+        readCharacterOverview: () => undefined,
+        readChatWindowState: () => undefined,
+        writeChatWindowState: () => {},
+        saveCharacterVersion: () => ({ characterId: 'x', versionNo: 1, created: true }),
+        activateCharacterVersion: () => ({ characterId: 'x', versionNo: 1 }),
+        updateCharacterImages: (update) => { received = update; writes += 1 },
+      },
+    })
+    extraServers.push(fake)
+
+    const ok = await put(fake.port, { desktopImagePath: 'characters/char-x/desktop.png' })
+    expect(ok.status).toBe(200)
+    expect(received).toEqual({ desktopImagePath: 'characters/char-x/desktop.png' })
+
+    const clear = await put(fake.port, { portraitImagePath: null })
+    expect(clear.status).toBe(200)
+
+    // 越界路径：绝对路径、.. 回头路、别的目录开头——都是想跳出
+    // characters/ 这个院子的路径穿越尝试，一律拦下
+    for (const bad of [
+      { desktopImagePath: 'C:\\Users\\evil\\x.png' },
+      { desktopImagePath: 'characters/../../evil.png' },
+      { desktopImagePath: 'assets/x.png' },
+      { desktopImagePath: 42 },
+    ]) {
+      const res = await put(fake.port, bad)
+      expect(res.status, `应拒绝：${JSON.stringify(bad)}`).toBe(400)
+    }
+    expect(writes).toBe(2)
   })
 })

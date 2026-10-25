@@ -11,7 +11,12 @@ import { openCompanionDatabase, type CompanionDb } from '../data/db'
 import { runMigrations } from '../data/migrations'
 import { bumpGlobalMemoryEpoch, readGlobalMemoryEpoch } from '../data/epochs'
 import { getFirstCharacter, initializeFirstCharacter } from '../data/character-init'
-import { getCharacterOverview } from '../data/character-edit'
+import {
+  activateCharacterVersion as activateCharacterVersionInDb,
+  getCharacterOverview,
+  saveCharacterVersion as saveCharacterVersionInDb,
+  updateCharacterImages as updateCharacterImagesInDb,
+} from '../data/character-edit'
 import { getFormalConversation } from '../data/conversations'
 import { readSetting, writeSetting } from '../data/settings'
 import { CHAT_WINDOW_KEY, PET_WINDOW_KEY, type ChatWindowState, type PetWindowState } from '../shared/window-state'
@@ -162,6 +167,24 @@ function main(): void {
         writeChatWindowState: (value: ChatWindowState) => {
           if (!database) throw new Error('E_DB_NOT_OPEN')
           writeSetting(database.db, CHAT_WINDOW_KEY, value)
+        },
+        // 保存人设版本（T05）：总机已把请求体拼好 personaText 并过完
+        // 格式关卡，这里只加「库开着」守卫再转交 data 层（同请求编号
+        // 防重、旧版本下岗/新版本上岗的事务都在 data 层里）
+        saveCharacterVersion: (input) => {
+          if (!database) throw new Error('E_DB_NOT_OPEN')
+          return saveCharacterVersionInDb(database.db, input)
+        },
+        // 回退版本：data 层在版本号不存在时抛 E_VERSION_NOT_FOUND，
+        // 由总机翻成 404，不装作回退成功
+        activateCharacterVersion: (versionNo) => {
+          if (!database) throw new Error('E_DB_NOT_OPEN')
+          return activateCharacterVersionInDb(database.db, versionNo)
+        },
+        // 图片路径更新：值已过 managedImagePathSchema 关卡
+        updateCharacterImages: (update) => {
+          if (!database) throw new Error('E_DB_NOT_OPEN')
+          updateCharacterImagesInDb(database.db, update)
         },
       }
     }

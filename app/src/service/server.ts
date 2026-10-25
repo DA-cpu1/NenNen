@@ -16,7 +16,19 @@ import {
   type ChatWindowState,
   type PetWindowState,
 } from '../shared/window-state'
-import type { CharacterOverview } from '../data/character-edit'
+import {
+  activateCharacterVersionSchema,
+  saveCharacterVersionSchema,
+  updateCharacterImagesSchema,
+  type SaveCharacterVersionBody,
+} from '../shared/character-schema'
+import { personaFromSections, personaSectionsAllEmpty } from '../shared/persona-format'
+import type {
+  CharacterImagesUpdate,
+  CharacterOverview,
+  SaveCharacterVersionInput,
+  SaveCharacterVersionResult,
+} from '../data/character-edit'
 
 /** 总机句柄：端口号 + 关机方法 */
 export interface BackendServer {
@@ -71,6 +83,13 @@ export interface BackendOptions {
     readChatWindowState(): unknown
     /** 保存聊天窗口状态（值已过格式关卡） */
     writeChatWindowState(value: ChatWindowState): void
+    /** 保存一版新人设（值已过格式关卡并拼好 personaText）；
+     *  同一 saveRequestId 重复到达返回已建版本，created=false */
+    saveCharacterVersion(input: SaveCharacterVersionInput): SaveCharacterVersionResult
+    /** 把指定版本号设为当前生效；版本不存在时抛 E_VERSION_NOT_FOUND */
+    activateCharacterVersion(versionNo: number): { characterId: string; versionNo: number }
+    /** 更新角色图片路径（值已过格式关卡） */
+    updateCharacterImages(update: CharacterImagesUpdate): void
   }
 }
 
@@ -115,6 +134,52 @@ function isAuthorized(req: IncomingMessage, token: string): boolean {
 function sendJson(res: ServerResponse, status: number, body: Record<string, unknown>): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify(body))
+}
+
+/**
+ * 把过完格式关卡的保存请求体转成 data 层输入。
+ * 两件事只有服务端做才稳（界面换版本也不影响库里的格式）：
+ * ① 分区拼成 personaText（完整文本模式直接用原文）；
+ * ② 空白归一——称呼空串转 null、各文本字段去首尾空白。
+ * 人设内容全空（分区三块都空 / 全文是空白）返回 undefined：
+ * 存一版没有内容的人设只是制造垃圾行，按参数不合法拒绝。
+ */
+function toSaveInput(body: SaveCharacterVersionBody): SaveCharacterVersionInput | undefined {
+  // 分区与全文二选一：两个都带或都不带，说明调用方自己没想清楚
+  const sections = body.personaSections
+  const fullText = body.personaFullText
+  if ((sections !== undefined) === (fullText !== undefined)) return undefined
+
+  let personaText: string
+  if (sections !== undefined) {
+    if (personaSectionsAllEmpty(sections)) return undefined
+    personaText = personaFromSections(sections)
+  } else {
+    personaText = (fullText ?? '').trim()
+    if (personaText === '') return undefined
+  }
+
+  const nickname = body.userNickname?.trim()
+  return {
+    name: body.name.trim(),
+    personaText,
+    initialRelationship: body.initialRelationship.trim(),
+    userNickname: nickname ? nickname : null,
+    dialogueExamples: body.dialogueExamples,
+    saveRequestId: body.requestId,
+  }
+}
+
+/**
+ * 把 data 层抛出的内部错误码翻译成 HTTP 错误码。
+ * 目前只有「版本不存在」值得单独告诉调用方（界面好转成明确提示）；
+ * 其余一律 DB_ERROR，数据库报错原文不外传（03 §7）。
+ */
+function dbErrorStatusOf(error: unknown): { status: number; code: string } {
+  if (error instanceof Error && error.message === 'E_VERSION_NOT_FOUND') {
+    return { status: 404, code: 'VERSION_NOT_FOUND' }
+  }
+  return { status: 502, code: 'DB_ERROR' }
 }
 
 /**
@@ -395,6 +460,96 @@ async function handleRequest(
       sendJson(res, 200, { ok: true })
     } catch {
       // 写失败绝不回 ok（01 R17：失败不假装成功）
+      sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
+    }
+    return
+  }
+  // 保存人设版本（T05，01 R05「保存生成版本」）：界面每次点「保存」
+  // 生成新的 requestId；服务端拼 personaText 后交给 data 层建新版本行。
+  // 同一 requestId 重复到达（网络卡时连点）由 data 层防重，created=false
+  // 告诉界面「这次没建新版，还是你存过的那版」
+  if (req.method === 'POST' && req.url === '/character/version') {
+    if (!options.db) {
+      sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' })
+      return
+    }
+    let parsed: unknown
+    try {
+      parsed = await readJsonBody(req)
+    } catch {
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    const check = saveCharacterVersionSchema.safeParse(parsed)
+    if (!check.success) {
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    const input = toSaveInput(check.data)
+    if (!input) {
+      // 格式过关但内容为空（人设全空/分区全文二选一失败）——同样是参数不合法
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    try {
+      const result = options.db.saveCharacterVersion(input)
+      sendJson(res, 200, { ok: true, versionNo: result.versionNo, created: result.created })
+    } catch {
+      sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
+    }
+    return
+  }
+  // 回退人设版本：把指定版本号重新设为当前生效（01 R05「保存版本可回退」）
+  if (req.method === 'POST' && req.url === '/character/version/activate') {
+    if (!options.db) {
+      sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' })
+      return
+    }
+    let parsed: unknown
+    try {
+      parsed = await readJsonBody(req)
+    } catch {
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    const check = activateCharacterVersionSchema.safeParse(parsed)
+    if (!check.success) {
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    try {
+      const result = options.db.activateCharacterVersion(check.data.versionNo)
+      sendJson(res, 200, { ok: true, versionNo: result.versionNo })
+    } catch (error) {
+      const { status, code } = dbErrorStatusOf(error)
+      sendJson(res, status, { ok: false, code })
+    }
+    return
+  }
+  // 更新角色图片路径（T05「图片设置」）：文件复制在主进程完成，这里只把
+  // 「图片在哪」记进 characters 表。路径必须过 managedImagePathSchema——
+  // 只认应用管理的 characters/ 相对路径，防路径穿越
+  if (req.method === 'PUT' && req.url === '/character/images') {
+    if (!options.db) {
+      sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' })
+      return
+    }
+    let parsed: unknown
+    try {
+      parsed = await readJsonBody(req)
+    } catch {
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    const check = updateCharacterImagesSchema.safeParse(parsed)
+    if (!check.success) {
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    try {
+      options.db.updateCharacterImages(check.data)
+      sendJson(res, 200, { ok: true })
+    } catch {
       sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
     }
     return
