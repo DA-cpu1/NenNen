@@ -21,4 +21,36 @@ interface Window {
   petMenu?: {
     open: () => void
   }
+  /** 应用数据代办通道（desktop/preload.ts 的 appApi；通道实现见
+   *  bridge/requests.ts 与 desktop/character-images.ts） */
+  appApi?: {
+    /** 取角色编辑概览；结果 { ok, data?: { character } | null, code? } */
+    getCharacter: () => Promise<{
+      ok: boolean
+      data?: { character?: unknown }
+      code?: string
+    }>
+    /** 保存一版新人设；结果 { ok, data?: { versionNo, created }, code? } */
+    saveCharacterVersion: (body: unknown) => Promise<{
+      ok: boolean
+      data?: { versionNo?: number; created?: boolean }
+      code?: string
+    }>
+    /** 回退到指定人设版本；结果 { ok, data?: { versionNo }, code? } */
+    activateVersion: (versionNo: number) => Promise<{
+      ok: boolean
+      data?: { versionNo?: number }
+      code?: string
+    }>
+    /** 换角色图片；结果 { ok, relativePath?, width?, height?, code? } */
+    pickImage: (slot: 'desktop' | 'portrait') => Promise<{
+      ok: boolean
+      relativePath?: string
+      width?: number
+      height?: number
+      code?: string
+    }>
+    /** 订阅主进程的切页指令；返回取消订阅函数 */
+    onNavGoto: (callback: (page: 'chat' | 'settings') => void) => () => void
+  }
 }

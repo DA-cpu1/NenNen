@@ -11,6 +11,9 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, Tray } from 'el
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { startBackend, type BackendHandle } from './backend'
+import { registerAppAssetProtocol, registerAppAssetSchemePrivileges } from './app-asset'
+import { registerBridgeRequests } from '../bridge/requests'
+import { registerCharacterImagePicking } from './character-images'
 import {
   chatWindowStateSchema,
   petWindowStateSchema,
@@ -461,6 +464,12 @@ function createTray(): void {
 }
 
 /**
+ * 声明 app-asset:// 是「标准协议」。这一步必须赶在应用就绪之前——
+ * Electron 只在这个时点收表；处理函数稍后在 whenReady 里挂（app-asset.ts）
+ */
+registerAppAssetSchemePrivileges()
+
+/**
  * 抢「全程序唯一」的锁（03 §3：双开不允许）。
  * requestSingleInstanceLock 由操作系统层面仲裁：第一个实例拿到 true，
  * 之后再双击图标，新拿到的实例只会拿到 false。
@@ -598,6 +607,13 @@ async function startBackendWithSelfCheck(): Promise<void> {
     createPetWindow()
     // 托盘立起来，用户随时能找回窗口或退出（01 R02）
     createTray()
+    // 图片协议翻译员上岗：界面从这时起能加载 characters/ 下的图片
+    registerAppAssetProtocol()
+    // 界面固定请求通道：主进程替界面访问后台（03 §4 bridge 层）。
+    // 传「取值函数」而不是句柄：注册时后台多半还没雇好，通道每次
+    // 处理请求时现取，后台没就绪的空档会得到明确的 BACKEND_NOT_READY
+    registerBridgeRequests(() => backend)
+    registerCharacterImagePicking(() => backend)
     // screen 模块要等应用就绪后才能用（Electron 规矩），所以这两个
     // 监听在这里注册而不是文件顶层
     screen.on('display-metrics-changed', () => keepPetVisible())
