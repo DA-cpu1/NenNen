@@ -1,20 +1,48 @@
-/* 设置页占位样式（T05⑨ 换成完整表单布局） */
-.placeholder {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.note {
-  font-size: 13px;
-  color: var(--muted);
-}
+/* 暖白卡片与淡紫选中态沿用现有设计稿；正文滚动，操作栏留在底部。 */
+.page { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100vh; }
+.header { padding: 26px 32px 16px; }
+.header h1, .empty h1 { font-size: 23px; margin: 0 0 8px; }
+.header p { margin: 0; color: var(--muted); font-size: 13px; }
+.page button { font: inherit; cursor: pointer; }
+.scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 22px 32px; border: 0; margin: 0; }
+.card { padding: 22px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 18px; }
+.card h2 { font-size: 16px; margin: 0 0 18px; }
+.card h3 { font-size: 14px; margin: 0 0 14px; }
+.card label { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; font-size: 13px; font-weight: 600; }
+.card input, .card textarea { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); color: var(--ink); font-size: 13px; line-height: 1.7; font-weight: 400; }
+.card textarea { resize: vertical; min-height: 42px; }
+.columns { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.hint { font-size: 12px; color: var(--muted); line-height: 1.7; }
+.principles { border-radius: 8px; background: var(--accent-soft-weak); padding: 14px; font-size: 12px; line-height: 1.8; }
+.principles p { margin: 4px 0 0; color: var(--muted); }
+.cardHeader { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 12px; }
+.segment { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; }
+.segment button { background: none; border: 0; border-radius: 5px; padding: 6px 12px; color: var(--muted); font-size: 12px; }
+.segment button[aria-pressed='true'] { background: var(--accent-soft); color: var(--ink); }
+.error { margin: 0 32px; padding: 12px; border-radius: 8px; background: #fff0ed; color: var(--danger); font-size: 13px; }
+.empty { padding: 32px; }
+.tabs { display: flex; gap: 20px; padding: 0 32px; border-bottom: 1px solid var(--border); }
+.tabs button { padding: 12px 0; background: none; border: 0; border-bottom: 3px solid transparent; color: var(--muted); font-size: 13px; }
+.tabs button[aria-pressed='true'] { border-color: var(--accent); color: var(--ink); font-weight: 600; }
+.badge { padding: 6px 10px; border-radius: 20px; background: var(--accent-soft); font-size: 12px; }
+.example { padding: 20px 0; border-top: 1px solid var(--border); }
+.version { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 16px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.version time { color: var(--muted); }
+.primary, .secondary { border-radius: 7px; padding: 9px 14px; border: 1px solid var(--border); background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
+.primary { background: #7560b1; border-color: #7560b1; color: white; }
+.primary:hover:not(:disabled) { background: #65509f; }
+.secondary:hover:not(:disabled) { background: var(--accent-soft-weak); }
+.page button:disabled, .dialog button:disabled { opacity: .5; cursor: default; }
+.page button:focus-visible, .dialog button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.textButton { border: 0; background: none; padding: 6px; color: var(--danger); }
+.notice { margin: 0 32px; padding: 12px; border-radius: 8px; background: var(--accent-soft); font-size: 13px; }
+.footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid var(--border); padding: 14px 24px; background: var(--panel); font-size: 12px; }
+.footer p { margin: 0; color: var(--muted); }
+.footer > div, .dialogActions { display: flex; gap: 8px; flex-wrap: wrap; }
+.dialog { width: min(420px, 80vw); border: 1px solid var(--border); border-radius: 14px; padding: 24px; color: var(--ink); box-shadow: 0 16px 60px #2f2b4a30; }
+.dialog::backdrop { background: #2f2b4a55; }
+.dialog h2 { font-size: 18px; margin-top: 0; }
+.dialog p { font-size: 13px; line-height: 1.8; }
+.dialogActions { justify-content: flex-end; margin-top: 24px; }
+/* 窗口变窄时把两个输入框上下排列，避免文字挤成一团。 */
+@media (max-width: 800px) { .columns { grid-template-columns: 1fr; gap: 0; } .header, .scroll { padding-left: 20px; padding-right: 20px; } }

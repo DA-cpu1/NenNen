@@ -20,13 +20,15 @@ export type PageId = 'chat' | 'settings'
 export interface CharacterProps {
   character: CharacterOverview | null
   /** 重新向后台取一份概览；后台没就绪时置错误状态 */
-  reload: () => Promise<void>
+  reload: () => Promise<CharacterOverview | null>
   /** 概览加载失败时的错误码（BACKEND_NOT_READY 等），成功后清空 */
   loadError: string | null
 }
 
+/** 聊天窗入口：统一读取角色，并把所有离开编辑页的入口交给草稿保护。 */
 export default function App() {
   const [page, setPage] = useState<PageId>('chat')
+  const [leaveTarget, setLeaveTarget] = useState<PageId | null>(null)
   const [character, setCharacter] = useState<CharacterOverview | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -35,17 +37,37 @@ export default function App() {
     // preload 未就绪（理论上不会，但类型上可能）：按通道不可用处理
     if (!window.appApi) {
       setLoadError('CHANNEL_MISSING')
-      return
+      return null
     }
-    const res = await window.appApi.getCharacter()
-    if (!res.ok) {
-      setLoadError(res.code ?? 'UNKNOWN')
-      return
+    try {
+      const res = await window.appApi.getCharacter()
+      if (!res.ok) {
+        setLoadError(res.code ?? 'UNKNOWN')
+        return null
+      }
+      const payload = res.data as { character?: CharacterOverview | null } | undefined
+      const next = payload?.character ?? null
+      setCharacter(next)
+      setLoadError(next ? null : 'NO_CHARACTER')
+      return next
+    } catch {
+      setLoadError('CHANNEL_UNAVAILABLE')
+      return null
     }
-    const payload = res.data as { character?: CharacterOverview | null } | undefined
-    setCharacter(payload?.character ?? null)
-    setLoadError(null)
   }, [])
+
+  /** 侧栏、托盘和桌宠菜单走同一条路，避免某个入口绕过未保存确认。 */
+  const navigate = useCallback((target: PageId) => {
+    if (page === 'settings' && target !== page) setLeaveTarget(target)
+    else setPage(target)
+  }, [page])
+
+  /** 编辑页确认可离开后再切页；数据还未读到时也可以正常返回聊天。 */
+  const completeLeave = useCallback(() => {
+    setPage(leaveTarget ?? 'chat')
+    setLeaveTarget(null)
+  }, [leaveTarget])
+  const cancelLeave = useCallback(() => setLeaveTarget(null), [])
 
   // 打开窗口时取一次
   useEffect(() => {
@@ -55,8 +77,8 @@ export default function App() {
   // 托盘/桌宠菜单点「打开聊天/角色设置」：主进程把窗口亮出来的同时
   // 发来切页指令，这里跟着切（订阅函数返回「取消订阅」，交给 React 卸载时调）
   useEffect(
-    () => window.appApi?.onNavGoto((target) => setPage(target)) ?? undefined,
-    [],
+    () => window.appApi?.onNavGoto(navigate) ?? undefined,
+    [navigate],
   )
 
   // 两页共用的props包
@@ -68,7 +90,7 @@ export default function App() {
         <button
           type="button"
           className={page === 'chat' ? styles.railItemActive : styles.railItem}
-          onClick={() => setPage('chat')}
+          onClick={() => navigate('chat')}
         >
           {/* 简笔图标：一个聊天气泡 */}
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -79,7 +101,7 @@ export default function App() {
         <button
           type="button"
           className={page === 'settings' ? styles.railItemActive : styles.railItem}
-          onClick={() => setPage('settings')}
+          onClick={() => navigate('settings')}
         >
           {/* 简笔图标：一个齿轮（简化为圆+齿） */}
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -89,7 +111,8 @@ export default function App() {
         </button>
       </nav>
       <main className={styles.body}>
-        {page === 'chat' ? <ChatPage {...shared} /> : <SettingsPage {...shared} />}
+        {page === 'chat' ? <ChatPage {...shared} /> : <SettingsPage {...shared}
+          leaving={leaveTarget !== null} onLeave={completeLeave} onStay={cancelLeave} />}
       </main>
     </div>
   )

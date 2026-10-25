@@ -97,7 +97,9 @@ export function sectionsFromPersona(text: string): ParsedPersona {
 
   // 标准 = 恰好三个标题，顺序 0、1、2 递增（不多、不少、不乱、不重复）
   const isStandard =
-    found.length === 3 && found.every((item, i) => item.titleIndex === i)
+    found.length === 3 && found.every((item, i) => item.titleIndex === i) &&
+    // 第一段标题前若有正文，拆分会把那段丢掉；保留全文才能保住用户原文。
+    lines.slice(0, found[0].lineIndex).every((line) => line.trim() === '')
 
   if (!isStandard) {
     return { sections: emptyPersonaSections(), fullText: text, structured: false }
