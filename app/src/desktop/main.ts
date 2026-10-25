@@ -540,6 +540,10 @@ function createTray(): void {
   const icon = nativeImage.createFromBuffer(Buffer.from(TRAY_ICON_PNG_BASE64, 'base64'))
   tray = new Tray(icon)
   tray.setToolTip('桌面陪伴')
+  // 左键单击托盘 = 打开聊天窗口（Windows 托盘的通行做法）。右键弹菜单
+  // 是 setContextMenu 之后系统的自动行为，不用我们写；但没有下面这行时，
+  // 左键只会发出一个没人听的 click 事件——用户点了「没反应」（验收实测）
+  tray.on('click', () => showChatWindow('chat'))
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: '打开聊天', click: () => showChatWindow('chat') },
