@@ -1,6 +1,6 @@
 /**
- * 最小旧库升级样例（T04 步骤⑧，05 §7）：证明「老用户升级新版」这条路
- * 真的能走通。做法是演一遍历史——
+ * 最小旧库升级样例（T04 步骤⑧创建，05 §7；T05① 扩展到 v6）：证明
+ * 「老用户升级新版」这条路真的能走通。做法是演一遍历史——
  * 第一幕用「只含第一张装修单」的清单造出 v1 旧库（这正是当年 v1 版
  * 程序留下的库的样子），塞一行老数据、关库（旧程序退出）；
  * 第二幕重新打开（新版程序启动），用完整清单升级，检查：
@@ -51,15 +51,15 @@ describe('最小旧库升级样例（T04 步骤⑧）', () => {
     ).toEqual({ n: 0 })
     old.close() // 旧版程序退出，数据落盘
 
-    // ── 第二幕：新版程序启动，翻记录本补做 v2～v5 ──
+    // ── 第二幕：新版程序启动，翻记录本补做 v2～v6 ──
     const upgraded = openCompanionDatabase(dbPath)
     runMigrations(upgraded.sqlite)
 
-    // 记录本登记齐当前全部 5 张单
+    // 记录本登记齐当前全部 6 张单
     const records = upgraded.sqlite
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as Array<{ version: number }>
-    expect(records.map((r) => r.version)).toEqual([1, 2, 3, 4, 5])
+    expect(records.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6])
 
     // 旧数据一行不丢：老用户的版本号还是 3，没有被初始化逻辑重置成 0
     const state = upgraded.db.select().from(appState).where(eq(appState.id, 1)).get()
@@ -85,6 +85,15 @@ describe('最小旧库升级样例（T04 步骤⑧）', () => {
       now: 1740000007000,
     })
     expect(initial.created).toBe(true)
+
+    // v6 的两根新列真的长在旧表上：PRAGMA table_info 列出表结构，
+    // 查得到 = 升级把列加给了已存在的 character_versions（不是只建了新表）
+    const columns = upgraded.sqlite
+      .prepare('PRAGMA table_info(character_versions)')
+      .all() as Array<{ name: string }>
+    const columnNames = columns.map((c) => c.name)
+    expect(columnNames).toContain('user_nickname')
+    expect(columnNames).toContain('save_request_id')
 
     upgraded.close()
   })
@@ -138,13 +147,13 @@ INSERT INTO no_such_table VALUES (1);
     const state = db.db.select().from(appState).where(eq(appState.id, 1)).get()
     expect(state?.globalMemoryEpoch).toBe(5)
 
-    // 4) 恢复：换回正确清单重跑，v2～v5 正常补齐——坏单子
+    // 4) 恢复：换回正确清单重跑，v2～v6 正常补齐——坏单子
     //    没有把升级路堵死
     runMigrations(db.sqlite)
     const fixed = db.sqlite
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as Array<{ version: number }>
-    expect(fixed.map((r) => r.version)).toEqual([1, 2, 3, 4, 5])
+    expect(fixed.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6])
 
     db.close()
   })

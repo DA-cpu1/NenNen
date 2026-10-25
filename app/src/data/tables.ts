@@ -67,16 +67,28 @@ export const characterVersions = sqliteTable('character_versions', {
     .references(() => characters.id, { onDelete: 'cascade' }),
   /** 人设第几版：同一角色内从 1 递增，同一角色同一版本号只许一行（UNIQUE 约束） */
   versionNo: integer('version_no').notNull(),
-  /** 人设正文：性格、说话方式的完整描述。T03 写好的角色卡将来放这里 */
+  /** 人设正文：性格、说话方式的完整描述。T03 写好的角色卡将来放这里。
+   *  T05 编辑页的三个分区（核心性格/语言习惯/背景边界）拼成一段带固定
+   *  小标题的文本存进来；旧数据可能是无标题的整段文本，读取方按标题
+   *  拆分、拆不出就整段处理（shared/persona-format.ts 负责互转） */
   personaText: text('persona_text').notNull(),
   /** 初始关系设定（如「恋人」），来自角色卡的关系部分 */
   initialRelationship: text('initial_relationship').notNull(),
+  /** 用户希望角色怎么称呼自己（如「阿达」），留空 = 未设定、聊天里自然称呼
+   *  （01 R05 的编辑项之一）。放在版本表：它是「相处设定」的一部分，
+   *  改称呼跟着生成新人设版本；聊天中临时保存的称呼偏好到 T07 才进
+   *  memories 表（memory_key=preferred_name），两处由服务层合并，不互相顶替 */
+  userNickname: text('user_nickname'),
   /** 对话示例，JSON 数组文本：组装提示词时给模型看「她习惯怎么说话」 */
   dialogueExamplesJson: text('dialogue_examples_json').notNull().default('[]'),
   /** 是否当前生效：1 是、0 否；同一角色最多一行 1（见表注释里的唯一索引） */
   isActive: integer('is_active').notNull().default(0),
   /** 这版人设的创建时间（UTC 毫秒数字） */
   createdAt: integer('created_at').notNull(),
+  /** 保存这一版的界面请求编号（随机字符串）：网络卡时用户连点「保存」，
+   *  同一编号的第二版被唯一索引拦下，做到「重试不重复建版本」（05 §5）。
+   *  T05 迁移之前建的旧行没有编号，留空；SQLite 唯一索引不理会空值 */
+  saveRequestId: text('save_request_id'),
 })
 
 /** 「会话」表：一段连续聊天的「容器」。首版每个角色只有一条 mode='normal'

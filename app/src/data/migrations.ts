@@ -145,6 +145,17 @@ CREATE TABLE tool_operations (
 );
 `,
   },
+  {
+    version: 6,
+    summary:
+      '人设版本表加两列：user_nickname 称呼设定（01 R05 编辑项）+ save_request_id 保存防重编号（T05，05 §5）',
+    sql: `
+ALTER TABLE character_versions ADD COLUMN user_nickname TEXT;
+ALTER TABLE character_versions ADD COLUMN save_request_id TEXT;
+CREATE UNIQUE INDEX one_save_request_per_character
+  ON character_versions(character_id, save_request_id);
+`,
+  },
 ]
 
 /** 给一份 SQL 算"指纹"（sha256）：同样的内容永远得到同一串字符，

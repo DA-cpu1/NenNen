@@ -31,13 +31,17 @@ CREATE TABLE character_versions (
   version_no INTEGER NOT NULL CHECK (version_no > 0),
   persona_text TEXT NOT NULL,
   initial_relationship TEXT NOT NULL,
+  user_nickname TEXT,
   dialogue_examples_json TEXT NOT NULL DEFAULT '[]',
   is_active INTEGER NOT NULL DEFAULT 0 CHECK (is_active IN (0,1)),
   created_at INTEGER NOT NULL,
+  save_request_id TEXT,
   UNIQUE (character_id, version_no)
 );
 CREATE UNIQUE INDEX one_active_character_version
   ON character_versions(character_id) WHERE is_active = 1;
+CREATE UNIQUE INDEX one_save_request_per_character
+  ON character_versions(character_id, save_request_id);
 
 CREATE TABLE conversations (
   id TEXT PRIMARY KEY,
