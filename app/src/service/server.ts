@@ -23,6 +23,7 @@ import {
   type SaveCharacterVersionBody,
 } from '../shared/character-schema'
 import { personaFromSections, personaSectionsAllEmpty } from '../shared/persona-format'
+import { chatHistoryQuerySchema, type ChatHistoryPage, type ChatHistoryQuery } from '../shared/chat-history'
 import type {
   CharacterImagesUpdate,
   CharacterOverview,
@@ -60,6 +61,8 @@ export interface BackendOptions {
   pingAgent?: (signal: AbortSignal) => Promise<ModelCallResult>
   /** 运行期换密钥：由入口实现（整体替换 eve 进程）；测试注入假函数。 */
   rotateModelKey?: (newKey: string) => Promise<void>
+  /** 正式历史只读能力；由入口接真实库，测试也能接独立的临时库。 */
+  readChatHistory?: (query: ChatHistoryQuery) => ChatHistoryPage
   /** 数据库自测读写：由后台入口提供（打开的真库）；测试注入假函数。
    *  为什么做成注入函数而不是直接 import 数据库代码：总机这层只管
    *  「接电话、对暗号、按规则回话」，库文件从哪来、怎么开是入口的事；
@@ -402,6 +405,28 @@ async function handleRequest(
     } catch {
       // 读失败只报错误码；数据库报错原文可能带表结构细节，不转发
       sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
+    }
+    return
+  }
+  // 查询参数放消息编号和条数，不放聊天正文。认证已经在路径分发前完成。
+  if (req.method === 'GET' && new URL(req.url ?? '/', 'http://127.0.0.1').pathname === '/chat/history') {
+    const url = new URL(req.url!, 'http://127.0.0.1')
+    const checked = chatHistoryQuerySchema.safeParse(Object.fromEntries(url.searchParams))
+    if (!checked.success) {
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    if (!options.readChatHistory) {
+      sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' })
+      return
+    }
+    try {
+      sendJson(res, 200, { ok: true, history: options.readChatHistory(checked.data) })
+    } catch (error) {
+      const code = error instanceof Error ? error.message : ''
+      if (code === 'E_CONVERSATION_NOT_FOUND') sendJson(res, 404, { ok: false, code: 'CONVERSATION_NOT_FOUND' })
+      else if (code === 'E_PREVIEW_NOT_ALLOWED') sendJson(res, 403, { ok: false, code: 'PREVIEW_NOT_ALLOWED' })
+      else sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
     }
     return
   }

@@ -18,6 +18,7 @@ import {
   updateCharacterImages as updateCharacterImagesInDb,
 } from '../data/character-edit'
 import { getFormalConversation } from '../data/conversations'
+import { readChatHistory } from '../data/chat-history'
 import { readSetting, writeSetting } from '../data/settings'
 import { CHAT_WINDOW_KEY, PET_WINDOW_KEY, type ChatWindowState, type PetWindowState } from '../shared/window-state'
 
@@ -186,6 +187,12 @@ function main(): void {
           if (!database) throw new Error('E_DB_NOT_OPEN')
           updateCharacterImagesInDb(database.db, update)
         },
+      }
+    }
+    if (database) {
+      options.readChatHistory = (query) => {
+        if (!database) throw new Error('E_DB_NOT_OPEN')
+        return readChatHistory(database.db, query)
       }
     }
     if (modelApiKey) await startEveWith(modelApiKey)
