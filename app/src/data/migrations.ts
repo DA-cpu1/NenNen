@@ -156,6 +156,30 @@ CREATE UNIQUE INDEX one_save_request_per_character
   ON character_versions(character_id, save_request_id);
 `,
   },
+  {
+    version: 7,
+    summary:
+      '模型运行记录表 agent_runs：每次模型调用的用量/耗时/错误与所用版本（T06，05 §2）',
+    sql: `
+CREATE TABLE agent_runs (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
+  character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  character_version_id TEXT REFERENCES character_versions(id) ON DELETE SET NULL,
+  trigger_type TEXT NOT NULL CHECK (trigger_type IN ('chat','memory','proactive','preview')),
+  model TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('running','completed','failed','cancelled')),
+  input_tokens INTEGER CHECK (input_tokens IS NULL OR input_tokens >= 0),
+  output_tokens INTEGER CHECK (output_tokens IS NULL OR output_tokens >= 0),
+  usage_estimated INTEGER NOT NULL DEFAULT 0 CHECK (usage_estimated IN (0,1)),
+  error_code TEXT,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER
+);
+CREATE INDEX runs_for_budget ON agent_runs(trigger_type, started_at);
+`,
+  },
 ]
 
 /** 给一份 SQL 算"指纹"（sha256）：同样的内容永远得到同一串字符，

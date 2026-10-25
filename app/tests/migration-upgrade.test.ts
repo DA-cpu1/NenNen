@@ -15,7 +15,7 @@ import { eq } from 'drizzle-orm'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { MIGRATIONS, runMigrations, type Migration } from '../src/data/migrations'
 import { initializeFirstCharacter } from '../src/data/character-init'
-import { appState } from '../src/data/tables'
+import { appState, agentRuns, characterVersions } from '../src/data/tables'
 import { readSetting, writeSetting } from '../src/data/settings'
 
 let dir: string
@@ -51,22 +51,22 @@ describe('最小旧库升级样例（T04 步骤⑧）', () => {
     ).toEqual({ n: 0 })
     old.close() // 旧版程序退出，数据落盘
 
-    // ── 第二幕：新版程序启动，翻记录本补做 v2～v6 ──
+    // ── 第二幕：新版程序启动，翻记录本补做 v2～v7 ──
     const upgraded = openCompanionDatabase(dbPath)
     runMigrations(upgraded.sqlite)
 
-    // 记录本登记齐当前全部 6 张单
+    // 记录本登记齐当前全部 7 张单
     const records = upgraded.sqlite
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as Array<{ version: number }>
-    expect(records.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6])
+    expect(records.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7])
 
     // 旧数据一行不丢：老用户的版本号还是 3，没有被初始化逻辑重置成 0
     const state = upgraded.db.select().from(appState).where(eq(appState.id, 1)).get()
     expect(state?.globalMemoryEpoch).toBe(3)
 
-    // 新表全部就位：抽查 v2～v5 各一张代表表
-    for (const table of ['app_settings', 'characters', 'conversations', 'tool_operations']) {
+    // 新表全部就位：抽查 v2～v5、v7 各一张代表表
+    for (const table of ['app_settings', 'characters', 'conversations', 'tool_operations', 'agent_runs']) {
       const row = upgraded.sqlite
         .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name=?")
         .get(table) as { n: number }
@@ -94,6 +94,48 @@ describe('最小旧库升级样例（T04 步骤⑧）', () => {
     const columnNames = columns.map((c) => c.name)
     expect(columnNames).toContain('user_nickname')
     expect(columnNames).toContain('save_request_id')
+
+    // v7 的运行记录表不是「看起来有表」而是真能记账：沿真实外键链
+    // （角色 → 人设版本 → 会话 → 运行）插一行，字段类型全部走一遍
+    const version = upgraded.db
+      .select()
+      .from(characterVersions)
+      .where(eq(characterVersions.characterId, initial.characterId))
+      .get()
+    upgraded.db
+      .insert(agentRuns)
+      .values({
+        id: 'run-upgrade-001',
+        conversationId: initial.conversationId,
+        characterId: initial.characterId,
+        characterVersionId: version?.id ?? null,
+        triggerType: 'chat',
+        model: 'glm-5.3-flash',
+        provider: 'zhipu',
+        status: 'completed',
+        inputTokens: 120,
+        outputTokens: 45,
+        usageEstimated: 0,
+        startedAt: 1740000008000,
+        finishedAt: 1740000009000,
+      })
+      .run()
+    // 读回来对得上，说明列名、类型、约束都没写歪
+    const runs = upgraded.db.select().from(agentRuns).all()
+    expect(runs).toHaveLength(1)
+    expect(runs[0]).toMatchObject({ id: 'run-upgrade-001', triggerType: 'chat', status: 'completed' })
+    // CHECK 约束兜底：程序写漏校验、塞进不认识的触发类型时数据库当场报错
+    expect(() =>
+      upgraded.db
+        .insert(agentRuns)
+        .values({ ...runs[0], id: 'run-upgrade-002', triggerType: 'not-a-type' })
+        .run(),
+    ).toThrow()
+    // 预算用的索引也跟着表一起建出来了（按「触发类型+时间」查每天用量）
+    const index = upgraded.sqlite
+      .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='index' AND name='runs_for_budget'")
+      .get() as { n: number }
+    expect(index.n).toBe(1)
 
     upgraded.close()
   })
@@ -147,13 +189,13 @@ INSERT INTO no_such_table VALUES (1);
     const state = db.db.select().from(appState).where(eq(appState.id, 1)).get()
     expect(state?.globalMemoryEpoch).toBe(5)
 
-    // 4) 恢复：换回正确清单重跑，v2～v6 正常补齐——坏单子
+    // 4) 恢复：换回正确清单重跑，v2～v7 正常补齐——坏单子
     //    没有把升级路堵死
     runMigrations(db.sqlite)
     const fixed = db.sqlite
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as Array<{ version: number }>
-    expect(fixed.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6])
+    expect(fixed.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7])
 
     db.close()
   })

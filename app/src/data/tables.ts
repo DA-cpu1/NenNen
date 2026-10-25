@@ -219,3 +219,54 @@ export const toolOperations = sqliteTable('tool_operations', {
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 })
+
+/** 「模型运行记录」表：每次模型调用的流水账——什么时间、用哪个模型、
+ *  花了多少 token、成没成功。记它的直接动机：04 §9 要求「改模型或人设
+ *  不会重写旧消息；新运行记录实际使用的版本和模型，便于定位质量变化」
+ *  ——用户说「她最近变味了」时，靠这张表能查回每条回复当时用的是哪版
+ *  人设、哪个模型，而不是靠猜。T06 只写 chat / preview 两类；memory
+ *  整理（T07）和 proactive 主动陪伴（T10）将来也记在同一张表。
+ *  为什么单独一张表而不是塞进 messages：一次「回复消息」可能对应
+ *  多次模型运行（重试各算一次），消息是给用户看的，运行是给账本看的 */
+export const agentRuns = sqliteTable('agent_runs', {
+  /** 本次运行的独立 ID */
+  id: text('id').primaryKey(),
+  /** 在哪段会话里发生（外键：删会话时运行记录一起删）。可空：
+   *  有些运行不挂在任何会话上（比如将来的全局任务） */
+  conversationId: text('conversation_id').references(() => conversations.id, {
+    onDelete: 'cascade',
+  }),
+  /** 为哪个角色跑的（外键，必填：没有角色的运行不存在） */
+  characterId: text('character_id')
+    .notNull()
+    .references(() => characters.id, { onDelete: 'cascade' }),
+  /** 当时用的哪个人设版本（外键，可空）。删除人设版本时置空不删行：
+   *  运行记录是历史事实，版本没了事实还在，只是查不到细节 */
+  characterVersionId: text('character_version_id').references(
+    () => characterVersions.id,
+    { onDelete: 'set null' },
+  ),
+  /** 什么触发了这次运行：chat 用户聊天 / memory 记忆整理 /
+   *  proactive 主动陪伴 / preview 试聊。预算检查按类型分开算（02 §4） */
+  triggerType: text('trigger_type').notNull(),
+  /** 模型名（如 glm-5.3-flash）：定位质量问题、看费用都用它 */
+  model: text('model').notNull(),
+  /** 供应商名（如 zhipu） */
+  provider: text('provider').notNull(),
+  /** 运行状态：running 进行中 / completed 完成 / failed 失败 /
+   *  cancelled 被用户或程序取消 */
+  status: text('status').notNull(),
+  /** 模型报告的输入 token 数；供应商没给时为空（见 usageEstimated） */
+  inputTokens: integer('input_tokens'),
+  /** 模型报告的输出 token 数；同样可为空 */
+  outputTokens: integer('output_tokens'),
+  /** token 数是不是估算出来的：0 精确 1 估算。供应商不返回用量时按
+   *  保守估算记账并标 1，绝不能把未知记成零成本（02 §4、07 A17） */
+  usageEstimated: integer('usage_estimated').notNull().default(0),
+  /** 失败时的错误码；只存码不存正文（03 §7 日志约束同理） */
+  errorCode: text('error_code'),
+  /** 开始时间（UTC 毫秒数字） */
+  startedAt: integer('started_at').notNull(),
+  /** 结束时间；进行中（running）时为空 */
+  finishedAt: integer('finished_at'),
+})
