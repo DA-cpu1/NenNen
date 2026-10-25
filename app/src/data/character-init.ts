@@ -52,11 +52,11 @@ export interface InitializedCharacter {
  * 服务层解析正式会话前先问它；返回 undefined 表示还没初始化过。
  * 参数类型用 drizzle 的基类型 BaseSQLiteDatabase：普通连接和事务里的
  * tx 都能传（事务对象就是「去掉了嵌套开事务能力的连接」）。
+ * 返回整行（含名字、图片路径）：T05 编辑页要读这些字段。
  */
-export function getFirstCharacter(db: BaseSQLiteDatabase<'sync', unknown>): {
-  id: string
-  createdAt: number
-} | undefined {
+export function getFirstCharacter(
+  db: BaseSQLiteDatabase<'sync', unknown>,
+): typeof characters.$inferSelect | undefined {
   return db.select().from(characters).orderBy(asc(characters.createdAt)).get()
 }
 
