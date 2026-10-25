@@ -9,8 +9,9 @@
  * 界面要的是「发一个请求、拿一份结果」，handle/invoke 天然是这种形状，
  * 还自动带 Promise；send 得自己发明回执机制。
  */
-import { ipcMain } from 'electron'
+import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import type { BackendHandle } from '../desktop/backend'
+import { chatHistoryQuerySchema } from '../shared/chat-history'
 
 /** 后台 HTTP 请求的通用结果：成功带数据，失败只带错误码（03 §7：
  *  状态码可以给，原始错误文本不出后台） */
@@ -56,8 +57,34 @@ async function callBackend<T>(
  * 注册全部固定请求通道。调用方（main.ts）传一个「现在后台是谁」的取值
  * 函数而不是一次性句柄：后台句柄是启动后才有的，注册通道时它还不存在。
  * @param getBackend 取当前后台句柄；还没就绪时返回 undefined
+ * @param getChatPage 取聊天窗口的页面编号和受信地址；只接该应用主页面
  */
-export function registerBridgeRequests(getBackend: () => BackendHandle | undefined): void {
+export function registerBridgeRequests(
+  getBackend: () => BackendHandle | undefined,
+  getChatPage: () => { id: number; url: string } | undefined,
+): void {
+  /** 只接聊天窗口主页面，防止桌宠或嵌入子页面借用聊天记录读取能力。 */
+  function isChatPage(event: IpcMainInvokeEvent): boolean {
+    const expected = getChatPage()
+    return expected !== undefined && event.sender.id === expected.id
+      && event.senderFrame === event.sender.mainFrame && event.senderFrame?.url === expected.url
+  }
+
+  ipcMain.handle('chat:formal-conversation', (event) => {
+    if (!isChatPage(event)) return { ok: false, code: 'UNAUTHORIZED' }
+    return callBackend(getBackend(), 'GET', '/formal-conversation')
+  })
+  ipcMain.handle('chat:history', (event, body: unknown) => {
+    if (!isChatPage(event)) return { ok: false, code: 'UNAUTHORIZED' }
+    const checked = chatHistoryQuerySchema.safeParse(body)
+    if (!checked.success) return { ok: false, code: 'INVALID_INPUT' }
+    const params = new URLSearchParams({
+      conversationId: checked.data.conversationId, limit: String(checked.data.limit),
+    })
+    if (checked.data.beforeSeq !== undefined) params.set('beforeSeq', String(checked.data.beforeSeq))
+    return callBackend(getBackend(), 'GET', `/chat/history?${params}`)
+  })
+
   // 角色编辑概览：打开设置页/聊天页时各取一次（聊天页要名字和立绘）
   ipcMain.handle('character:get', () =>
     callBackend(getBackend(), 'GET', '/character'),

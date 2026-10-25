@@ -27,6 +27,18 @@ interface Window {
   /** 应用数据代办通道（desktop/preload.ts 的 appApi；通道实现见
    *  bridge/requests.ts 与 desktop/character-images.ts） */
   appApi?: {
+    /** 读取唯一正式会话的编号，仍由后台决定它属于哪个角色。 */
+    getFormalConversation: () => Promise<{
+      ok: boolean
+      data?: { conversation?: { conversationId: string; characterId: string } | null }
+      code?: string
+    }>
+    /** 返回正式会话的一页历史，早于 beforeSeq；省略时读最近一页。 */
+    getChatHistory: (conversationId: string, beforeSeq?: number) => Promise<{
+      ok: boolean
+      data?: { history: import('../shared/chat-history').ChatHistoryPage }
+      code?: string
+    }>
     /** 取角色编辑概览；结果 { ok, data?: { character } | null, code? } */
     getCharacter: () => Promise<{
       ok: boolean

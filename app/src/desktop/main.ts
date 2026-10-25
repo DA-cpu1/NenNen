@@ -10,6 +10,7 @@
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, Tray } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { startBackend, type BackendHandle } from './backend'
 import { registerAppAssetProtocol, registerAppAssetSchemePrivileges } from './app-asset'
 import { registerBridgeRequests } from '../bridge/requests'
@@ -39,6 +40,11 @@ function readModelKey(): string | undefined {
 
 /** 聊天主窗口的引用；点关闭只是收起（hide），托盘退出才销毁 */
 let chatWindow: BrowserWindow | undefined
+
+/** 地址由应用启动时确定，不能拿「窗口目前在哪」当受信依据，避免导航后自动放行外站。 */
+const CHAT_PAGE_URL = process.env.ELECTRON_RENDERER_URL
+  ? new URL(process.env.ELECTRON_RENDERER_URL).href
+  : pathToFileURL(join(__dirname, '../renderer/index.html')).href
 
 /** 「真的要退出了」标志：只有托盘退出 / 全窗口真关闭才置 true，
  *  聊天窗的 close 拦截靠它区分「收起」和「退出前的关闭」 */
@@ -722,7 +728,8 @@ async function startBackendWithSelfCheck(): Promise<void> {
     // 界面固定请求通道：主进程替界面访问后台（03 §4 bridge 层）。
     // 传「取值函数」而不是句柄：注册时后台多半还没雇好，通道每次
     // 处理请求时现取，后台没就绪的空档会得到明确的 BACKEND_NOT_READY
-    registerBridgeRequests(() => backend)
+    registerBridgeRequests(() => backend, () => chatWindow
+      ? { id: chatWindow.webContents.id, url: CHAT_PAGE_URL } : undefined)
     registerCharacterImagePicking(() => backend, (slot, width, height) => {
       if (slot === 'desktop') {
         petBaseSize = petImageSize(width, height)

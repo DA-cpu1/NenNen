@@ -42,6 +42,11 @@ contextBridge.exposeInMainWorld('petChat', {
  * 参数形状见各通道的注册处（bridge/requests.ts、desktop/character-images.ts）。
  */
 contextBridge.exposeInMainWorld('appApi', {
+  /** 查找当前角色唯一的正式会话；界面不接触框架凭据。 */
+  getFormalConversation: () => ipcRenderer.invoke('chat:formal-conversation'),
+  /** 按正式会话编号读一页历史；不接受任意后台网址。 */
+  getChatHistory: (conversationId: string, beforeSeq?: number) =>
+    ipcRenderer.invoke('chat:history', { conversationId, beforeSeq }),
   /** 取角色编辑概览（名字/图片路径/当前人设版本/版本列表） */
   getCharacter: () => ipcRenderer.invoke('character:get'),
   /** 保存一版新人设（请求体按 shared/character-schema 的形状组装） */
