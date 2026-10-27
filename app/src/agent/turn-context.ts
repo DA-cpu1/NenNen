@@ -29,15 +29,19 @@ export interface ContextMessage {
 /**
  * 本轮独立的输入资料：读取后整轮复用，不随编辑页的后续保存或回退变化。
  * history 目前是合格历史候选，尚未按 token 预算挑选近期部分，不能直接全发给模型。
+ * persona.versionId 为 null 表示人设不是保存的版本（试聊草稿走这种），
+ * 此时 versionNo 固定 0；正式路径始终是真实版本。
  */
 export interface TurnContext {
   conversationId: string
+  /** 会话类型跟着快照走：复查登记时按它核对，防止正式/试聊路径互相顶替。 */
+  conversationMode: 'normal' | 'preview'
   characterId: string
   characterName: string
   contextEpoch: number
   commonRules: string
   persona: {
-    versionId: string
+    versionId: string | null
     versionNo: number
     personaText: string
     initialRelationship: string
@@ -74,6 +78,40 @@ function toContextMessage(message: typeof messages.$inferSelect): ContextMessage
 }
 
 /**
+ * 把「当前消息之前」的整段行集筛成可进上下文的历史。
+ * 正式与试聊共用同一条规则：失败/取消/被排除的片段不带；同一用户消息
+ * 只认边界内最新回复且不退回旧版；主动消息引用的来源必须已入选。
+ * 提出来共享是因为两条路径规则必须一字不差——分开写两份迟早漂移。
+ * @param previous 按顺序排好的、当前消息之前的消息行
+ * @returns 合格的历史候选（仍未经预算挑选）
+ */
+export function usableHistory(previous: Array<typeof messages.$inferSelect>): ContextMessage[] {
+  // Map 按编号找记录，后面可直接核对回复对应的用户原话，而不用反复翻整段历史。
+  const users = new Map(previous.filter((row) => row.role === 'user' && isUsable(row)).map((row) => [row.id, row]))
+  const latestReplies = new Map<string, typeof messages.$inferSelect>()
+  for (const row of previous) {
+    // 必须先挑最新版本再判断它能否使用；反过来会在新版被排除时复活旧版文字。
+    if (row.role === 'assistant' && row.replyToId !== null) latestReplies.set(row.replyToId, row)
+  }
+  const history: ContextMessage[] = []
+  // Set 只记不重复的编号，用来判断主动消息引用的来源是否已经获准带入。
+  const includedIds = new Set<string>()
+  for (const row of previous) {
+    if (!isUsable(row)) continue
+    if (row.role === 'assistant') {
+      const user = row.replyToId === null ? undefined : users.get(row.replyToId)
+      if (!user || row.seq <= user.seq || latestReplies.get(user.id)?.id !== row.id) continue
+    }
+    // 主动消息也可能引用旧回复；只有来源已入选才带入，不能借它复述已排除的原文。
+    // 按先后顺序检查还能挡住跨会话、未来来源和被排除来源的后续引用。
+    if (row.role === 'proactive' && row.replyToId !== null && !includedIds.has(row.replyToId)) continue
+    history.push(toContextMessage(row))
+    includedIds.add(row.id)
+  }
+  return history
+}
+
+/**
  * 读取一次正式聊天的人设与历史，当前消息单独放末尾，重试也不吃后续聊天。
  * 事务让这些读取看到同一时点的数据库资料；函数返回就结束，不在事务中等待模型。
  * @param db 后台数据库连接
@@ -107,38 +145,17 @@ export function buildTurnContext(db: BetterSQLite3Database, input: BuildTurnCont
     const previous = tx.select().from(messages).where(and(
       eq(messages.conversationId, conversation.id), lt(messages.seq, current.seq),
     )).orderBy(asc(messages.seq)).all()
-    // Map 按编号找记录，后面可直接核对回复对应的用户原话，而不用反复翻整段历史。
-    const users = new Map(previous.filter((row) => row.role === 'user' && isUsable(row)).map((row) => [row.id, row]))
-    const latestReplies = new Map<string, typeof messages.$inferSelect>()
-    for (const row of previous) {
-      // 必须先挑最新版本再判断它能否使用；反过来会在新版被排除时复活旧版文字。
-      if (row.role === 'assistant' && row.replyToId !== null) latestReplies.set(row.replyToId, row)
-    }
-    const history: ContextMessage[] = []
-    // Set 只记不重复的编号，用来判断主动消息引用的来源是否已经获准带入。
-    const includedIds = new Set<string>()
-    for (const row of previous) {
-      if (!isUsable(row)) continue
-      if (row.role === 'assistant') {
-        const user = row.replyToId === null ? undefined : users.get(row.replyToId)
-        if (!user || row.seq <= user.seq || latestReplies.get(user.id)?.id !== row.id) continue
-      }
-      // 主动消息也可能引用旧回复；只有来源已入选才带入，不能借它复述已排除的原文。
-      // 按先后顺序检查还能挡住跨会话、未来来源和被排除来源的后续引用。
-      if (row.role === 'proactive' && row.replyToId !== null && !includedIds.has(row.replyToId)) continue
-      history.push(toContextMessage(row))
-      includedIds.add(row.id)
-    }
 
     return {
-      conversationId: conversation.id, characterId: character.id, characterName: character.name,
+      conversationId: conversation.id, conversationMode: 'normal',
+      characterId: character.id, characterName: character.name,
       contextEpoch: conversation.contextEpoch, commonRules: input.commonRules,
       persona: {
         versionId: version.id, versionNo: version.versionNo, personaText: version.personaText,
         initialRelationship: version.initialRelationship, userNickname: version.userNickname,
         dialogueExamples: readExamples(version.dialogueExamplesJson),
       },
-      history, currentMessage: toContextMessage(current),
+      history: usableHistory(previous), currentMessage: toContextMessage(current),
     }
   })
 }

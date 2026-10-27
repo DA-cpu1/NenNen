@@ -8,6 +8,9 @@ import { eq } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { conversations } from '../data/tables'
 import { buildTurnContext, type BuildTurnContextInput, type TurnContext } from './turn-context'
+import {
+  buildPreviewTurnContext, type BuildPreviewTurnContextInput,
+} from './preview-context'
 import { prepareBudgetedContext, type BudgetedTurnContext, type ModelInputLimits } from './context-budget'
 import type { EveHandle } from './eve-process'
 import { encodeEveTurnEnvelope } from '../shared/eve-turn-envelope'
@@ -23,22 +26,17 @@ export interface PreparedEveTurn {
 const sentTurns = new WeakSet<PreparedEveTurn>()
 
 /**
- * 准备正式回合并登记新框架会话，任何失败都不能向模型发送用户消息。
- * @param db 后台数据库连接
- * @param handle 已启动的本机 eve 服务凭证，仅在后台使用
- * @param input 应用会话、已保存用户消息与内部共同规则
- * @param limits 已核对的模型窗口与输出预留
- * @param signal 调用方取消信号
- * @returns 固定快照、预算内文字输入与尚未发送消息的会话句柄
- * @throws 上下文/预算错误原样保留；E_EVE_SESSION_FAILED 创建失败；
- * E_CONTEXT_CHANGED 等待期间资料已失效；E_STORAGE_UNAVAILABLE 映射落库失败；E_CANCELLED 已取消
+ * 准备内核：正式与试聊共用（预算 → 建空会话 → 复查登记）。
+ * 差别只在上下文从哪来——正式读 character_versions，试聊用请求携带的草稿。
+ * 任何失败都不能向模型发送用户消息。
  */
-export async function prepareEveTurn(
-  db: BetterSQLite3Database, handle: EveHandle, input: BuildTurnContextInput,
-  limits: ModelInputLimits, signal: AbortSignal,
+async function prepareTurnSession(
+  db: BetterSQLite3Database,
+  handle: EveHandle,
+  context: TurnContext,
+  limits: ModelInputLimits,
+  signal: AbortSignal,
 ): Promise<PreparedEveTurn> {
-  if (signal.aborted) throw new Error('E_CANCELLED')
-  const context = buildTurnContext(db, input)
   const budgeted = prepareBudgetedContext(context, limits)
   const client = new Client({
     host: `http://127.0.0.1:${handle.port}`, auth: { bearer: handle.token }, redirect: 'error',
@@ -56,7 +54,7 @@ export async function prepareEveTurn(
     // 不跨网络等待持有事务；回来后短暂检查版本并登记，防止把过期快照交给下一步。
     db.transaction((tx) => {
       const current = tx.select().from(conversations).where(eq(conversations.id, context.conversationId)).get()
-      if (!current || current.mode !== 'normal' || current.contextEpoch !== context.contextEpoch) {
+      if (!current || current.mode !== context.conversationMode || current.contextEpoch !== context.contextEpoch) {
         failure = 'E_CONTEXT_CHANGED'
         throw new Error(failure)
       }
@@ -69,6 +67,43 @@ export async function prepareEveTurn(
     throw new Error(failure)
   }
   return { context, input: budgeted, session }
+}
+
+/**
+ * 准备正式回合并登记新框架会话；先建上下文（读当前人设版本）再走共用内核。
+ * @param db 后台数据库连接
+ * @param handle 已启动的本机 eve 服务凭证，仅在后台使用
+ * @param input 应用会话、已保存用户消息与内部共同规则
+ * @param limits 已核对的模型窗口与输出预留
+ * @param signal 调用方取消信号
+ * @returns 固定快照、预算内文字输入与尚未发送消息的会话句柄
+ * @throws 上下文/预算错误原样保留；E_EVE_SESSION_FAILED 创建失败；
+ * E_CONTEXT_CHANGED 等待期间资料已失效；E_STORAGE_UNAVAILABLE 映射落库失败；E_CANCELLED 已取消
+ */
+export async function prepareEveTurn(
+  db: BetterSQLite3Database, handle: EveHandle, input: BuildTurnContextInput,
+  limits: ModelInputLimits, signal: AbortSignal,
+): Promise<PreparedEveTurn> {
+  if (signal.aborted) throw new Error('E_CANCELLED')
+  return prepareTurnSession(db, handle, buildTurnContext(db, input), limits, signal)
+}
+
+/**
+ * 准备试聊回合并登记新框架会话；人设用请求携带的草稿（preview 会话专用）。
+ * @param db 后台数据库连接
+ * @param handle 已启动的本机 eve 服务凭证
+ * @param input preview 会话、已保存用户消息、共同规则与草稿人设
+ * @param limits 已核对的模型窗口与输出预留
+ * @param signal 调用方取消信号
+ * @returns 固定快照、预算内文字输入与尚未发送消息的会话句柄
+ * @throws 同 prepareEveTurn；另 E_PREVIEW_REQUIRED 传来的不是 preview 会话
+ */
+export async function preparePreviewEveTurn(
+  db: BetterSQLite3Database, handle: EveHandle, input: BuildPreviewTurnContextInput,
+  limits: ModelInputLimits, signal: AbortSignal,
+): Promise<PreparedEveTurn> {
+  if (signal.aborted) throw new Error('E_CANCELLED')
+  return prepareTurnSession(db, handle, buildPreviewTurnContext(db, input), limits, signal)
 }
 
 /**
@@ -88,7 +123,8 @@ export async function sendPreparedEveTurn(
   let current: typeof conversations.$inferSelect | undefined
   try { current = db.select().from(conversations).where(eq(conversations.id, prepared.context.conversationId)).get() }
   catch { throw new Error('E_STORAGE_UNAVAILABLE') }
-  if (!current || current.mode !== 'normal' || current.contextEpoch !== prepared.context.contextEpoch ||
+  if (!current || current.mode !== prepared.context.conversationMode ||
+      current.contextEpoch !== prepared.context.contextEpoch ||
       current.runtimeSessionId !== prepared.session.state.sessionId) throw new Error('E_CONTEXT_CHANGED')
   const message = encodeEveTurnEnvelope({
     prompt: prepared.input.prompt, optionalPromptGroups: prepared.input.optionalPromptGroups,

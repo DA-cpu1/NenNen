@@ -11,7 +11,8 @@ const limits = { modelWindowTokens: 32_000 }
 /** 每次返回独立的人设和消息，避免某项检查改动资料后影响下一项。 */
 function context(): TurnContext {
   return {
-    conversationId: 'normal', characterId: 'character', characterName: '测试角色', contextEpoch: 0,
+    conversationId: 'normal', conversationMode: 'normal' as const, characterId: 'character',
+    characterName: '测试角色', contextEpoch: 0,
     commonRules: '不编造共同经历。',
     persona: { versionId: 'version-2', versionNo: 2, personaText: '完整性格与说话方式。',
       initialRelationship: '恋人', userNickname: '阿达', dialogueExamples: [] },

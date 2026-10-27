@@ -11,11 +11,12 @@ import type { MessageResponse, MessageStreamEvent } from 'eve/client'
 import { messages, agentRuns } from '../data/tables'
 import { createAssistantReply, updateAssistantReply } from '../data/messages'
 import { startAgentRun, finishAgentRun } from '../data/agent-runs'
-import { prepareEveTurn, sendPreparedEveTurn } from './eve-turn'
+import { prepareEveTurn, preparePreviewEveTurn, sendPreparedEveTurn, type PreparedEveTurn } from './eve-turn'
 import { consumeEveTurn, type TurnEvent, type TurnOutcome } from './eve-events'
 import type { EveHandle } from './eve-process'
 import type { ModelInputLimits } from './context-budget'
 import type { BuildTurnContextInput } from './turn-context'
+import type { PreviewPersonaDraft } from './preview-context'
 
 /** 04 §2：一轮的总用时上限；模型不能自己延长，到点由程序收场。 */
 export const DEFAULT_TURN_TIMEOUT_MS = 90_000
@@ -31,37 +32,43 @@ export interface RunFormalTurnInput extends BuildTurnContextInput {
   turnTimeoutMs?: number
 }
 
-/**
- * 跑完一次正式聊天回合，逐段交出界面事件，结束时返回回合汇总。
- * 失败路径同样落库：发送失败或中止时，本函数自己把回复行和运行账本
- * 收成终态，调用方只负责把错误码翻译给界面。
- * @param db 后台数据库连接
- * @param handle 已启动的本机 eve 服务凭证
- * @param input 会话、用户消息、共同规则、模型容量与模型名
- * @param signal 用户停止/应用退出的取消信号
- * @returns 界面事件流；return value 为回合汇总（与 consumeEveTurn 相同）
- * @throws 准备阶段的错误原样上抛（此时还没有回复行/运行行需要收拾）；
- * E_REPLY_IN_PROGRESS 同一条用户消息已有进行中的回复
- */
-export async function* runFormalTurn(
-  db: BetterSQLite3Database,
-  handle: EveHandle,
-  input: RunFormalTurnInput,
-  signal: AbortSignal,
-): AsyncGenerator<TurnEvent, TurnOutcome> {
-  // 已有进行中的回复就先拒绝：省下白建空会话的开销，也不给它留下孤儿会话。
+/** 跑一次试聊回合所需的资料；草稿人设随请求携带，不经 character_versions。 */
+export interface RunPreviewTurnInput {
+  conversationId: string
+  userMessageId: string
+  commonRules: string
+  draft: PreviewPersonaDraft
+  limits: ModelInputLimits
+  model: string
+  provider: string
+  turnTimeoutMs?: number
+}
+
+/** 已有进行中回复的预检：挡在准备之前，不白建空会话。 */
+function assertNoActiveReply(db: BetterSQLite3Database, userMessageId: string): void {
   const activeReply = db.select({ id: messages.id }).from(messages).where(and(
-    eq(messages.replyToId, input.userMessageId), eq(messages.role, 'assistant'),
+    eq(messages.replyToId, userMessageId), eq(messages.role, 'assistant'),
     inArray(messages.status, ['pending', 'streaming']),
   )).get()
   if (activeReply) throw new Error('E_REPLY_IN_PROGRESS')
+}
 
+/**
+ * 回合编排内核：正式与试聊共用（准备 → 留据 → 发送 → 消费），差别只在准备函数。
+ */
+async function* runTurn(
+  db: BetterSQLite3Database,
+  handle: EveHandle,
+  input: RunFormalTurnInput | RunPreviewTurnInput,
+  prepare: (signal: AbortSignal) => Promise<PreparedEveTurn>,
+  signal: AbortSignal,
+): AsyncGenerator<TurnEvent, TurnOutcome> {
   // 准备（读库+预算+建空会话+登记映射）失败时直接上抛：库里没有本轮痕迹。
-  const prepared = await prepareEveTurn(db, handle, input, input.limits, signal)
+  const prepared = await prepare(signal)
 
   // 回复行先建好：发送失败时它是「保留半截文字、标记失败」的载体。
   const reply = createAssistantReply(db, { userMessageId: input.userMessageId })
-  // 运行账本在花钱前登记；此时人设版本已由准备阶段锁定。
+  // 运行账本在花钱前登记；人设版本由准备结果锁定（试聊为 null，账本允许）。
   const run = startAgentRun(db, {
     conversationId: input.conversationId,
     characterVersionId: prepared.context.persona.versionId,
@@ -104,6 +111,53 @@ export async function* runFormalTurn(
     response: wrapped, replyId: reply.id, runId: run.id,
     estimatedInputTokens: prepared.input.inputTokens,
   }, signal)
+}
+
+/**
+ * 跑完一次正式聊天回合，逐段交出界面事件，结束时返回回合汇总。
+ * 失败路径同样落库：发送失败或中止时，本函数自己把回复行和运行账本
+ * 收成终态，调用方只负责把错误码翻译给界面。
+ * @param db 后台数据库连接
+ * @param handle 已启动的本机 eve 服务凭证
+ * @param input 会话、用户消息、共同规则、模型容量与模型名
+ * @param signal 用户停止/应用退出的取消信号
+ * @returns 界面事件流；return value 为回合汇总（与 consumeEveTurn 相同）
+ * @throws 准备阶段的错误原样上抛（此时还没有回复行/运行行需要收拾）；
+ * E_REPLY_IN_PROGRESS 同一条用户消息已有进行中的回复
+ */
+export async function* runFormalTurn(
+  db: BetterSQLite3Database,
+  handle: EveHandle,
+  input: RunFormalTurnInput,
+  signal: AbortSignal,
+): AsyncGenerator<TurnEvent, TurnOutcome> {
+  assertNoActiveReply(db, input.userMessageId)
+  return yield* runTurn(db, handle, input,
+    (abort) => prepareEveTurn(db, handle, input, input.limits, abort), signal)
+}
+
+/**
+ * 跑完一次试聊回合：人设来自请求携带的草稿，账本记空版本（trigger preview）。
+ * 行为与正式回合一致（时限、留据顺序、失败收尾），只是准备走草稿上下文。
+ * @param db 后台数据库连接
+ * @param handle 已启动的本机 eve 服务凭证
+ * @param input preview 会话、用户消息、共同规则、草稿人设、模型容量与模型名
+ * @param signal 用户停止/应用退出的取消信号
+ * @returns 界面事件流；return value 为回合汇总
+ * @throws 同 runFormalTurn；另 E_PREVIEW_REQUIRED 传来的不是 preview 会话
+ */
+export async function* runPreviewTurn(
+  db: BetterSQLite3Database,
+  handle: EveHandle,
+  input: RunPreviewTurnInput,
+  signal: AbortSignal,
+): AsyncGenerator<TurnEvent, TurnOutcome> {
+  assertNoActiveReply(db, input.userMessageId)
+  return yield* runTurn(db, handle, input,
+    (abort) => preparePreviewEveTurn(db, handle, {
+      conversationId: input.conversationId, userMessageId: input.userMessageId,
+      commonRules: input.commonRules, draft: input.draft,
+    }, input.limits, abort), signal)
 }
 
 /**

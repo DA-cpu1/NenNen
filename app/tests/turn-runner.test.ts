@@ -10,8 +10,8 @@ import { runMigrations } from '../src/data/migrations'
 import { initializeFirstCharacter } from '../src/data/character-init'
 import { saveUserMessage, createAssistantReply, updateAssistantReply } from '../src/data/messages'
 import { startAgentRun } from '../src/data/agent-runs'
-import { agentRuns, characterVersions, messages } from '../src/data/tables'
-import { runFormalTurn, recoverInterruptedTurns } from '../src/agent/turn-runner'
+import { agentRuns, characterVersions, conversations, messages } from '../src/data/tables'
+import { runFormalTurn, runPreviewTurn, recoverInterruptedTurns } from '../src/agent/turn-runner'
 import { decodeEveTurnEnvelope } from '../src/shared/eve-turn-envelope'
 import type { TurnEvent, TurnOutcome } from '../src/agent/eve-events'
 import type { EveHandle } from '../src/agent/eve-process'
@@ -199,6 +199,35 @@ describe('回合编排（T06⑪b）', () => {
     expect(runRows()[0]).toMatchObject({ status: 'failed', errorCode: 'E_TURN_TIMEOUT' })
     // 回合结束后计时器已清干净，不留到点空响的悬空定时器。
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('试聊回合：草稿进信封、账本记空版本且 trigger 为 preview', async () => {
+    // 同角色开一条 preview 会话并保存用户消息。
+    const formal = companion.db.select().from(conversations).where(eq(conversations.id, conversationId)).get()!
+    companion.db.insert(conversations).values({ ...formal, id: 'preview-1', mode: 'preview' }).run()
+    const previewUser = saveUserMessage(companion.db, {
+      conversationId: 'preview-1', requestId: 'preview-r1', content: '试聊问题',
+    }).message.id
+    const { response } = fakeResponse([appended('哼。'), turnCompleted(), sessionCompleted()])
+    fake.send.mockResolvedValue(response)
+    const { events, outcome } = await drive(runPreviewTurn(companion.db, handle, {
+      conversationId: 'preview-1', userMessageId: previewUser, commonRules: '不编造经历。',
+      draft: {
+        personaText: '草稿人设：说话带「哼」。', initialRelationship: '暧昧',
+        userNickname: null, dialogueExamples: [],
+      },
+      limits, model: 'fixed-model', provider: 'fixed-provider',
+    }, new AbortController().signal))
+    const previewReply = companion.db.select().from(messages).where(and(
+      eq(messages.conversationId, 'preview-1'), eq(messages.role, 'assistant'),
+    )).orderBy(desc(messages.seq)).limit(1).get()!
+    expect(events.at(-1)).toEqual({ type: 'done', replyId: previewReply.id })
+    expect(outcome).toEqual({ status: 'completed', finalText: '哼。', usageEstimated: true })
+    const body = fake.send.mock.calls[0][0] as string
+    expect(decodeEveTurnEnvelope(body)?.prompt[1].content).toContain('草稿人设')
+    expect(runRows()[0]).toMatchObject({
+      triggerType: 'preview', characterVersionId: null, status: 'completed',
+    })
   })
 
   it('启动恢复把进行中的回复与账本收成失败，已完成的不动', async () => {
