@@ -1,11 +1,13 @@
 /**
- * eve 的测试 Agent 配置：每次模型执行前，从本进程内存里取密钥。
+ * eve 的模型配置：每次模型执行前，从本进程内存里取密钥。
  * 编译时不读密钥，也不把带密钥的模型对象放进工作流检查点（落盘的执行进度）。
- * 这里只验证运行通路；正式角色和聊天历史以后由应用数据库提供。
+ * 正式角色和聊天历史由后台信封提供；固定连通探针继续兼容 T01。
  */
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { defineAgent, defineDynamic } from 'eve'
+import { wrapLanguageModel } from 'ai'
 import { waitSecrets } from './lib/stdin-secrets'
+import { createCompanionContextMiddleware } from './lib/context-middleware'
 
 export default defineAgent({
   // 禁止复制自己启动子 Agent；本项目的记忆整理也不是第二个自由行动的 Agent。
@@ -27,7 +29,9 @@ export default defineAgent({
           includeUsage: true,
         })
         return {
-          model: provider('glm-5.3-flash'),
+          model: wrapLanguageModel({
+            model: provider('glm-5.3-flash'), middleware: createCompanionContextMiddleware(),
+          }),
           // 这是本次短消息验证的暂定预算，尚不是供应商容量的实测结论。
           modelContextWindowTokens: 128_000,
         }

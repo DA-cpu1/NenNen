@@ -1,15 +1,16 @@
 /**
- * 从 SQLite 准备一轮输入，并创建尚未发送消息的干净 eve 会话。
+ * 从 SQLite 准备一轮输入，登记干净 eve 会话，再经独立发送入口交付上下文。
  * 先保存框架编号、后允许发送，防止数据库不可写时已经花费模型用量。
  * 每轮换框架会话，用户看到的应用会话和历史不变，也不读取 eve 的旧聊天。
  */
-import { Client, type ClientSession } from 'eve/client'
+import { Client, type ClientSession, type MessageResponse } from 'eve/client'
 import { eq } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { conversations } from '../data/tables'
 import { buildTurnContext, type BuildTurnContextInput, type TurnContext } from './turn-context'
 import { prepareBudgetedContext, type BudgetedTurnContext, type ModelInputLimits } from './context-budget'
 import type { EveHandle } from './eve-process'
+import { encodeEveTurnEnvelope } from '../shared/eve-turn-envelope'
 
 /** 尚未启动模型的回合资料；后续发送入口继续使用这里固定的人设和预算输入。 */
 export interface PreparedEveTurn {
@@ -17,6 +18,9 @@ export interface PreparedEveTurn {
   input: BudgetedTurnContext
   session: ClientSession
 }
+
+// WeakSet 只在对象仍被使用时记住它；防止同一准备结果被连点发送两次，又不长期积攒记录。
+const sentTurns = new WeakSet<PreparedEveTurn>()
 
 /**
  * 准备正式回合并登记新框架会话，任何失败都不能向模型发送用户消息。
@@ -65,4 +69,38 @@ export async function prepareEveTurn(
     throw new Error(failure)
   }
   return { context, input: budgeted, session }
+}
+
+/**
+ * 将已登记的准备结果交给 eve；受理仅返回事件流句柄，不能在这里宣称回复完成。
+ * @param db 后台数据库连接，用于发送前复查会话映射与内容版本
+ * @param prepared 本轮固定的人设、预算输入和已登记框架会话
+ * @param signal 取消信号；发送结果不明时不自动重复请求
+ * @returns 官方 MessageResponse，由后续事件适配层消费
+ * @throws E_CANCELLED 已取消；E_CONTEXT_CHANGED 映射/内容失效；
+ * E_STORAGE_UNAVAILABLE 无法读取；E_EVE_TURN_ALREADY_SENT 此准备结果已发送；E_EVE_SEND_FAILED 请求失败
+ */
+export async function sendPreparedEveTurn(
+  db: BetterSQLite3Database, prepared: PreparedEveTurn, signal: AbortSignal,
+): Promise<MessageResponse> {
+  if (signal.aborted) throw new Error('E_CANCELLED')
+  if (sentTurns.has(prepared)) throw new Error('E_EVE_TURN_ALREADY_SENT')
+  let current: typeof conversations.$inferSelect | undefined
+  try { current = db.select().from(conversations).where(eq(conversations.id, prepared.context.conversationId)).get() }
+  catch { throw new Error('E_STORAGE_UNAVAILABLE') }
+  if (!current || current.mode !== 'normal' || current.contextEpoch !== prepared.context.contextEpoch ||
+      current.runtimeSessionId !== prepared.session.state.sessionId) throw new Error('E_CONTEXT_CHANGED')
+  const message = encodeEveTurnEnvelope({
+    prompt: prepared.input.prompt, optionalPromptGroups: prepared.input.optionalPromptGroups,
+    // 只交付有效输入上限与输出之和；不会把原模型的大窗口重新用来放宽 12,000 上限。
+    modelWindowTokens: prepared.input.inputLimit + prepared.input.maxOutputTokens,
+    maxOutputTokens: prepared.input.maxOutputTokens,
+  })
+  sentTurns.add(prepared)
+  try {
+    return await prepared.session.send(message, { signal, streamReconnectPolicy: { reconnect: false } })
+  } catch {
+    // 请求失败时可能已被对方受理；不沿用这个准备结果重发，以免发生第二次模型调用。
+    throw new Error(signal.aborted ? 'E_CANCELLED' : 'E_EVE_SEND_FAILED')
+  }
 }

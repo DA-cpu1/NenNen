@@ -11,7 +11,8 @@ import { saveUserMessage, createAssistantReply, updateAssistantReply } from '../
 import { setRuntimeSessionId } from '../src/data/conversations'
 import { bumpContextEpoch } from '../src/data/epochs'
 import { characters, characterVersions, companionSettings, conversations, messages } from '../src/data/tables'
-import { prepareEveTurn } from '../src/agent/eve-turn'
+import { prepareEveTurn, sendPreparedEveTurn } from '../src/agent/eve-turn'
+import { decodeEveTurnEnvelope } from '../src/shared/eve-turn-envelope'
 import type { EveHandle } from '../src/agent/eve-process'
 
 const fake = vi.hoisted(() => ({ create: vi.fn(), reset: vi.fn(), send: vi.fn() }))
@@ -164,5 +165,45 @@ describe('干净 eve 会话准备（T06⑩a）', () => {
     await expect(prepare()).rejects.toThrow(/^E_CONTEXT_CHANGED$/)
     expect(runtimeId()).toBeNull()
     expect(fake.reset).toHaveBeenCalledTimes(1)
+  })
+
+  it('登记成功后发送固定信封，只返回受理句柄，不提前保存成功回复', async () => {
+    const prepared = await prepare()
+    const accepted = { sessionId: 'eve-new' }
+    fake.send.mockResolvedValue(accepted)
+    const signal = new AbortController().signal
+    expect(await sendPreparedEveTurn(companion.db, prepared, signal)).toBe(accepted)
+    const [body, options] = fake.send.mock.calls[0]
+    expect(decodeEveTurnEnvelope(body)).toMatchObject({
+      prompt: prepared.input.prompt, optionalPromptGroups: prepared.input.optionalPromptGroups,
+      modelWindowTokens: 13_000, maxOutputTokens: 1_000,
+    })
+    expect(options).toEqual({ signal, streamReconnectPolicy: { reconnect: false } })
+    expect(companion.db.select().from(messages).all()).toHaveLength(3)
+  })
+
+  it('发送前取消、内容版本或框架映射变化时拒绝，供应商不会收到这份旧输入', async () => {
+    const prepared = await prepare()
+    const controller = new AbortController()
+    controller.abort()
+    await expect(sendPreparedEveTurn(companion.db, prepared, controller.signal)).rejects.toThrow(/^E_CANCELLED$/)
+    setRuntimeSessionId(companion.db, conversationId, 'different-session')
+    await expect(sendPreparedEveTurn(companion.db, prepared, new AbortController().signal))
+      .rejects.toThrow(/^E_CONTEXT_CHANGED$/)
+    setRuntimeSessionId(companion.db, conversationId, 'eve-new')
+    bumpContextEpoch(companion.db, conversationId)
+    await expect(sendPreparedEveTurn(companion.db, prepared, new AbortController().signal))
+      .rejects.toThrow(/^E_CONTEXT_CHANGED$/)
+    expect(fake.send).not.toHaveBeenCalled()
+  })
+
+  it('发送结果不明也不重发同一准备结果，框架错误只给固定码', async () => {
+    const prepared = await prepare()
+    fake.send.mockRejectedValue(new Error('test-secret-and-dialogue'))
+    await expect(sendPreparedEveTurn(companion.db, prepared, new AbortController().signal))
+      .rejects.toThrow(/^E_EVE_SEND_FAILED$/)
+    await expect(sendPreparedEveTurn(companion.db, prepared, new AbortController().signal))
+      .rejects.toThrow(/^E_EVE_TURN_ALREADY_SENT$/)
+    expect(fake.send).toHaveBeenCalledTimes(1)
   })
 })
