@@ -30,6 +30,25 @@ beforeEach(() => {
 afterEach(() => companion.close())
 
 describe('用户消息保存与防重（T06②）', () => {
+  it.each(['中', '😀'])('8,000 个 %s 可以原样保存，8,001 个被拒绝且不占顺序号', (character) => {
+    const content = character.repeat(8_000)
+    const first = saveUserMessage(companion.db, { conversationId, requestId: 'limit', content, now })
+    expect(first.message.content).toBe(content)
+    expect(() => saveUserMessage(companion.db, {
+      conversationId, requestId: 'too-long', content: content + character, now: now + 1,
+    })).toThrow('E_MESSAGE_TOO_LONG')
+    expect(companion.db.select().from(messages).all()).toHaveLength(1)
+    const next = saveUserMessage(companion.db, { conversationId, requestId: 'next', content: '下一句', now })
+    expect(next.message.seq).toBe(2)
+  })
+
+  it('输入限长包含首尾空白，不靠 trim 后的长度放行', () => {
+    expect(() => saveUserMessage(companion.db, {
+      conversationId, requestId: 'spaces', content: ' ' + '中'.repeat(8_000), now,
+    })).toThrow('E_MESSAGE_TOO_LONG')
+    expect(companion.db.select().from(messages).all()).toHaveLength(0)
+  })
+
   it('原样保存正文、给首条消息分配顺序，并更新所属会话时间', () => {
     const result = saveUserMessage(companion.db, {
       conversationId, requestId: 'request-1', content: '  今天完成一步\n继续学习。 ', now: now + 1,

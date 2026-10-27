@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { and, desc, eq, inArray } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { conversations, messages } from './tables'
+import { assertChatInput } from '../shared/chat-input'
 
 /** 用户发送一次消息所需的资料；消息身份和状态由程序填写，调用方不能自选。 */
 export interface SaveUserMessageInput {
@@ -30,16 +31,19 @@ export interface SaveUserMessageResult {
  * @param db 后台唯一的数据库写连接
  * @param input 会话、请求编号、未经改写的正文及可选检查时间
  * @returns 消息行以及本次是否新建
- * @throws E_INVALID_MESSAGE 输入为空白；E_CONVERSATION_NOT_FOUND 会话不存在；
+ * @throws E_INVALID_MESSAGE 输入为空白；E_MESSAGE_TOO_LONG 正文超过 8,000 码点；
+ * E_CONVERSATION_NOT_FOUND 会话不存在；
  * E_REQUEST_CONFLICT 同一编号被用于不同内容；数据库失败原样抛给服务层处理
  */
 export function saveUserMessage(
   db: BetterSQLite3Database,
   input: SaveUserMessageInput,
 ): SaveUserMessageResult {
-  if (!input.conversationId.trim() || !input.requestId.trim() || !input.content.trim()) {
+  if (!input.conversationId.trim() || !input.requestId.trim()) {
     throw new Error('E_INVALID_MESSAGE')
   }
+  // 必须在写库前检查；界面检查只能帮助用户，不能充当后台的最终关卡。
+  assertChatInput(input.content)
 
   return db.transaction((tx) => {
     const conversation = tx.select().from(conversations)
