@@ -19,6 +19,8 @@ import {
 } from '../data/character-edit'
 import { getFormalConversation } from '../data/conversations'
 import { readChatHistory } from '../data/chat-history'
+import { createChatTurnService, PROVISIONAL_MODEL_WINDOW_TOKENS } from './chat-turns'
+import { recoverInterruptedTurns } from '../agent/turn-runner'
 import { readSetting, writeSetting } from '../data/settings'
 import { CHAT_WINDOW_KEY, PET_WINDOW_KEY, type ChatWindowState, type PetWindowState } from '../shared/window-state'
 
@@ -63,6 +65,16 @@ function main(): void {
     },
     rotateModelKey: (newKey) => rotateModelKey(newKey),
   }
+
+  // 聊天回合服务：登记簿挡并发、事件流受护；句柄用取值函数是让
+  // 运行期换密钥（整个换 eve 进程）立即生效，不锁住旧句柄。
+  const chatTurns = createChatTurnService({
+    getDb: () => database?.db,
+    getEve: () => eve,
+    limits: { modelWindowTokens: PROVISIONAL_MODEL_WINDOW_TOKENS },
+  })
+  options.startChatTurn = chatTurns.startTurn
+  options.cancelChatTurn = chatTurns.cancelTurn
 
   /** 读共享记忆版本号。实现统一收在 data/epochs.ts（app_state 缺初始行
    *  时它抛错，绝不默默当 0 把问题盖住）；这里只保留「库还没打开」的守卫 */
@@ -119,6 +131,10 @@ function main(): void {
         initialRelationship: '恋人',
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       })
+      // 退出恢复（04 §9）：上个进程没写完的回复与运行账本收成失败终态，
+      // 用户按原请求编号重试；只动进行中的行，绝不补写「成功」。
+      // 必须在任何回合开始前执行一次（此刻还没有回合，安全）。
+      recoverInterruptedTurns(database.db)
       options.db = {
         readEpoch,
         bumpEpoch,

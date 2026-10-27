@@ -24,6 +24,7 @@ import {
 } from '../shared/character-schema'
 import { personaFromSections, personaSectionsAllEmpty } from '../shared/persona-format'
 import { chatHistoryQuerySchema, type ChatHistoryPage, type ChatHistoryQuery } from '../shared/chat-history'
+import { chatTurnCancelSchema, chatTurnRequestSchema, type ChatTurnRequest, type SseTurnEvent } from '../shared/chat-turn'
 import type {
   CharacterImagesUpdate,
   CharacterOverview,
@@ -63,6 +64,10 @@ export interface BackendOptions {
   rotateModelKey?: (newKey: string) => Promise<void>
   /** 正式历史只读能力；由入口接真实库，测试也能接独立的临时库。 */
   readChatHistory?: (query: ChatHistoryQuery) => ChatHistoryPage
+  /** 发起聊天回合：保存用户消息并返回事件流；同步阶段抛固定错误码。 */
+  startChatTurn?: (request: ChatTurnRequest) => { userMessageId: string; events: AsyncGenerator<SseTurnEvent> }
+  /** 请求取消指定会话的活动回合；没有活动回合返回 false。 */
+  cancelChatTurn?: (conversationId: string) => boolean
   /** 数据库自测读写：由后台入口提供（打开的真库）；测试注入假函数。
    *  为什么做成注入函数而不是直接 import 数据库代码：总机这层只管
    *  「接电话、对暗号、按规则回话」，库文件从哪来、怎么开是入口的事；
@@ -100,16 +105,23 @@ export interface BackendOptions {
 const MAX_BODY_BYTES = 16_384
 
 /**
+ * 聊天回合的请求体上限：单条正文最多 8,000 个 Unicode 码点，UTF-8 最坏
+ * 每码点 4 字节、JSON 转义再放大，16KB 会把合法的满长输入误拦；64KB
+ * 只防滥用，真正的长度关卡仍在数据层（写入前拒绝，不截短）。
+ */
+const CHAT_MAX_BODY_BYTES = 65_536
+
+/**
  * 把 POST 请求体读完并按 JSON 解析。
  * 请求体和管道一样是「流」——分批到达，必须攒齐再解析；
  * 超过体积上限直接抛错，调用方统一按 INVALID_INPUT 回绝。
  */
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+async function readJsonBody(req: IncomingMessage, maxBytes: number = MAX_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = []
   let total = 0
   for await (const chunk of req) {
     total += (chunk as Buffer).length
-    if (total > MAX_BODY_BYTES) throw new Error('E_BODY_TOO_LARGE')
+    if (total > maxBytes) throw new Error('E_BODY_TOO_LARGE')
     chunks.push(chunk as Buffer)
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf-8'))
@@ -428,6 +440,83 @@ async function handleRequest(
       else if (code === 'E_PREVIEW_NOT_ALLOWED') sendJson(res, 403, { ok: false, code: 'PREVIEW_NOT_ALLOWED' })
       else sendJson(res, 502, { ok: false, code: 'DB_ERROR' })
     }
+    return
+  }
+  // 聊天回合发起（T06⑪c2）：先保存用户消息（同编号防重），成功后以 SSE
+  // 逐帧转发回复事件。保存阶段的错误在流开始前给正式状态码；流一旦开始，
+  // 成败只走事件帧，HTTP 状态不再变化（SSE 已按 200 发出）。
+  if (req.method === 'POST' && new URL(req.url ?? '/', 'http://127.0.0.1').pathname === '/chat/turn') {
+    if (!options.startChatTurn) {
+      sendJson(res, 503, { ok: false, code: 'CHAT_UNAVAILABLE' })
+      return
+    }
+    let body: unknown
+    try { body = await readJsonBody(req, CHAT_MAX_BODY_BYTES) }
+    catch { sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' }); return }
+    const checked = chatTurnRequestSchema.safeParse(body)
+    if (!checked.success) { sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' }); return }
+    let turn: ReturnType<NonNullable<BackendOptions['startChatTurn']>>
+    try { turn = options.startChatTurn(checked.data) }
+    catch (error) {
+      // 只翻译固定错误码；原文错误一律 INTERNAL，不带出正文。
+      const code = error instanceof Error ? error.message : ''
+      const mapping: Record<string, [number, string]> = {
+        E_DB_NOT_OPEN: [503, 'DB_UNAVAILABLE'],
+        E_EVE_UNAVAILABLE: [503, 'AGENT_UNAVAILABLE'],
+        E_TURN_IN_PROGRESS: [409, 'TURN_IN_PROGRESS'],
+        E_ALREADY_REPLIED: [409, 'ALREADY_REPLIED'],
+        E_REQUEST_CONFLICT: [409, 'REQUEST_CONFLICT'],
+        E_INVALID_MESSAGE: [400, 'EMPTY_MESSAGE'],
+        E_MESSAGE_TOO_LONG: [400, 'MESSAGE_TOO_LONG'],
+        E_CONVERSATION_NOT_FOUND: [404, 'CONVERSATION_NOT_FOUND'],
+        E_PREVIEW_NOT_ALLOWED: [403, 'PREVIEW_NOT_ALLOWED'],
+      }
+      const [status, wireCode] = mapping[code] ?? [500, 'INTERNAL']
+      sendJson(res, status, { ok: false, code: wireCode })
+      return
+    }
+    // SSE 帧：一行 data: JSON 加空行。本地单界面消费，不做自动重连；
+    // 断线按 04 §9 取消模型请求（取消后事件流自然以 cancelled 帧收尾）。
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-store',
+      connection: 'keep-alive',
+    })
+    let finished = false
+    res.on('close', () => {
+      // 客户端断开（窗口关闭/渲染进程退出）：没人看的回合不再继续花钱。
+      if (finished) return
+      finished = true
+      options.cancelChatTurn?.(checked.data.conversationId)
+      void turn.events.return(undefined).catch(() => { /* 已被取消时可能不再收尾 */ })
+    })
+    try {
+      for (;;) {
+        const step = await turn.events.next()
+        if (step.done) break
+        res.write(`data: ${JSON.stringify(step.value)}\n\n`)
+      }
+    } catch {
+      // 服务层已把失败转成帧；这条是最后兜底，不给半截流留悬念。
+      res.write(`data: ${JSON.stringify({ type: 'failed', code: 'INTERNAL' })}\n\n`)
+    }
+    finished = true
+    res.end()
+    return
+  }
+  // 取消当前回合：按会话编号取消；没有活动回合也回答成功（幂等），
+  // 界面不需要为「手慢点了两次停止」处理冲突。
+  if (req.method === 'POST' && new URL(req.url ?? '/', 'http://127.0.0.1').pathname === '/chat/turn/cancel') {
+    if (!options.cancelChatTurn) {
+      sendJson(res, 503, { ok: false, code: 'CHAT_UNAVAILABLE' })
+      return
+    }
+    let body: unknown
+    try { body = await readJsonBody(req) }
+    catch { sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' }); return }
+    const checked = chatTurnCancelSchema.safeParse(body)
+    if (!checked.success) { sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' }); return }
+    sendJson(res, 200, { ok: true, cancelled: options.cancelChatTurn(checked.data.conversationId) })
     return
   }
   // 角色编辑概览（T05，01 R05）：打开角色设置页时一次拿齐名字、图片、
