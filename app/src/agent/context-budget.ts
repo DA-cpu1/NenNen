@@ -28,11 +28,13 @@ export interface InputBudget {
   usageEstimated: true
 }
 
-/** 选中的消息编号供检查来源；prompt 才是后续适配层应交给模型的完整文字输入。 */
+/** 准备阶段选中的候选输入；实际请求补裁后可能更少，不能冒充最终模型来源清单。 */
 export interface BudgetedTurnContext extends InputBudget {
   prompt: ContextPromptMessage[]
   historyMessageIds: string[]
   exampleCount: number
+  /** 实际请求膨胀时，按这个顺序移除可选组；不能包含规则、人设或当前消息。 */
+  optionalPromptGroups: number[][]
 }
 
 /**
@@ -136,5 +138,14 @@ export function prepareBudgetedContext(context: TurnContext, limits: ModelInputL
     examples.push(example)
     prompt = candidatePrompt
   }
-  return { ...budget, prompt, historyMessageIds: history.map((message) => message.id), exampleCount: examples.length }
+  const historyOffset = examples.length ? 3 : 2
+  const promptIndex = new Map(history.map((message, index) => [message.id, index + historyOffset]))
+  const optionalPromptGroups = examples.length ? [[2]] : []
+  // 同一来源组的所有成员一起移除；序号指向最终 prompt，不是数据库消息顺序号。
+  for (const group of groups) {
+    const indexes = group.map((message) => promptIndex.get(message.id))
+    if (indexes.every((index) => index !== undefined)) optionalPromptGroups.push(indexes as number[])
+  }
+  return { ...budget, prompt, historyMessageIds: history.map((message) => message.id),
+    exampleCount: examples.length, optionalPromptGroups }
 }

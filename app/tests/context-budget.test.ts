@@ -80,6 +80,7 @@ describe('输入预算与历史裁剪（T06⑨b）', () => {
     expect(result.prompt[2].content).toContain('不是实际共同经历')
     expect(result.historyMessageIds).toEqual(['u1', 'a1'])
     expect(result.exampleCount).toBe(1)
+    expect(result.optionalPromptGroups).toEqual([[2], [3, 4]])
     expect(result.prompt.filter((item) => item.content === '当前问题')).toHaveLength(1)
     expect(result.prompt.at(-1)).toEqual({ role: 'user', content: '当前问题' })
   })
