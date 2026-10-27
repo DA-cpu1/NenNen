@@ -14,6 +14,7 @@ import { pathToFileURL } from 'node:url'
 import { startBackend, type BackendHandle } from './backend'
 import { registerAppAssetProtocol, registerAppAssetSchemePrivileges } from './app-asset'
 import { registerBridgeRequests } from '../bridge/requests'
+import { registerChatStreamBridge } from '../bridge/chat-stream'
 import { registerCharacterImagePicking } from './character-images'
 import {
   chatWindowStateSchema,
@@ -729,6 +730,9 @@ async function startBackendWithSelfCheck(): Promise<void> {
     // 传「取值函数」而不是句柄：注册时后台多半还没雇好，通道每次
     // 处理请求时现取，后台没就绪的空档会得到明确的 BACKEND_NOT_READY
     registerBridgeRequests(() => backend, () => chatWindow
+      ? { id: chatWindow.webContents.id, url: CHAT_PAGE_URL } : undefined)
+    // 流式聊天通道（T06⑪d）：同一套聊天页身份核对，多一个逐帧推送出口。
+    registerChatStreamBridge(() => backend, () => chatWindow
       ? { id: chatWindow.webContents.id, url: CHAT_PAGE_URL } : undefined)
     registerCharacterImagePicking(() => backend, (slot, width, height) => {
       if (slot === 'desktop') {

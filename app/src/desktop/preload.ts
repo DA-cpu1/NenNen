@@ -8,6 +8,7 @@
  * 就算界面代码被人做手脚，能做的也只限于这些放行动作。
  */
 import { contextBridge, ipcRenderer } from 'electron'
+import type { ChatStreamMessage } from '../bridge/chat-stream'
 
 /** 拖动控制（页面里用 window.petDrag 访问） */
 contextBridge.exposeInMainWorld('petDrag', {
@@ -47,6 +48,21 @@ contextBridge.exposeInMainWorld('appApi', {
   /** 按正式会话编号读一页历史；不接受任意后台网址。 */
   getChatHistory: (conversationId: string, beforeSeq?: number) =>
     ipcRenderer.invoke('chat:history', { conversationId, beforeSeq }),
+  /** 发起一次聊天回合；受理结果立即返回，回复经 onChatTurnEvent 逐帧推送。 */
+  startChatTurn: (conversationId: string, requestId: string, content: string) =>
+    ipcRenderer.invoke('chat:turn-start', { conversationId, requestId, content }),
+  /** 请求停止当前活动回合；没有活动回合也算成功。 */
+  cancelChatTurn: (conversationId: string) =>
+    ipcRenderer.invoke('chat:turn-cancel', { conversationId }),
+  /**
+   * 订阅回合事件流（推送来自 bridge/chat-stream.ts）。必须先订阅再
+   * startChatTurn：受理回执与第一帧的先后不保证。返回取消订阅的函数。
+   */
+  onChatTurnEvent: (callback: (message: ChatStreamMessage) => void) => {
+    const listener = (_event: unknown, message: ChatStreamMessage) => callback(message)
+    ipcRenderer.on('chat:turn-event', listener)
+    return () => ipcRenderer.removeListener('chat:turn-event', listener)
+  },
   /** 取角色编辑概览（名字/图片路径/当前人设版本/版本列表） */
   getCharacter: () => ipcRenderer.invoke('character:get'),
   /** 保存一版新人设（请求体按 shared/character-schema 的形状组装） */

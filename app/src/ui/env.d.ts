@@ -39,6 +39,22 @@ interface Window {
       data?: { history: import('../shared/chat-history').ChatHistoryPage }
       code?: string
     }>
+    /** 发起聊天回合；受理立即返回，回复帧经 onChatTurnEvent 推送。 */
+    startChatTurn: (conversationId: string, requestId: string, content: string) => Promise<{
+      ok: boolean
+      code?: string
+    }>
+    /** 请求停止当前活动回合。 */
+    cancelChatTurn: (conversationId: string) => Promise<{
+      ok: boolean
+      cancelled?: boolean
+      code?: string
+    }>
+    /** 订阅回合事件流；frame 为 null 表示该回合的流已结束。先订阅再启动。 */
+    onChatTurnEvent: (callback: (message: {
+      requestId: string
+      frame: import('../shared/chat-turn').SseTurnEvent | null
+    }) => void) => () => void
     /** 取角色编辑概览；结果 { ok, data?: { character } | null, code? } */
     getCharacter: () => Promise<{
       ok: boolean
