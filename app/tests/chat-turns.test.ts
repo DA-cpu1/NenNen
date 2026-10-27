@@ -92,9 +92,9 @@ describe('聊天回合服务（T06⑪c1）', () => {
       conversationId, requestId: 'r1', content: '固定问题',
     })
     const frames = await collect(events)
-    expect(frames[0]).toEqual({ type: 'saved', userMessageId })
+    expect(frames[0]).toEqual({ type: 'saved', userMessageId, conversationId })
     expect(frames).toEqual([
-      { type: 'saved', userMessageId }, { type: 'text', delta: '你好' },
+      { type: 'saved', userMessageId, conversationId }, { type: 'text', delta: '你好' },
       { type: 'done', replyId: latestReply().id },
     ])
     expect(latestReply()).toMatchObject({ content: '你好', status: 'completed' })
@@ -171,6 +171,49 @@ describe('聊天回合服务（T06⑪c1）', () => {
     expect(state.cancelled).toBe(1)
     expect(latestReply()).toMatchObject({ content: '半截', status: 'cancelled' })
     expect(turns.cancelTurn(conversationId)).toBe(false)
+    expect(turns.activeCount()).toBe(0)
+  })
+
+  it('试聊：自动建 preview 会话并复用，草稿经归一、saved 带会话编号', async () => {
+    fake.send.mockResolvedValueOnce(fakeResponse([appended('哼。'), turnCompleted(), sessionCompleted()]).response)
+      .mockResolvedValueOnce(fakeResponse([appended('嗯。'), turnCompleted(), sessionCompleted()]).response)
+    const turns = service()
+    const draftBody = {
+      personaFullText: '草稿人设：说话带「哼」。', initialRelationship: '暧昧',
+      userNickname: null, dialogueExamples: [],
+    }
+    const first = turns.startPreviewTurn({ requestId: 'p1', content: '试聊一', draft: draftBody })
+    const frames1 = await collect(first.events)
+    const previewConversationId = (frames1[0] as { conversationId: string }).conversationId
+    expect(frames1).toEqual([
+      { type: 'saved', userMessageId: first.userMessageId, conversationId: previewConversationId },
+      { type: 'text', delta: '哼。' },
+      { type: 'done', replyId: latestReply().id },
+    ])
+    // 第二次试聊复用同一条 preview 会话，不新建。
+    const second = turns.startPreviewTurn({ requestId: 'p2', content: '试聊二', draft: draftBody })
+    await collect(second.events)
+    const previews = companion.db.select().from(conversations)
+      .where(eq(conversations.mode, 'preview')).all()
+    expect(previews).toHaveLength(1)
+    expect(previews[0].id).toBe(previewConversationId)
+    // 试聊消息落在 preview 会话，不碰正式会话。
+    const previewMessages = companion.db.select().from(messages)
+      .where(eq(messages.conversationId, previewConversationId)).all()
+    expect(previewMessages).toHaveLength(4)
+  })
+
+  it('试聊草稿不合法（分区与全文都带）在服务层被拒，不建会话不落库', () => {
+    const turns = service()
+    expect(() => turns.startPreviewTurn({
+      requestId: 'p1', content: '内容',
+      draft: {
+        personaSections: { core: '核心', speech: '', background: '' },
+        personaFullText: '全文', initialRelationship: '恋人',
+      },
+    })).toThrow('E_INVALID_DRAFT_PERSONA')
+    expect(companion.db.select().from(conversations).where(eq(conversations.mode, 'preview')).all())
+      .toHaveLength(0)
     expect(turns.activeCount()).toBe(0)
   })
 })

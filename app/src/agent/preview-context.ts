@@ -7,16 +7,10 @@
 import { and, asc, eq, lt } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { characters, conversations, messages } from '../data/tables'
-import type { DialogueExample } from '../shared/character-schema'
+import type { PreviewPersonaDraft } from '../shared/chat-turn'
 import { usableHistory, type TurnContext } from './turn-context'
 
-/** 已归一的草稿人设：正文已由「分区/全文」二选一拼好，关系非空。 */
-export interface PreviewPersonaDraft {
-  personaText: string
-  initialRelationship: string
-  userNickname: string | null
-  dialogueExamples: DialogueExample[]
-}
+export type { PreviewPersonaDraft }
 
 /** 试聊上下文准备的输入。 */
 export interface BuildPreviewTurnContextInput {

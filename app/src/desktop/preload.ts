@@ -51,6 +51,12 @@ contextBridge.exposeInMainWorld('appApi', {
   /** 发起一次聊天回合；受理结果立即返回，回复经 onChatTurnEvent 逐帧推送。 */
   startChatTurn: (conversationId: string, requestId: string, content: string) =>
     ipcRenderer.invoke('chat:turn-start', { conversationId, requestId, content }),
+  /**
+   * 发起试聊回合：人设用当前编辑草稿，preview 会话由后台解析/创建。
+   * 草稿形状见 shared/chat-turn 的 previewTurnRequestSchema（分区/全文二选一）。
+   */
+  startPreviewTurn: (requestId: string, content: string, draft: unknown) =>
+    ipcRenderer.invoke('chat:preview-turn-start', { requestId, content, draft }),
   /** 请求停止当前活动回合；没有活动回合也算成功。 */
   cancelChatTurn: (conversationId: string) =>
     ipcRenderer.invoke('chat:turn-cancel', { conversationId }),

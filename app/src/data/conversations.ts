@@ -9,9 +9,10 @@
  * 要换新便签。聊天记录挂在应用自己的会话 ID 上，换便签不动记录，
  * 用户看到的还是同一段聊天（04 §3「应用会话 ID 与框架会话 ID 分离」）。
  */
+import { randomUUID } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
-import { conversations } from './tables'
+import { characters, conversations } from './tables'
 
 /**
  * 找某角色的正式会话（mode='normal'）。
@@ -54,4 +55,39 @@ export function setRuntimeSessionId(
     .run()
   // run() 回报实际改了几行；0 行就是没这段会话
   if (result.changes === 0) throw new Error(`会话不存在：${conversationId}`)
+}
+
+/**
+ * 找到（或第一次创建）某角色唯一的 preview 试聊会话（05 §3「preview 独立保留」）。
+ * 与正式会话同一个事务套路：存在就复用，不存在才建——连点两次试聊
+ * 不会冒出第二条 preview 会话，试聊历史也就能跨次续接。
+ * @param db 数据库连接
+ * @param characterId 角色 ID（调用方从角色行取得，不凭空捏造）
+ * @param now 创建时间；检查时可传固定值
+ * @returns 该角色的 preview 会话行
+ * @throws E_CHARACTER_NOT_FOUND 角色不存在（外键兜底前先给固定码）
+ */
+export function ensurePreviewConversation(
+  db: BetterSQLite3Database,
+  characterId: string,
+  now?: number,
+) {
+  return db.transaction((tx) => {
+    const existing = tx
+      .select()
+      .from(conversations)
+      .where(
+        and(eq(conversations.characterId, characterId), eq(conversations.mode, 'preview')),
+      )
+      .get()
+    if (existing) return existing
+    const character = tx.select({ id: characters.id }).from(characters)
+      .where(eq(characters.id, characterId)).get()
+    if (!character) throw new Error('E_CHARACTER_NOT_FOUND')
+    const time = now ?? Date.now()
+    return tx.insert(conversations).values({
+      id: `conv-${randomUUID()}`, characterId, mode: 'preview',
+      createdAt: time, lastMessageAt: time,
+    }).returning().get()
+  })
 }

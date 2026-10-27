@@ -44,6 +44,11 @@ interface Window {
       ok: boolean
       code?: string
     }>
+    /** 发起试聊回合（草稿人设）；事件流与正式回合共用 onChatTurnEvent。 */
+    startPreviewTurn: (requestId: string, content: string, draft: unknown) => Promise<{
+      ok: boolean
+      code?: string
+    }>
     /** 请求停止当前活动回合。 */
     cancelChatTurn: (conversationId: string) => Promise<{
       ok: boolean

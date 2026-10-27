@@ -6,7 +6,9 @@
  */
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import type { BackendHandle } from '../desktop/backend'
-import { chatTurnCancelSchema, chatTurnRequestSchema, type SseTurnEvent } from '../shared/chat-turn'
+import {
+  chatTurnCancelSchema, chatTurnRequestSchema, previewTurnRequestSchema, type SseTurnEvent,
+} from '../shared/chat-turn'
 
 /** 推给界面的消息：frame 为 null 表示该回合的事件流已结束（无论成败）。 */
 export interface ChatStreamMessage {
@@ -80,36 +82,55 @@ export function registerChatStreamBridge(
     }
   }
 
-  ipcMain.handle('chat:turn-start', async (event, body: unknown) => {
-    if (!isChatPage(event)) return { ok: false, code: 'UNAUTHORIZED' }
-    const checked = chatTurnRequestSchema.safeParse(body)
-    if (!checked.success) return { ok: false, code: 'INVALID_INPUT' }
-    const backend = getBackend()
-    if (!backend) return { ok: false, code: 'BACKEND_NOT_READY' }
-    // 同一编号重复启动：沿用旧的中止控制器没有必要，直接顶替并断开旧的。
-    streams.get(checked.data.requestId)?.abort()
-    const controller = new AbortController()
-    streams.set(checked.data.requestId, controller)
-    try {
-      const response = await fetch(`http://127.0.0.1:${backend.port}/chat/turn`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-session-token': backend.token },
-        body: JSON.stringify(checked.data),
-        signal: controller.signal,
-      })
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null) as { code?: string } | null
-        streams.delete(checked.data.requestId)
-        // 后台的 code 原样转交（TURN_IN_PROGRESS 等），界面按它提示。
-        return { ok: false, code: payload?.code ?? `HTTP_${response.status}` }
+  /**
+   * 注册一个「回合起点」invoke 通道：正式与试聊只差路径与请求校验，
+   * 受理后的行为（受理即返回、后台泵流、断开取消）完全一致。
+   */
+  function registerTurnStart(
+    channel: string,
+    path: '/chat/turn' | '/chat/preview-turn',
+    validate: (body: unknown) => { ok: true; requestId: string } | { ok: false },
+  ): void {
+    ipcMain.handle(channel, async (event, body: unknown) => {
+      if (!isChatPage(event)) return { ok: false, code: 'UNAUTHORIZED' }
+      const checked = validate(body)
+      if (!checked.ok) return { ok: false, code: 'INVALID_INPUT' }
+      const backend = getBackend()
+      if (!backend) return { ok: false, code: 'BACKEND_NOT_READY' }
+      // 同一编号重复启动：直接顶替旧的并断开旧读取。
+      streams.get(checked.requestId)?.abort()
+      const controller = new AbortController()
+      streams.set(checked.requestId, controller)
+      try {
+        const response = await fetch(`http://127.0.0.1:${backend.port}${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-session-token': backend.token },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        })
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null) as { code?: string } | null
+          streams.delete(checked.requestId)
+          // 后台的 code 原样转交（TURN_IN_PROGRESS 等），界面按它提示。
+          return { ok: false, code: payload?.code ?? `HTTP_${response.status}` }
+        }
+        // invoke 到这里就返回；后续帧经 chat:turn-event 推送。界面必须先订阅再启动。
+        void pumpStream(event.sender, checked.requestId, response, controller)
+        return { ok: true }
+      } catch {
+        streams.delete(checked.requestId)
+        return { ok: false, code: 'BACKEND_UNREACHABLE' }
       }
-      // invoke 到这里就返回；后续帧经 chat:turn-event 推送。界面必须先订阅再启动。
-      void pumpStream(event.sender, checked.data.requestId, response, controller)
-      return { ok: true }
-    } catch {
-      streams.delete(checked.data.requestId)
-      return { ok: false, code: 'BACKEND_UNREACHABLE' }
-    }
+    })
+  }
+
+  registerTurnStart('chat:turn-start', '/chat/turn', (body) => {
+    const checked = chatTurnRequestSchema.safeParse(body)
+    return checked.success ? { ok: true, requestId: checked.data.requestId } : { ok: false }
+  })
+  registerTurnStart('chat:preview-turn-start', '/chat/preview-turn', (body) => {
+    const checked = previewTurnRequestSchema.safeParse(body)
+    return checked.success ? { ok: true, requestId: checked.data.requestId } : { ok: false }
   })
 
   ipcMain.handle('chat:turn-cancel', async (event, body: unknown) => {

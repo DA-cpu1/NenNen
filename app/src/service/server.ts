@@ -24,7 +24,10 @@ import {
 } from '../shared/character-schema'
 import { personaFromSections, personaSectionsAllEmpty } from '../shared/persona-format'
 import { chatHistoryQuerySchema, type ChatHistoryPage, type ChatHistoryQuery } from '../shared/chat-history'
-import { chatTurnCancelSchema, chatTurnRequestSchema, type ChatTurnRequest, type SseTurnEvent } from '../shared/chat-turn'
+import {
+  chatTurnCancelSchema, chatTurnRequestSchema, previewTurnRequestSchema,
+  type ChatTurnRequest, type PreviewTurnRequest, type SseTurnEvent,
+} from '../shared/chat-turn'
 import type {
   CharacterImagesUpdate,
   CharacterOverview,
@@ -66,6 +69,12 @@ export interface BackendOptions {
   readChatHistory?: (query: ChatHistoryQuery) => ChatHistoryPage
   /** 发起聊天回合：保存用户消息并返回事件流；同步阶段抛固定错误码。 */
   startChatTurn?: (request: ChatTurnRequest) => { userMessageId: string; events: AsyncGenerator<SseTurnEvent> }
+  /** 发起试聊回合：草稿人设随请求携带，preview 会话由后台解析/创建。 */
+  startPreviewTurn?: (request: PreviewTurnRequest) => {
+    userMessageId: string
+    conversationId: string
+    events: AsyncGenerator<SseTurnEvent>
+  }
   /** 请求取消指定会话的活动回合；没有活动回合返回 false。 */
   cancelChatTurn?: (conversationId: string) => boolean
   /** 数据库自测读写：由后台入口提供（打开的真库）；测试注入假函数。
@@ -149,6 +158,67 @@ function isAuthorized(req: IncomingMessage, token: string): boolean {
 function sendJson(res: ServerResponse, status: number, body: Record<string, unknown>): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify(body))
+}
+
+/**
+ * 聊天回合同步错误的固定翻译表：流开始前给正式状态码；原文错误一律
+ * INTERNAL，不带出正文。正式与试聊端点共用，口径不会漂移。
+ */
+const TURN_ERROR_MAPPING: Record<string, [number, string]> = {
+  E_DB_NOT_OPEN: [503, 'DB_UNAVAILABLE'],
+  E_EVE_UNAVAILABLE: [503, 'AGENT_UNAVAILABLE'],
+  E_TURN_IN_PROGRESS: [409, 'TURN_IN_PROGRESS'],
+  E_ALREADY_REPLIED: [409, 'ALREADY_REPLIED'],
+  E_REQUEST_CONFLICT: [409, 'REQUEST_CONFLICT'],
+  E_INVALID_MESSAGE: [400, 'EMPTY_MESSAGE'],
+  E_MESSAGE_TOO_LONG: [400, 'MESSAGE_TOO_LONG'],
+  E_CONVERSATION_NOT_FOUND: [404, 'CONVERSATION_NOT_FOUND'],
+  E_PREVIEW_NOT_ALLOWED: [403, 'PREVIEW_NOT_ALLOWED'],
+  E_INVALID_DRAFT_PERSONA: [400, 'INVALID_DRAFT'],
+  E_CHARACTER_NOT_FOUND: [404, 'CHARACTER_NOT_FOUND'],
+}
+
+/** 按翻译表回错误；查不到的按内部错误兜底。 */
+function sendTurnError(res: ServerResponse, code: string): void {
+  const [status, wireCode] = TURN_ERROR_MAPPING[code] ?? [500, 'INTERNAL']
+  sendJson(res, status, { ok: false, code: wireCode })
+}
+
+/**
+ * 聊天回合 SSE 转发的共用段：写头、断开取消、逐帧转发到流结束。
+ * 客户端断开（窗口关闭/渲染进程退出）按 04 §9 取消模型请求，不替没人
+ * 看的回合继续花钱；取消后事件流自然以 cancelled 帧收尾。
+ */
+async function relayTurnStream(
+  res: ServerResponse,
+  turn: { events: AsyncGenerator<SseTurnEvent> },
+  cancelActiveTurn: () => void,
+): Promise<void> {
+  // SSE 帧：一行 data: JSON 加空行。本地单界面消费，不做自动重连。
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-store',
+    connection: 'keep-alive',
+  })
+  let finished = false
+  res.on('close', () => {
+    if (finished) return
+    finished = true
+    cancelActiveTurn()
+    void turn.events.return(undefined).catch(() => { /* 已被取消时可能不再收尾 */ })
+  })
+  try {
+    for (;;) {
+      const step = await turn.events.next()
+      if (step.done) break
+      res.write(`data: ${JSON.stringify(step.value)}\n\n`)
+    }
+  } catch {
+    // 服务层已把失败转成帧；这条是最后兜底，不给半截流留悬念。
+    res.write(`data: ${JSON.stringify({ type: 'failed', code: 'INTERNAL' })}\n\n`)
+  }
+  finished = true
+  res.end()
 }
 
 /**
@@ -458,50 +528,32 @@ async function handleRequest(
     let turn: ReturnType<NonNullable<BackendOptions['startChatTurn']>>
     try { turn = options.startChatTurn(checked.data) }
     catch (error) {
-      // 只翻译固定错误码；原文错误一律 INTERNAL，不带出正文。
-      const code = error instanceof Error ? error.message : ''
-      const mapping: Record<string, [number, string]> = {
-        E_DB_NOT_OPEN: [503, 'DB_UNAVAILABLE'],
-        E_EVE_UNAVAILABLE: [503, 'AGENT_UNAVAILABLE'],
-        E_TURN_IN_PROGRESS: [409, 'TURN_IN_PROGRESS'],
-        E_ALREADY_REPLIED: [409, 'ALREADY_REPLIED'],
-        E_REQUEST_CONFLICT: [409, 'REQUEST_CONFLICT'],
-        E_INVALID_MESSAGE: [400, 'EMPTY_MESSAGE'],
-        E_MESSAGE_TOO_LONG: [400, 'MESSAGE_TOO_LONG'],
-        E_CONVERSATION_NOT_FOUND: [404, 'CONVERSATION_NOT_FOUND'],
-        E_PREVIEW_NOT_ALLOWED: [403, 'PREVIEW_NOT_ALLOWED'],
-      }
-      const [status, wireCode] = mapping[code] ?? [500, 'INTERNAL']
-      sendJson(res, status, { ok: false, code: wireCode })
+      sendTurnError(res, error instanceof Error ? error.message : '')
       return
     }
-    // SSE 帧：一行 data: JSON 加空行。本地单界面消费，不做自动重连；
-    // 断线按 04 §9 取消模型请求（取消后事件流自然以 cancelled 帧收尾）。
-    res.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-store',
-      connection: 'keep-alive',
-    })
-    let finished = false
-    res.on('close', () => {
-      // 客户端断开（窗口关闭/渲染进程退出）：没人看的回合不再继续花钱。
-      if (finished) return
-      finished = true
-      options.cancelChatTurn?.(checked.data.conversationId)
-      void turn.events.return(undefined).catch(() => { /* 已被取消时可能不再收尾 */ })
-    })
-    try {
-      for (;;) {
-        const step = await turn.events.next()
-        if (step.done) break
-        res.write(`data: ${JSON.stringify(step.value)}\n\n`)
-      }
-    } catch {
-      // 服务层已把失败转成帧；这条是最后兜底，不给半截流留悬念。
-      res.write(`data: ${JSON.stringify({ type: 'failed', code: 'INTERNAL' })}\n\n`)
+    await relayTurnStream(res, turn, () => options.cancelChatTurn?.(checked.data.conversationId))
+    return
+  }
+  // 试聊回合发起（T06⑪f2）：preview 会话与草稿人设都由后台把关——
+  // 界面只能给草稿和正文，选不了会话、也碰不到正式会话与正式记忆（H1）。
+  if (req.method === 'POST' && new URL(req.url ?? '/', 'http://127.0.0.1').pathname === '/chat/preview-turn') {
+    if (!options.startPreviewTurn) {
+      sendJson(res, 503, { ok: false, code: 'CHAT_UNAVAILABLE' })
+      return
     }
-    finished = true
-    res.end()
+    let body: unknown
+    try { body = await readJsonBody(req, CHAT_MAX_BODY_BYTES) }
+    catch { sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' }); return }
+    const checked = previewTurnRequestSchema.safeParse(body)
+    if (!checked.success) { sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' }); return }
+    let turn: ReturnType<NonNullable<BackendOptions['startPreviewTurn']>>
+    try { turn = options.startPreviewTurn(checked.data) }
+    catch (error) {
+      sendTurnError(res, error instanceof Error ? error.message : '')
+      return
+    }
+    // 会话编号随受理返回；断开取消与正式回合同一条路。
+    await relayTurnStream(res, turn, () => options.cancelChatTurn?.(turn.conversationId))
     return
   }
   // 取消当前回合：按会话编号取消；没有活动回合也回答成功（幂等），

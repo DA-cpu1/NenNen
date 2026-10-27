@@ -11,12 +11,14 @@ let server: BackendServer
 const token = 'chat-turn-http-token'
 /** 各用例换装的假回合实现；记录收到的请求以便断言。 */
 let startImpl: (request: ChatTurnRequest) => { userMessageId: string; events: AsyncGenerator<SseTurnEvent> }
+let previewImpl: (request: unknown) => { userMessageId: string; conversationId: string; events: AsyncGenerator<SseTurnEvent> }
 const cancelledConversations: string[] = []
 
 beforeEach(async () => {
   cancelledConversations.length = 0
   server = await startBackendServer(token, {
     startChatTurn: (request) => startImpl(request),
+    startPreviewTurn: (request) => previewImpl(request as never),
     cancelChatTurn: (conversationId) => {
       cancelledConversations.push(conversationId)
       return true
@@ -54,7 +56,7 @@ describe('聊天回合 HTTP 端点（T06⑪c2）', () => {
     startImpl = (request) => ({
       userMessageId: `user-${request.requestId}`,
       events: frames([
-        { type: 'saved', userMessageId: `user-${request.requestId}` },
+        { type: 'saved', userMessageId: `user-${request.requestId}`, conversationId: request.conversationId },
         { type: 'text', delta: '你' },
         { type: 'done', replyId: 'reply-1' },
       ]),
@@ -63,7 +65,7 @@ describe('聊天回合 HTTP 端点（T06⑪c2）', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toContain('text/event-stream')
     expect(parseFrames(await res.text())).toEqual([
-      { type: 'saved', userMessageId: 'user-r1' },
+      { type: 'saved', userMessageId: 'user-r1', conversationId: 'conv-1' },
       { type: 'text', delta: '你' },
       { type: 'done', replyId: 'reply-1' },
     ])
@@ -94,7 +96,7 @@ describe('聊天回合 HTTP 端点（T06⑪c2）', () => {
     let received = ''
     startImpl = (request) => {
       received = request.content
-      return { userMessageId: 'u', events: frames([{ type: 'saved', userMessageId: 'u' }]) }
+      return { userMessageId: 'u', events: frames([{ type: 'saved', userMessageId: 'u', conversationId: 'conv-1' }]) }
     }
     const long = '汉'.repeat(10_000)
     const res = await post('/chat/turn', { ...validBody, content: long })
@@ -108,7 +110,7 @@ describe('聊天回合 HTTP 端点（T06⑪c2）', () => {
     startImpl = () => ({
       userMessageId: 'u',
       events: (async function* generate() {
-        yield { type: 'saved', userMessageId: 'u' }
+        yield { type: 'saved', userMessageId: 'u', conversationId: 'conv-1' }
         await held
       })(),
     })
@@ -133,5 +135,47 @@ describe('聊天回合 HTTP 端点（T06⑪c2）', () => {
     expect(cancelledConversations).toEqual(['conv-9'])
     const bad = await post('/chat/turn/cancel', { conversationId: '' })
     expect(bad.status).toBe(400)
+  })
+
+  it('试聊端点：合法草稿以 SSE 转发，服务层拒草稿给 400 INVALID_DRAFT', async () => {
+    // 假实现复刻服务层的关键判断：分区/全文二选一，违反者抛固定码。
+    previewImpl = (request) => {
+      const draft = (request as { draft: { personaSections?: unknown; personaFullText?: unknown } }).draft
+      if ((draft.personaSections !== undefined) === (draft.personaFullText !== undefined)) {
+        throw new Error('E_INVALID_DRAFT_PERSONA')
+      }
+      return {
+        userMessageId: 'pu-1', conversationId: 'preview-1',
+        events: frames([
+          { type: 'saved', userMessageId: 'pu-1', conversationId: 'preview-1' },
+          { type: 'text', delta: '哼。' },
+          { type: 'done', replyId: 'pr-1' },
+        ]),
+      }
+    }
+    const good = await post('/chat/preview-turn', {
+      requestId: 'p1', content: '试聊',
+      draft: { personaFullText: '草稿人设', initialRelationship: '恋人' },
+    })
+    expect(good.status).toBe(200)
+    expect(parseFrames(await good.text())).toEqual([
+      { type: 'saved', userMessageId: 'pu-1', conversationId: 'preview-1' },
+      { type: 'text', delta: '哼。' },
+      { type: 'done', replyId: 'pr-1' },
+    ])
+    // 分区与全文同时出现：zod 只管形状，二选一由服务层草稿归一拒绝。
+    const bad = await post('/chat/preview-turn', {
+      requestId: 'p2', content: '试聊',
+      draft: {
+        personaSections: { core: '核心', speech: '习惯', background: '背景' },
+        personaFullText: '全文', initialRelationship: '恋人',
+      },
+    })
+    expect(bad.status).toBe(400)
+    expect(await bad.json()).toEqual({ ok: false, code: 'INVALID_DRAFT' })
+    // 结构性坏请求（缺关系字段）由 zod 拦下。
+    const malformed = await post('/chat/preview-turn', { requestId: 'p3', content: '试聊', draft: {} })
+    expect(malformed.status).toBe(400)
+    expect(await malformed.json()).toEqual({ ok: false, code: 'INVALID_INPUT' })
   })
 })

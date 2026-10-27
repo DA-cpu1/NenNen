@@ -55,6 +55,13 @@ beforeEach(async () => {
       response.end()
       return
     }
+    if (request.url === '/chat/preview-turn') {
+      turnRequests += 1
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.write('data: {"type":"saved","userMessageId":"pu-1","conversationId":"preview-1"}\n\n')
+      response.end()
+      return
+    }
     if (request.url === '/chat/turn/cancel') {
       cancelRequests += 1
       response.writeHead(200, { 'content-type': 'application/json' })
@@ -131,6 +138,20 @@ describe('流式聊天桥接（T06⑪d）', () => {
     expect(await handlers.get('chat:turn-start')!(event(), turnBody)).toEqual({ ok: true })
     await vi.waitFor(() => expect(pushed.at(-1)).toEqual({ requestId: 'r1', frame: null }))
     expect(pushed[0]).toEqual({ requestId: 'r1', frame: { type: 'saved', userMessageId: 'u1' } })
+  })
+
+  it('试聊起点走独立固定路径，帧与结束标记同样推送', async () => {
+    const body = {
+      requestId: 'p1', content: '试聊',
+      draft: { personaFullText: '草稿人设', initialRelationship: '恋人' },
+    }
+    expect(await handlers.get('chat:preview-turn-start')!(event(), body)).toEqual({ ok: true })
+    await vi.waitFor(() => expect(pushed).toHaveLength(2))
+    expect(pushed).toEqual([
+      { requestId: 'p1', frame: { type: 'saved', userMessageId: 'pu-1', conversationId: 'preview-1' } },
+      { requestId: 'p1', frame: null },
+    ])
+    expect(seenToken).toBe('stream-test-token')
   })
 
   it('取消转发到固定端点并回传结果；参数不合法直接拒绝', async () => {

@@ -74,6 +74,7 @@ function main(): void {
     limits: { modelWindowTokens: PROVISIONAL_MODEL_WINDOW_TOKENS },
   })
   options.startChatTurn = chatTurns.startTurn
+  options.startPreviewTurn = chatTurns.startPreviewTurn
   options.cancelChatTurn = chatTurns.cancelTurn
 
   /** 读共享记忆版本号。实现统一收在 data/epochs.ts（app_state 缺初始行
