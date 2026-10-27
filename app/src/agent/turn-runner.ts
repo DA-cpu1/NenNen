@@ -99,7 +99,7 @@ export async function* runFormalTurn(
   }
 
   // 消费事件流；总时限包在句柄外面（见 withTurnTimeout）。
-  const wrapped = withTurnTimeout(response, input.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS)
+  const wrapped = withTurnTimeout(response, input.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS, signal)
   return yield* consumeEveTurn(db, {
     response: wrapped, replyId: reply.id, runId: run.id,
     estimatedInputTokens: prepared.input.inputTokens,
@@ -112,11 +112,16 @@ export async function* runFormalTurn(
  * 消费层「先到先得」的终态规则会保住超时结论，随后真实到达的取消事件不改写它。
  * @param response 原始受理句柄（事件只能被读一遍，替身转手这份唯一性）
  * @param timeoutMs 总时限毫秒数
+ * @param signal 用户停止/退出的取消信号；中止时先请框架协作取消
  * @returns 可像原句柄一样迭代/取消的替身
  */
-function withTurnTimeout(response: MessageResponse, timeoutMs: number): MessageResponse {
+function withTurnTimeout(response: MessageResponse, timeoutMs: number, signal: AbortSignal): MessageResponse {
   /** 到点记号：用唯一的 symbol，和任何真实事件结果都不会撞。 */
   const expired = Symbol('turn-timeout')
+  /** 用户停止/退出时先请框架协作取消：优雅收场，也避免服务器留孤儿回合。 */
+  const onAbort = () => { void response.cancel().catch(() => { /* 取消失败仍按本地取消收尾。 */ }) }
+  if (signal.aborted) onAbort()
+  else signal.addEventListener('abort', onAbort, { once: true })
   return {
     cancel: () => response.cancel(),
     async *[Symbol.asyncIterator](): AsyncGenerator<MessageStreamEvent> {
@@ -146,8 +151,9 @@ function withTurnTimeout(response: MessageResponse, timeoutMs: number): MessageR
           yield raced.value
         }
       } finally {
-        // 流结束就停表：进程里不留到点空响的定时器。
+        // 流结束就停表、摘掉中止监听：不留到点空响的定时器与悬挂的监听器。
         if (timer !== undefined) clearTimeout(timer)
+        signal.removeEventListener('abort', onAbort)
       }
     },
   } as unknown as MessageResponse
