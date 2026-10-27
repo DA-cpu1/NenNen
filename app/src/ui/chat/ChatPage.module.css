@@ -82,40 +82,4 @@
 /* 角色资料读取失败时，重试真正重读父层资料，不让历史列表代替它假重试。 */
 .historyError { flex: 1; padding: 24px; color: var(--danger); font-size: 13px; }
 
-/* 当前只读阶段禁用输入；消息列表可以独立滚动，输入区固定在底部。 */
-.composer {
-  display: flex;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
-}
-
-.input {
-  flex: 1;
-  padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 13px;
-  background: var(--bg);
-  color: var(--ink);
-}
-
-.input:disabled {
-  background: var(--panel);
-}
-
-.send {
-  padding: 8px 18px;
-  border: none;
-  border-radius: 8px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.send:disabled {
-  background: var(--border);
-  color: var(--muted);
-  cursor: default;
-}
+/* 输入区（含实时回复条）由 ChatComposer.module.css 管理。 */

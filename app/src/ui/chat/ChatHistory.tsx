@@ -10,6 +10,8 @@ import styles from './ChatHistory.module.css'
 interface ChatHistoryProps {
   characterId?: string
   displayName: string
+  /** 父层的刷新信号：发送/回合落定时 +1，列表重读最近一页。 */
+  refreshKey?: number
 }
 
 /** 消息时间使用设备本地时区显示；库里仍保存统一的 UTC 毫秒。 */
@@ -20,7 +22,7 @@ const timeFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeSt
  * @param props 当前角色编号与显示名
  * @returns 只读消息列表、分页按钮与读取状态
  */
-export default function ChatHistory({ characterId, displayName }: ChatHistoryProps) {
+export default function ChatHistory({ characterId, displayName, refreshKey }: ChatHistoryProps) {
   const [page, setPage] = useState<ChatHistoryPage | null>(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -58,8 +60,9 @@ export default function ChatHistory({ characterId, displayName }: ChatHistoryPro
     }
     void readInitial()
     // 页面卸载后，旧回包即使晚到也不能再改动它的状态。
+    // refreshKey 变化（发送或回合落定）同样整体重读，回到最近一页。
     return () => { generation.current++ }
-  }, [characterId, reloadAttempt])
+  }, [characterId, reloadAttempt, refreshKey])
 
   useEffect(() => {
     if (scrollLatest.current && scrollArea.current) {

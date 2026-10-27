@@ -1,0 +1,115 @@
+/**
+ * 聊天输入区样式：输入行 + 进行中回复的实时条（设计沿用 full-ui-v1）。
+ */
+
+/* 底部固定输入区：纵向排「实时条 / 提示行 / 输入行」。 */
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* 进行中回复的实时显示：浅底圆角条，随文字增长自动变高（限高滚动）。 */
+.live {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  max-height: 30%;
+  overflow-y: auto;
+}
+
+.liveText {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink);
+  /* 逐字到达时保持看到最新一段。 */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 等待/停止中的轻提示：不抢内容风头。 */
+.hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* 失败提示 + 重试按钮一行。 */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+}
+
+.error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.retry {
+  padding: 3px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* 输入行。 */
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+.input {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.input:disabled {
+  background: var(--panel);
+}
+
+.send {
+  padding: 8px 18px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.send:disabled {
+  background: var(--border);
+  color: var(--muted);
+  cursor: default;
+}
+
+/* 停止按钮：描边样式与发送区分，表达「中断」而不是「提交」。 */
+.stop {
+  padding: 8px 18px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.stop:disabled {
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: default;
+}
