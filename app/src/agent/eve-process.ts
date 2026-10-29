@@ -9,6 +9,7 @@ import { mkdir, mkdtemp } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { cleanupEveRuntimeDirectory } from './eve-runtime'
 
 /** eve 服务的工作凭证；令牌只在后台内存里，不能交给界面。 */
 export interface EveHandle {
@@ -50,20 +51,28 @@ function choosePort(): Promise<number> {
 /**
  * 关闭子进程并等它真正退出；重复调用共用同一次关闭。
  * @param child 本次启动的 eve 子进程
+ * @param runtimeRoot 本次运行目录的固定父目录
+ * @param dataDir 只属于本次进程的 run-目录
  * @returns 可重复调用的异步关闭函数
  */
-function makeStop(child: ChildProcess): () => Promise<void> {
-  let stopped: Promise<void> | undefined
+export function makeEveStop(child: ChildProcess, runtimeRoot: string, dataDir: string): () => Promise<void> {
+  const exited = new Promise<void>((resolve) => {
+    if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) resolve()
+    else child.once('exit', () => resolve())
+  })
+  // 正常停止和自行退出都走同一个回收；必须先见到 exit，才允许删除执行文件。
+  const stopped = exited.then(() => cleanupEveRuntimeDirectory(runtimeRoot, dataDir))
+  // 自行退出时暂时没有调用方等待；先接住拒绝，stop() 仍会返回同一固定码错误。
+  void stopped.catch(() => {})
+  let stopRequested = false
   return () => {
-    stopped ??= new Promise<void>((resolve) => {
-      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
-        resolve()
-        return
+    if (!stopRequested) {
+      stopRequested = true
+      if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+        child.stdin?.destroy()
+        child.kill()
       }
-      child.once('exit', () => resolve())
-      child.stdin?.destroy()
-      child.kill()
-    })
+    }
     return stopped
   }
 }
@@ -82,8 +91,8 @@ export async function startEve(options: EveStartOptions): Promise<EveHandle> {
   const token = randomBytes(32).toString('base64url')
   const runtimeRoot = join(options.appDir, '.eve/smoke')
   await mkdir(runtimeRoot, { recursive: true })
-  // 技术贯通每次用干净目录，防止框架重发上次未完成的付费请求。
-  // 正式会话怎样从 SQLite 重建上下文，在 T04/T06 实现。
+  // 每次用干净目录，防止框架重发上次请求；聊天只从 SQLite 重建。
+  // 目录由这个进程捕获，退出后只回收这一项，不扫描清理其他 run-目录。
   const dataDir = await mkdtemp(join(runtimeRoot, 'run-'))
   const child = spawn(process.execPath, [wrapper, entry], {
     cwd: options.appDir,
@@ -107,7 +116,7 @@ export async function startEve(options: EveStartOptions): Promise<EveHandle> {
     stdio: ['pipe', 'ignore', 'ignore'],
     windowsHide: true,
   })
-  const stop = makeStop(child)
+  const stop = makeEveStop(child, runtimeRoot, dataDir)
   let failed = false
   child.once('error', () => { failed = true })
   child.stdin?.on('error', () => { failed = true })
