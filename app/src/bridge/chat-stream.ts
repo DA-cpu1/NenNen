@@ -10,7 +10,7 @@ import {
   chatTurnCancelSchema, chatTurnRequestSchema, previewTurnRequestSchema, type SseTurnEvent,
 } from '../shared/chat-turn'
 
-/** 推给界面的消息：frame 为 null 表示该回合的事件流已结束（无论成败）。 */
+/** 推给界面的消息：没有收到终态就断流时，用 frame:null 通知界面收尾。 */
 export interface ChatStreamMessage {
   requestId: string
   frame: SseTurnEvent | null
@@ -49,11 +49,13 @@ export function registerChatStreamBridge(
       && event.senderFrame === event.sender.mainFrame && event.senderFrame?.url === expected.url
   }
 
-  /** 把 SSE 响应体逐块读出、解析成帧并推给发起页面；结束时补发结束标记。 */
+  /** 把 SSE 响应体逐块读出并推给发起页面；缺终态的断流另补结束标记。 */
   async function pumpStream(
     sender: WebContents, requestId: string, response: Response, controller: AbortController,
   ): Promise<void> {
     const reader = response.body?.getReader()
+    // failed 等终态本身已经让界面收尾；再补 null 会误伤沿同编号开始的重试。
+    let terminalSent = false
     try {
       if (!reader) throw new Error('no body')
       const decoder = new TextDecoder()
@@ -68,7 +70,8 @@ export function registerChatStreamBridge(
           if (index < 0) break
           const frame = parseSseBlock(buffer.slice(0, index))
           buffer = buffer.slice(index + 2)
-          if (frame !== null && !sender.isDestroyed()) {
+          if (frame !== null && !terminalSent && streams.get(requestId) === controller && !sender.isDestroyed()) {
+            terminalSent = frame.type === 'done' || frame.type === 'failed' || frame.type === 'cancelled'
             sender.send('chat:turn-event', { requestId, frame } satisfies ChatStreamMessage)
           }
         }
@@ -76,9 +79,11 @@ export function registerChatStreamBridge(
     } catch {
       // 读取中断（中止/网络断）：不需要转发错误详情，结束标记就是界面的收尾信号。
     } finally {
-      streams.delete(requestId)
+      // 旧请求可能在重试开始后才结束，不能删掉新请求正在使用的控制器。
+      const current = streams.get(requestId) === controller
+      if (current) streams.delete(requestId)
       // 页面可能已经销毁（窗口被真正关闭）：发送前必须检查，否则会抛错。
-      if (!sender.isDestroyed()) sender.send('chat:turn-event', { requestId, frame: null })
+      if (current && !terminalSent && !sender.isDestroyed()) sender.send('chat:turn-event', { requestId, frame: null })
     }
   }
 
@@ -110,7 +115,7 @@ export function registerChatStreamBridge(
         })
         if (!response.ok) {
           const payload = await response.json().catch(() => null) as { code?: string } | null
-          streams.delete(checked.requestId)
+          if (streams.get(checked.requestId) === controller) streams.delete(checked.requestId)
           // 后台的 code 原样转交（TURN_IN_PROGRESS 等），界面按它提示。
           return { ok: false, code: payload?.code ?? `HTTP_${response.status}` }
         }
@@ -118,7 +123,7 @@ export function registerChatStreamBridge(
         void pumpStream(event.sender, checked.requestId, response, controller)
         return { ok: true }
       } catch {
-        streams.delete(checked.requestId)
+        if (streams.get(checked.requestId) === controller) streams.delete(checked.requestId)
         return { ok: false, code: 'BACKEND_UNREACHABLE' }
       }
     })

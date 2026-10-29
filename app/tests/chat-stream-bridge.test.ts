@@ -3,7 +3,7 @@
  * 后台错误透传与取消转发。用模拟 ipcMain 与本机假后台，不启动 Electron。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createServer, type Server } from 'node:http'
+import { createServer, type Server, type ServerResponse } from 'node:http'
 import type { IpcMainInvokeEvent, WebContents } from 'electron'
 import type { BackendHandle } from '../src/desktop/backend'
 import type { ChatStreamMessage } from '../src/bridge/chat-stream'
@@ -15,13 +15,14 @@ vi.mock('electron', () => ({ ipcMain: {
 import { registerChatStreamBridge, parseSseBlock } from '../src/bridge/chat-stream'
 
 /** 假后台的行为开关与请求观察。 */
-let behavior: 'ok' | 'conflict' | 'drop-mid'
+let behavior: 'ok' | 'conflict' | 'drop-mid' | 'retry-race'
 let turnRequests: number
 let cancelRequests: number
 let seenToken: string | undefined
 let server: Server
 let port = 0
 const pushed: ChatStreamMessage[] = []
+const heldResponses: ServerResponse[] = []
 
 beforeEach(async () => {
   behavior = 'ok'
@@ -29,6 +30,7 @@ beforeEach(async () => {
   cancelRequests = 0
   seenToken = undefined
   pushed.length = 0
+  heldResponses.length = 0
   handlers.clear()
   server = createServer((request, response) => {
     seenToken = request.headers['x-session-token'] as string | undefined
@@ -40,6 +42,15 @@ beforeEach(async () => {
         return
       }
       response.writeHead(200, { 'content-type': 'text/event-stream' })
+      if (behavior === 'retry-race') {
+        // 第一次先失败但不关连接，故意让它的 finally 落在第二次启动之后。
+        // 第二次也先保持打开；第三次启动必须仍能找到并取消第二次的控制器。
+        heldResponses.push(response)
+        response.write(turnRequests === 1
+          ? 'data: {"type":"failed","code":"E_FIXED_FAILURE"}\n\n'
+          : `data: {"type":"text","delta":"第${turnRequests}次"}\n\n`)
+        return
+      }
       if (behavior === 'drop-mid') {
         // 先给出一帧、等客户端真正开始收流后再摧毁连接：模拟流中途崩溃。
         // （同 tick 摧毁的话 fetch 连响应头都收不到，那是「未开始」的另一条路径。）
@@ -113,16 +124,35 @@ describe('流式聊天桥接（T06⑪d）', () => {
     expect(cancelRequests).toBe(0)
   })
 
-  it('合法启动后逐帧推送，流结束补发结束标记；令牌只在请求头', async () => {
+  it('合法启动后逐帧推送，终态本身即为结束；令牌只在请求头', async () => {
     expect(await handlers.get('chat:turn-start')!(event(), turnBody)).toEqual({ ok: true })
-    await vi.waitFor(() => expect(pushed).toHaveLength(4))
+    await vi.waitFor(() => expect(pushed).toHaveLength(3))
     expect(pushed).toEqual([
       { requestId: 'r1', frame: { type: 'saved', userMessageId: 'u1' } },
       { requestId: 'r1', frame: { type: 'text', delta: '你' } },
       { requestId: 'r1', frame: { type: 'done', replyId: 'r1' } },
-      { requestId: 'r1', frame: null },
     ])
     expect(seenToken).toBe('stream-test-token')
+  })
+
+  it('同编号重试时，旧流的迟到结束不能结束新流或删掉新取消控制器', async () => {
+    behavior = 'retry-race'
+    expect(await handlers.get('chat:turn-start')!(event(), turnBody)).toEqual({ ok: true })
+    await vi.waitFor(() => expect(pushed.at(-1)?.frame?.type).toBe('failed'))
+    expect(await handlers.get('chat:turn-start')!(event(), turnBody)).toEqual({ ok: true })
+    await vi.waitFor(() => expect(pushed.at(-1)?.frame).toEqual({ type: 'text', delta: '第2次' }))
+    await vi.waitFor(() => expect(heldResponses[0].destroyed).toBe(true))
+    expect(pushed.some((message) => message.frame === null)).toBe(false)
+    // 旧 finally 如果删了新控制器，第三次就无法断开第二次；检查实际连接被关。
+    expect(await handlers.get('chat:turn-start')!(event(), turnBody)).toEqual({ ok: true })
+    await vi.waitFor(() => expect(heldResponses[1].destroyed).toBe(true))
+    await vi.waitFor(() => expect(pushed.at(-1)?.frame).toEqual({ type: 'text', delta: '第3次' }))
+    expect(pushed.some((message) => message.frame === null)).toBe(false)
+    heldResponses[2].write('data: {"type":"done","replyId":"reply-3"}\n\n')
+    // 同一块里终态后还夹着文字，也不能再被推到界面。
+    heldResponses[2].end('data: {"type":"text","delta":"迟到文字"}\n\n')
+    await vi.waitFor(() => expect(pushed.at(-1)?.frame).toEqual({ type: 'done', replyId: 'reply-3' }))
+    expect(pushed.some((message) => message.frame === null)).toBe(false)
   })
 
   it('后台同步错误原样透传，不推送任何帧', async () => {
