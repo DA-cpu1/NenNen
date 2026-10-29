@@ -11,7 +11,7 @@ import { initializeFirstCharacter } from '../src/data/character-init'
 import { saveUserMessage, createAssistantReply } from '../src/data/messages'
 import { startAgentRun } from '../src/data/agent-runs'
 import { agentRuns, characterVersions, messages } from '../src/data/tables'
-import { consumeEveTurn, type TurnEvent, type TurnOutcome } from '../src/agent/eve-events'
+import { consumeEveTurn, finalizeTurnWrite, type TurnEvent, type TurnOutcome } from '../src/agent/eve-events'
 import type { MessageResponse } from 'eve/client'
 
 let companion: CompanionDb
@@ -328,10 +328,11 @@ describe('eve 回合事件消费（T06⑪a）', () => {
     ])
     expect(outcome).toMatchObject({ status: 'failed', finalText: '完整回复' })
     expect(replyRow()).toMatchObject({ status: 'streaming', content: '完整回复' })
-    expect(runRow()).toMatchObject({ status: 'failed', errorCode: 'E_REPLY_SAVE_FAILED', inputTokens: 20, outputTokens: 3 })
+    expect(runRow()).toMatchObject({ status: 'running', errorCode: null, inputTokens: null, outputTokens: null })
+    expect(outcome.pendingWrite).toMatchObject({ status: 'completed', finalText: '完整回复', usage: { inputTokens: 20, outputTokens: 3 } })
   })
 
-  it('回复已保存但账本 UPDATE 失败时，禁止 done 并明确用量未保存', async () => {
+  it('账本 UPDATE 失败时，回复终态一同回滚，禁止 done 并明确用量未保存', async () => {
     companion.sqlite.exec(`
       CREATE TRIGGER fail_run_completion BEFORE UPDATE ON agent_runs
       BEGIN SELECT RAISE(ABORT, 'fixed-test-failure'); END;
@@ -344,7 +345,7 @@ describe('eve 回合事件消费（T06⑪a）', () => {
       { type: 'text', delta: '完整回复' }, { type: 'failed', code: 'E_RUN_SAVE_FAILED' },
     ])
     expect(outcome).toMatchObject({ status: 'failed', finalText: '完整回复' })
-    expect(replyRow()).toMatchObject({ status: 'completed', content: '完整回复' })
+    expect(replyRow()).toMatchObject({ status: 'streaming', content: '完整回复' })
     expect(runRow()).toMatchObject({ status: 'running', inputTokens: null, outputTokens: null })
   })
 
@@ -355,10 +356,17 @@ describe('eve 回合事件消费（T06⑪a）', () => {
       BEGIN SELECT RAISE(ABORT, 'fixed-test-failure'); END;
     `)
     const { response } = fakeResponse([appended('半截'), turnFailed('E_PROVIDER_DOWN')])
-    const { events } = await drive(consumeEveTurn(companion.db, {
+    const { events, outcome } = await drive(consumeEveTurn(companion.db, {
       response, replyId, runId, estimatedInputTokens: 100,
     }))
     expect(events.at(-1)).toEqual({ type: 'failed', code: 'E_REPLY_SAVE_FAILED' })
+    expect(runRow()).toMatchObject({ status: 'running', errorCode: null })
+    expect(outcome.pendingWrite).toMatchObject({ status: 'failed', errorCode: 'E_PROVIDER_DOWN' })
+    companion.sqlite.exec('DROP TRIGGER fail_reply_failure')
+    const retried = finalizeTurnWrite(companion.db, outcome.pendingWrite!)
+    expect(retried.event).toEqual({ type: 'failed', code: 'E_PROVIDER_DOWN' })
     expect(runRow()).toMatchObject({ status: 'failed', errorCode: 'E_PROVIDER_DOWN' })
+    // 重放同一份写入不新增行、不改变第一次保存的终态和用量。
+    expect(finalizeTurnWrite(companion.db, outcome.pendingWrite!)).toEqual(retried)
   })
 })

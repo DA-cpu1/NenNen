@@ -13,7 +13,7 @@ import { ensurePreviewConversation } from '../data/conversations'
 import { runFormalTurn, runPreviewTurn } from '../agent/turn-runner'
 import type { ModelInputLimits } from '../agent/context-budget'
 import type { EveHandle } from '../agent/eve-process'
-import type { TurnEvent, TurnOutcome } from '../agent/eve-events'
+import { finalizeTurnWrite, type PendingTurnWrite, type TurnEvent, type TurnOutcome } from '../agent/eve-events'
 import { COMMON_FACT_RULES } from '../shared/character-sample'
 import {
   resolvePreviewDraft, type ChatTurnRequest, type PreviewTurnRequest, type SseTurnEvent,
@@ -79,6 +79,15 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
   // conversationId → 该回合的取消控制器。登记即占用：新的同会话请求在
   // 保存消息之前就被挡下，不会出现两轮并发的模型调用。
   const active = new Map<string, AbortController>()
+  // 只临时保留尚未写成的结果，不写日志；同一请求重试时先补写，不能再花一次模型钱。
+  const pendingWrites = new Map<string, PendingTurnWrite>()
+
+  /** 保存重试没有模型阶段，只把内存里的原结果再交给同一组落库检查。 */
+  async function* replayWrite(db: BetterSQLite3Database, write: PendingTurnWrite): AsyncGenerator<TurnEvent, TurnOutcome> {
+    const finalized = finalizeTurnWrite(db, write)
+    yield finalized.event
+    return finalized.outcome
+  }
 
   /** 已成功回复的消息不再发起第二次模型调用；重试入口只对失败/取消开放。 */
   function assertNotAnswered(db: BetterSQLite3Database, userMessageId: string): void {
@@ -103,11 +112,19 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
       try {
         yield { type: 'saved', userMessageId, conversationId }
         const runner = runStart(controller.signal)
+        let terminalEvent: TurnEvent | undefined
         for (;;) {
           const step = await runner.next()
-          if (step.done) break
+          if (step.done) {
+            if (step.value.pendingWrite) pendingWrites.set(userMessageId, step.value.pendingWrite)
+            else pendingWrites.delete(userMessageId)
+            // 先接住待补写资料，再把保存失败交给界面；断线不会丢掉这次结果。
+            if (terminalEvent) yield terminalEvent as SseTurnEvent
+            break
+          }
           // Agent 层的 TurnEvent 与线上帧形状一致，这里原样转发。
-          yield step.value as SseTurnEvent
+          if (step.value.type === 'text') yield step.value as SseTurnEvent
+          else terminalEvent = step.value
         }
       } catch (error) {
         const code = error instanceof Error && /^E_[A-Z0-9_]+$/.test(error.message) ? error.message : 'E_TURN_FAILED'
@@ -123,12 +140,21 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     conversationId: string,
     requestId: string,
     content: string,
-  ): { db: BetterSQLite3Database; eve: EveHandle; savedMessageId: string } {
+  ): { db: BetterSQLite3Database; eve: EveHandle | undefined; savedMessageId: string; pendingWrite?: PendingTurnWrite } {
     const db = deps.getDb()
     if (!db) throw new Error('E_DB_NOT_OPEN')
+    if (active.has(conversationId)) throw new Error('E_TURN_IN_PROGRESS')
+    const existing = db.select().from(messages).where(and(
+      eq(messages.conversationId, conversationId), eq(messages.clientRequestId, requestId),
+    )).get()
+    const pendingWrite = existing && pendingWrites.get(existing.id)
+    if (existing && pendingWrite) {
+      if (existing.role !== 'user' || existing.content !== content) throw new Error('E_REQUEST_CONFLICT')
+      // 补写不依赖 eve 仍在运行；即使模型后台已退出，也能把已收到的答案存好。
+      return { db, eve: undefined, savedMessageId: existing.id, pendingWrite }
+    }
     const eve = deps.getEve()
     if (!eve) throw new Error('E_EVE_UNAVAILABLE')
-    if (active.has(conversationId)) throw new Error('E_TURN_IN_PROGRESS')
     // 落库带防重：同编号同正文返回原消息；同编号换正文报冲突。
     const saved = saveUserMessage(db, { conversationId, requestId, content })
     assertNotAnswered(db, saved.message.id)
@@ -146,13 +172,13 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     },
 
     startTurn: (request) => {
-      const { db, eve, savedMessageId } = beginTurn(request.conversationId, request.requestId, request.content)
+      const { db, eve, savedMessageId, pendingWrite } = beginTurn(request.conversationId, request.requestId, request.content)
       const controller = new AbortController()
       active.set(request.conversationId, controller)
       return {
         userMessageId: savedMessageId,
         events: guardedEvents(request.conversationId, savedMessageId, controller,
-          (signal) => runFormalTurn(db, eve, {
+          (signal) => pendingWrite ? replayWrite(db, pendingWrite) : runFormalTurn(db, eve!, {
             conversationId: request.conversationId, userMessageId: savedMessageId,
             commonRules: COMMON_RULES_TEXT, limits: deps.limits,
             model: MODEL_NAME, provider: PROVIDER_NAME,
@@ -170,14 +196,14 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
       if (!character) throw new Error('E_CHARACTER_NOT_FOUND')
       // preview 会话由后台解析/创建：界面不能指定会话，也不能借试聊碰正式会话。
       const conversation = ensurePreviewConversation(peekDb, character.id)
-      const { db, eve, savedMessageId } = beginTurn(conversation.id, request.requestId, request.content)
+      const { db, eve, savedMessageId, pendingWrite } = beginTurn(conversation.id, request.requestId, request.content)
       const controller = new AbortController()
       active.set(conversation.id, controller)
       return {
         userMessageId: savedMessageId,
         conversationId: conversation.id,
         events: guardedEvents(conversation.id, savedMessageId, controller,
-          (signal) => runPreviewTurn(db, eve, {
+          (signal) => pendingWrite ? replayWrite(db, pendingWrite) : runPreviewTurn(db, eve!, {
             conversationId: conversation.id, userMessageId: savedMessageId,
             commonRules: COMMON_RULES_TEXT, draft, limits: deps.limits,
             model: MODEL_NAME, provider: PROVIDER_NAME,

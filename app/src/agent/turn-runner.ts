@@ -9,10 +9,10 @@ import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { and, eq, inArray } from 'drizzle-orm'
 import type { MessageResponse, MessageStreamEvent } from 'eve/client'
 import { messages, agentRuns } from '../data/tables'
-import { createAssistantReply, updateAssistantReply } from '../data/messages'
-import { startAgentRun, finishAgentRun } from '../data/agent-runs'
+import { createAssistantReply } from '../data/messages'
+import { startAgentRun } from '../data/agent-runs'
 import { prepareEveTurn, preparePreviewEveTurn, sendPreparedEveTurn, type PreparedEveTurn } from './eve-turn'
-import { consumeEveTurn, type TurnEvent, type TurnOutcome } from './eve-events'
+import { consumeEveTurn, finalizeTurnWrite, type TurnEvent, type TurnOutcome } from './eve-events'
 import type { EveHandle } from './eve-process'
 import type { ModelInputLimits } from './context-budget'
 import type { BuildTurnContextInput } from './turn-context'
@@ -99,18 +99,13 @@ async function* runTurn(
     })
 
     /** 发送阶段失败/中止时的收尾：回复行与账本一起进终态，不留进行中悬案。 */
-    function closeOnSendFailure(code: string, cancelled: boolean, now?: number): void {
-      try {
-        updateAssistantReply(db, { messageId: reply.id, content: '', status: cancelled ? 'cancelled' : 'failed', now })
-      } catch { /* 库也坏时留给启动恢复；错误码仍交给界面。 */ }
-      try {
-        finishAgentRun(db, {
-          runId: run.id, status: cancelled ? 'cancelled' : 'failed',
-          // 请求可能已被对方受理，用量不明：按准备阶段的输入估算兜底，绝不能记零。
-          usage: { inputTokens: Math.max(1, prepared.input.inputTokens), outputTokens: 1, estimated: true },
-          errorCode: cancelled ? undefined : code, now,
-        })
-      } catch { /* 同上。 */ }
+    function closeOnSendFailure(code: string, cancelled: boolean) {
+      return finalizeTurnWrite(db, {
+        replyId: reply.id, runId: run.id, status: cancelled ? 'cancelled' : 'failed', finalText: '',
+        // 请求可能已被对方受理，用量不明：按准备阶段的输入估算兜底，绝不能记零。
+        usage: { inputTokens: Math.max(1, prepared.input.inputTokens), outputTokens: 1, estimated: true },
+        errorCode: cancelled ? undefined : code,
+      })
     }
 
     let response: MessageResponse
@@ -123,14 +118,9 @@ async function* runTurn(
       response = await Promise.race([sending, interruption])
     } catch (error) {
       const code = error instanceof Error ? error.message : ''
-      if (code === 'E_CANCELLED') {
-        closeOnSendFailure(code, true)
-        yield { type: 'cancelled' }
-        return { status: 'cancelled', finalText: '', usageEstimated: true }
-      }
-      closeOnSendFailure(code || 'E_EVE_SEND_FAILED', false)
-      yield { type: 'failed', code: code || 'E_EVE_SEND_FAILED' }
-      return { status: 'failed', finalText: '', usageEstimated: true }
+      const finalized = closeOnSendFailure(code || 'E_EVE_SEND_FAILED', code === 'E_CANCELLED')
+      yield finalized.event
+      return finalized.outcome
     }
 
     // 准备阶段已经用掉的时间不能重新获得；事件流只拿截止前剩余的毫秒数。

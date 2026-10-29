@@ -139,15 +139,18 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
     const api = window.appApi
     if (!api?.onChatTurnEvent || !api.startChatTurn || !api.startPreviewTurn) {
       setErrorCode('CHANNEL_MISSING')
+      setRetry(payload)
       return
     }
     active.current = payload
     conversationId.current = null
     phaseRef.current = 'sending'
     callbacks.current.onBusyChange?.(true)
-    replyText.current = ''
+    // 补写失败的重试没有新模型文字，继续留住原结果，不能一点重试就抹掉它。
+    const retainedText = errorCode === 'E_REPLY_SAVE_FAILED' || errorCode === 'E_RUN_SAVE_FAILED' ? replyText.current : ''
+    replyText.current = retainedText
     setPhase('sending')
-    setStreamText('')
+    setStreamText(retainedText)
     setErrorCode(null)
     setRetry(null)
     setWaitingHint(false)

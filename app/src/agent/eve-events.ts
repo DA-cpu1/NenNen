@@ -2,12 +2,12 @@
  * 消费一次 eve 回合的事件流：把框架事件翻译成数据库里的回复状态与用量记账。
  * 上一步（eve-turn）只拿到「受理句柄」，模型还没说话；逐段到达的文字、成败
  * 和用量都在这里落地。事件流像一根水管——读一段、存一段，读完才定终态。
- * 这里只做翻译和落库，不重发请求、不补写用户消息；重试由编排层另起一轮。
+ * 这里只做翻译和落库，不重发请求、不补写用户消息；保存失败可用原结果单独补写。
  */
 import { Buffer } from 'node:buffer'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import type { MessageResponse } from 'eve/client'
-import { finishAgentRun } from '../data/agent-runs'
+import { finishAgentRun, type FinishAgentRunInput } from '../data/agent-runs'
 import { updateAssistantReply } from '../data/messages'
 
 /** 04 §2：每轮最多 3 次模型生成；额度在程序手里，不能由模型自行放宽。 */
@@ -27,6 +27,51 @@ export interface TurnOutcome {
   finalText: string
   /** 用量是否为保守估算；true 表示供应商没有报告精确数字。 */
   usageEstimated: boolean
+  /** 保存失败时留在服务内存里；重试只补写这份结果，不重新请求模型。 */
+  pendingWrite?: PendingTurnWrite
+}
+
+/** 一次模型结果的待落库资料；都是普通值，不保存框架句柄或数据库连接。 */
+export interface PendingTurnWrite {
+  replyId: string
+  runId: string
+  status: TurnOutcome['status']
+  finalText: string
+  usage: FinishAgentRunInput['usage']
+  errorCode?: string
+}
+
+/**
+ * 把同一次结果的回复终态和用量账本一起写成；任一写失败，两项一起撤回。
+ * 这份资料可以原样重放，数据层会复用相同终态，避免重试多记一次用量。
+ * @param db 后台数据库连接
+ * @param write 原模型结果、回复编号、运行编号与用量
+ * @returns 终态事件及汇总；失败时带原始待写资料，调用方可稍后只重试保存
+ */
+export function finalizeTurnWrite(
+  db: BetterSQLite3Database,
+  write: PendingTurnWrite,
+): { event: TurnEvent; outcome: TurnOutcome } {
+  let saveErrorCode = 'E_REPLY_SAVE_FAILED'
+  try {
+    db.transaction((tx) => {
+      updateAssistantReply(tx, { messageId: write.replyId, content: write.finalText, status: write.status })
+      saveErrorCode = 'E_RUN_SAVE_FAILED'
+      finishAgentRun(tx, {
+        runId: write.runId, status: write.status, usage: write.usage,
+        errorCode: write.status === 'failed' ? write.errorCode ?? 'E_TURN_FAILED' : undefined,
+      })
+    })
+  } catch {
+    return {
+      event: { type: 'failed', code: saveErrorCode },
+      outcome: { status: 'failed', finalText: write.finalText, usageEstimated: write.usage.estimated, pendingWrite: write },
+    }
+  }
+  const event: TurnEvent = write.status === 'completed'
+    ? { type: 'done', replyId: write.replyId }
+    : write.status === 'cancelled' ? { type: 'cancelled' } : { type: 'failed', code: write.errorCode ?? 'E_TURN_FAILED' }
+  return { event, outcome: { status: write.status, finalText: write.finalText, usageEstimated: write.usage.estimated } }
 }
 
 /** 消费一次已受理回合所需的资料。 */
@@ -71,19 +116,16 @@ export async function* consumeEveTurn(
   let stepUsage = { inputTokens: 0, outputTokens: 0 }
   let terminal: TurnOutcome['status'] | undefined
   let errorCode: string | undefined
-  let storageErrorCode: string | undefined
-  let terminalSaveErrorCode: string | undefined
+  let streamingWriteFailed = false
 
   const currentText = () => settledText + streamingText
 
-  /** 进行中的落库只更新全文与状态；失败时记住错误码，不让流式断在半路抛出。 */
+  /** 进行中的落库只更新全文与状态；失败后等最后一次整段保存，不让文字断在半路。 */
   function persistStreaming(): void {
-    if (storageErrorCode !== undefined) return
+    if (streamingWriteFailed) return
     try {
       updateAssistantReply(db, { messageId: input.replyId, content: currentText(), status: 'streaming' })
-    } catch (error) {
-      storageErrorCode = error instanceof Error && error.message.startsWith('E_') ? error.message : 'E_STORAGE_UNAVAILABLE'
-    }
+    } catch { streamingWriteFailed = true }
   }
 
   /** 请求框架协作取消；取消本身失败不改变已定的终态。 */
@@ -185,27 +227,7 @@ export async function* consumeEveTurn(
     terminal = 'failed'
     errorCode = 'E_TURN_STREAM_ENDED'
   }
-  // 落库中途失败（如库只读）：终态改为失败，优先保留原始存储错误码。
-  if (storageErrorCode !== undefined && terminal !== 'cancelled') {
-    terminal = 'failed'
-    errorCode = errorCode ?? storageErrorCode
-  }
-
   const finalText = currentText()
-  try {
-    if (terminal === 'completed') {
-      updateAssistantReply(db, { messageId: input.replyId, content: finalText, status: 'completed' })
-    } else if (terminal === 'cancelled') {
-      updateAssistantReply(db, { messageId: input.replyId, content: finalText, status: 'cancelled' })
-    } else {
-      updateAssistantReply(db, { messageId: input.replyId, content: finalText, status: 'failed' })
-    }
-  } catch {
-    // 字已显示不代表已经保存：终态写失败必须通知界面保留这份可见文字。
-    terminalSaveErrorCode = 'E_REPLY_SAVE_FAILED'
-    terminal = 'failed'
-    errorCode = errorCode ?? terminalSaveErrorCode
-  }
 
   // 用量三选一：会话级精确 → 步骤级求和 → 保守估算（估算绝不能合计为零）。
   let usage = sessionUsage ?? (stepUsage.inputTokens + stepUsage.outputTokens > 0 ? stepUsage : undefined)
@@ -217,21 +239,12 @@ export async function* consumeEveTurn(
     const outputEstimate = finalText ? Buffer.byteLength(finalText, 'utf8') + 256 : 1
     usage = { inputTokens: Math.max(1, input.estimatedInputTokens), outputTokens: outputEstimate }
   }
-  try {
-    finishAgentRun(db, {
-      runId: input.runId,
-      status: terminal === 'completed' ? 'completed' : terminal === 'cancelled' ? 'cancelled' : 'failed',
-      usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, estimated: usageEstimated },
-      errorCode: terminal === 'failed' ? errorCode ?? 'E_TURN_FAILED' : undefined,
-    })
-  } catch {
-    // 回复可能已保存，但用量账本还没写成；不能把这一轮报告为完整成功。
-    terminalSaveErrorCode = terminalSaveErrorCode ?? 'E_RUN_SAVE_FAILED'
-    terminal = 'failed'
-  }
-
-  if (terminal === 'completed') yield { type: 'done', replyId: input.replyId }
-  else if (terminal === 'cancelled') yield { type: 'cancelled' }
-  else yield { type: 'failed', code: terminalSaveErrorCode ?? errorCode ?? 'E_TURN_FAILED' }
-  return { status: terminal, finalText, usageEstimated }
+  // 即使中途有一段没存进去，这里仍用完整文字补写；只有真正写成才报告完成。
+  const finalized = finalizeTurnWrite(db, {
+    replyId: input.replyId, runId: input.runId, status: terminal, finalText,
+    usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, estimated: usageEstimated },
+    errorCode,
+  })
+  yield finalized.event
+  return finalized.outcome
 }

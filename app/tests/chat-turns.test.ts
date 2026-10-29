@@ -145,6 +145,106 @@ describe('聊天回合服务（T06⑪c1）', () => {
       .toThrow('E_REQUEST_CONFLICT')
   })
 
+  it.each(['reply', 'run'] as const)('%s 保存失败后重试只补写原结果，恢复前后都不再调用模型', async (target) => {
+    companion.sqlite.exec(target === 'reply' ? `
+      CREATE TRIGGER fail_final_write BEFORE UPDATE OF status ON messages
+      WHEN NEW.role = 'assistant' AND NEW.status = 'completed'
+      BEGIN SELECT RAISE(ABORT, 'fixed-test-failure'); END;
+    ` : `
+      CREATE TRIGGER fail_final_write BEFORE UPDATE ON agent_runs
+      BEGIN SELECT RAISE(ABORT, 'fixed-test-failure'); END;
+    `)
+    fake.send.mockResolvedValue(fakeResponse([appended('完整回复'), turnCompleted(), sessionCompleted()]).response)
+    let eveAvailable = true
+    const turns = createChatTurnService({
+      getDb: () => companion.db, getEve: () => eveAvailable ? handle : undefined,
+      limits: { modelWindowTokens: 32_000 },
+    })
+    const request = { conversationId, requestId: 'save-r1', content: '固定问题' }
+    const first = await collect(turns.startTurn(request).events)
+    const expectedCode = target === 'reply' ? 'E_REPLY_SAVE_FAILED' : 'E_RUN_SAVE_FAILED'
+    expect(first.at(-1)).toEqual({ type: 'failed', code: expectedCode })
+    expect(latestReply()).toMatchObject({ status: 'streaming', content: '完整回复' })
+    expect(companion.db.select().from(agentRuns).get()).toMatchObject({ status: 'running' })
+    // 后台模型已退出也能补写；库仍未恢复时保留待写资料，不另建一次尝试。
+    eveAvailable = false
+    expect((await collect(turns.startTurn(request).events)).at(-1)).toEqual({ type: 'failed', code: expectedCode })
+    expect(() => turns.startTurn({ ...request, content: '改写原话' })).toThrow('E_REQUEST_CONFLICT')
+    companion.sqlite.exec('DROP TRIGGER fail_final_write')
+    const restored = await collect(turns.startTurn(request).events)
+    expect(restored.at(-1)).toEqual({ type: 'done', replyId: latestReply().id })
+    expect(restored.some((frame) => frame.type === 'text')).toBe(false)
+    expect(latestReply()).toMatchObject({ status: 'completed', content: '完整回复' })
+    expect(companion.db.select().from(agentRuns).get()).toMatchObject({ status: 'completed' })
+    eveAvailable = true
+    expect(() => turns.startTurn(request)).toThrow('E_ALREADY_REPLIED')
+    expect(fake.create).toHaveBeenCalledTimes(1)
+    expect(fake.send).toHaveBeenCalledTimes(1)
+    expect(companion.db.select().from(messages).all()).toHaveLength(2)
+    expect(companion.db.select().from(agentRuns).all()).toHaveLength(1)
+    expect(turns.activeCount()).toBe(0)
+  })
+
+  it('模型原本失败时，补写恢复后仍返回原失败原因，不改成成功或再次调用模型', async () => {
+    companion.sqlite.exec(`
+      CREATE TRIGGER fail_failed_reply BEFORE UPDATE OF status ON messages
+      WHEN NEW.role = 'assistant' AND NEW.status = 'failed'
+      BEGIN SELECT RAISE(ABORT, 'fixed-test-failure'); END;
+    `)
+    fake.send.mockResolvedValue(fakeResponse([
+      appended('半截'), { type: 'turn.failed', data: { code: 'E_PROVIDER_DOWN' } },
+    ]).response)
+    const turns = service()
+    const request = { conversationId, requestId: 'save-failed-r1', content: '固定问题' }
+    expect((await collect(turns.startTurn(request).events)).at(-1)).toEqual({ type: 'failed', code: 'E_REPLY_SAVE_FAILED' })
+    companion.sqlite.exec('DROP TRIGGER fail_failed_reply')
+    expect((await collect(turns.startTurn(request).events)).at(-1)).toEqual({ type: 'failed', code: 'E_PROVIDER_DOWN' })
+    expect(latestReply()).toMatchObject({ status: 'failed', content: '半截' })
+    expect(companion.db.select().from(agentRuns).get()).toMatchObject({ status: 'failed', errorCode: 'E_PROVIDER_DOWN' })
+    expect(fake.send).toHaveBeenCalledTimes(1)
+    expect(companion.db.select().from(messages).all()).toHaveLength(2)
+  })
+
+  it('发送受理失败且收尾未保存时，恢复后只补写原失败，不重发模型请求', async () => {
+    companion.sqlite.exec(`
+      CREATE TRIGGER fail_send_failure BEFORE UPDATE OF status ON messages
+      WHEN NEW.role = 'assistant' AND NEW.status = 'failed'
+      BEGIN SELECT RAISE(ABORT, 'fixed-test-failure'); END;
+    `)
+    fake.send.mockRejectedValue(new Error('fixed-send-failure'))
+    const turns = service()
+    const request = { conversationId, requestId: 'send-failed-r1', content: '固定问题' }
+    expect((await collect(turns.startTurn(request).events)).at(-1)).toEqual({ type: 'failed', code: 'E_REPLY_SAVE_FAILED' })
+    companion.sqlite.exec('DROP TRIGGER fail_send_failure')
+    expect((await collect(turns.startTurn(request).events)).at(-1)).toEqual({ type: 'failed', code: 'E_EVE_SEND_FAILED' })
+    expect(companion.db.select().from(agentRuns).get()).toMatchObject({ status: 'failed', errorCode: 'E_EVE_SEND_FAILED' })
+    expect(fake.send).toHaveBeenCalledTimes(1)
+    expect(companion.db.select().from(messages).all()).toHaveLength(2)
+  })
+
+  it('试聊保存失败重试也只补写原preview结果，不读取新草稿再生成', async () => {
+    companion.sqlite.exec(`
+      CREATE TRIGGER fail_preview_completion BEFORE UPDATE OF status ON messages
+      WHEN NEW.role = 'assistant' AND NEW.status = 'completed'
+      BEGIN SELECT RAISE(ABORT, 'fixed-test-failure'); END;
+    `)
+    fake.send.mockResolvedValue(fakeResponse([appended('草稿回复'), turnCompleted(), sessionCompleted()]).response)
+    const turns = service()
+    const request = {
+      requestId: 'preview-save-r1', content: '试聊问题',
+      draft: { personaFullText: '原草稿', initialRelationship: '恋人' },
+    }
+    const first = turns.startPreviewTurn(request)
+    expect((await collect(first.events)).at(-1)).toEqual({ type: 'failed', code: 'E_REPLY_SAVE_FAILED' })
+    companion.sqlite.exec('DROP TRIGGER fail_preview_completion')
+    expect((await collect(turns.startPreviewTurn({
+      ...request, draft: { ...request.draft, personaFullText: '后来修改的草稿' },
+    }).events)).at(-1)).toEqual({ type: 'done', replyId: latestReply().id })
+    expect(latestReply()).toMatchObject({ conversationId: first.conversationId, content: '草稿回复' })
+    expect(fake.send).toHaveBeenCalledTimes(1)
+    expect(companion.db.select().from(messages).all()).toHaveLength(2)
+  })
+
   it('准备阶段失败转成 failed 帧：流走到终点、不留回复行、登记簿清空', async () => {
     const turns = createChatTurnService({
       getDb: () => companion.db, getEve: () => handle, limits: { modelWindowTokens: 1_000 },
