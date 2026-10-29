@@ -201,6 +201,109 @@ describe('回合编排（T06⑪b）', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('停止立即打断等待：框架取消不回应也收成 cancelled，不等 90 秒', async () => {
+    vi.useFakeTimers()
+    const controller = new AbortController()
+    let cancelCalls = 0
+    const response = {
+      cancel: () => {
+        cancelCalls += 1
+        return new Promise<void>(() => { /* 模拟供应商连取消也永不回应。 */ })
+      },
+      async *[Symbol.asyncIterator]() {
+        yield appended('半截') as never
+        await new Promise(() => { /* 模拟下一段文字永不回来。 */ })
+      },
+    } as unknown as MessageResponse
+    fake.send.mockResolvedValue(response)
+    const generator = run(controller.signal)
+    expect((await generator.next()).value).toEqual({ type: 'text', delta: '半截' })
+    const waiting = generator.next()
+    controller.abort()
+    // 没有推进模拟时钟：必须由取消信号唤醒，而不是等到总时限。
+    expect((await waiting).value).toEqual({ type: 'cancelled' })
+    expect((await generator.next()).value).toMatchObject({ status: 'cancelled', finalText: '半截' })
+    expect(cancelCalls).toBe(1)
+    expect(latestReply()).toMatchObject({ content: '半截', status: 'cancelled' })
+    expect(runRows()[0]).toMatchObject({ status: 'cancelled' })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('建空会话永不回应也受 90 秒总时限约束，不留回复和账本', async () => {
+    vi.useFakeTimers()
+    fake.create.mockImplementation(() => new Promise(() => { /* 建会话接口吊住。 */ }))
+    const running = drive(run())
+    // 先挂拒绝断言，避免推进模拟时钟后把预期的超时当成未处理异常。
+    const rejected = expect(running).rejects.toThrow('E_TURN_TIMEOUT')
+    await vi.advanceTimersByTimeAsync(90_000)
+    await rejected
+    expect(replyRows()).toHaveLength(1)
+    expect(runRows()).toHaveLength(0)
+    expect(fake.send).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('建空会话期间用户停止立即取消，不等接口回应，也不留下回复账本', async () => {
+    vi.useFakeTimers()
+    const controller = new AbortController()
+    fake.create.mockImplementation(() => new Promise(() => { /* 不回应中止信号的接口。 */ }))
+    const running = drive(run(controller.signal))
+    controller.abort()
+    const { events, outcome } = await running
+    expect(events).toEqual([{ type: 'cancelled' }])
+    expect(outcome.status).toBe('cancelled')
+    expect(replyRows()).toHaveLength(1)
+    expect(runRows()).toHaveLength(0)
+    expect(fake.send).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('发送受理永不回应也在 90 秒收尾，回复和账本均失败', async () => {
+    vi.useFakeTimers()
+    fake.send.mockImplementation(() => new Promise(() => { /* 发送已出门，受理结果不明。 */ }))
+    const running = drive(run())
+    await vi.advanceTimersByTimeAsync(90_000)
+    const { events, outcome } = await running
+    expect(events).toEqual([{ type: 'failed', code: 'E_TURN_TIMEOUT' }])
+    expect(outcome).toMatchObject({ status: 'failed', finalText: '' })
+    expect(latestReply()).toMatchObject({ status: 'failed' })
+    expect(runRows()[0]).toMatchObject({ status: 'failed', errorCode: 'E_TURN_TIMEOUT', usageEstimated: 1 })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('准备花掉 30 秒后，事件流只剩 60 秒，不重新获得完整时限', async () => {
+    vi.useFakeTimers()
+    fake.create.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30_000))
+      return { session: { state: { sessionId: 'eve-run' }, reset: fake.reset, send: fake.send } }
+    })
+    const { response } = fakeResponse([appended('半截')], true)
+    fake.send.mockResolvedValue(response)
+    const running = drive(run())
+    await vi.advanceTimersByTimeAsync(89_999)
+    expect(latestReply()).toMatchObject({ content: '半截', status: 'streaming' })
+    await vi.advanceTimersByTimeAsync(1)
+    const { events } = await running
+    expect(events.at(-1)).toEqual({ type: 'failed', code: 'E_TURN_TIMEOUT' })
+    expect(latestReply()).toMatchObject({ content: '半截', status: 'failed' })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('发送超时后才回来的受理句柄会被取消，不再读取迟到回复', async () => {
+    vi.useFakeTimers()
+    let resolveSend!: (response: MessageResponse) => void
+    fake.send.mockImplementation(() => new Promise<MessageResponse>((resolve) => { resolveSend = resolve }))
+    const running = drive(run())
+    await vi.advanceTimersByTimeAsync(90_000)
+    expect((await running).events).toEqual([{ type: 'failed', code: 'E_TURN_TIMEOUT' }])
+    const { response, state } = fakeResponse([appended('迟到回复'), turnCompleted()])
+    resolveSend(response)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(state.cancelled).toBe(1)
+    expect(latestReply()).toMatchObject({ content: '', status: 'failed' })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('试聊回合：草稿进信封、账本记空版本且 trigger 为 preview', async () => {
     // 同角色开一条 preview 会话并保存用户消息。
     const formal = companion.db.select().from(conversations).where(eq(conversations.id, conversationId)).get()!

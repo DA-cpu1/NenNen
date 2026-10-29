@@ -28,7 +28,7 @@ export interface RunFormalTurnInput extends BuildTurnContextInput {
   /** 实际使用的模型与供应商名，原样记入运行账本。 */
   model: string
   provider: string
-  /** 回合总时限；默认 90 秒。 */
+  /** 从开始准备到回复结束的总时限；默认 90 秒。 */
   turnTimeoutMs?: number
 }
 
@@ -63,54 +63,88 @@ async function* runTurn(
   prepare: (signal: AbortSignal) => Promise<PreparedEveTurn>,
   signal: AbortSignal,
 ): AsyncGenerator<TurnEvent, TurnOutcome> {
-  // 准备（读库+预算+建空会话+登记映射）失败时直接上抛：库里没有本轮痕迹。
-  const prepared = await prepare(signal)
-
-  // 回复行先建好：发送失败时它是「保留半截文字、标记失败」的载体。
-  const reply = createAssistantReply(db, { userMessageId: input.userMessageId })
-  // 运行账本在花钱前登记；人设版本由准备结果锁定（试聊为 null，账本允许）。
-  const run = startAgentRun(db, {
-    conversationId: input.conversationId,
-    characterVersionId: prepared.context.persona.versionId,
-    model: input.model, provider: input.provider,
+  const timeoutMs = input.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS
+  const deadlineAt = Date.now() + timeoutMs
+  const phaseTimeout = new AbortController()
+  // 建会话和等待受理也占总用时，不能等拿到事件流以后才开始计时。
+  const phaseSignal = AbortSignal.any([signal, phaseTimeout.signal])
+  let onInterrupted: () => void
+  const interruption = new Promise<never>((_resolve, reject) => {
+    onInterrupted = () => reject(new Error(signal.aborted ? 'E_CANCELLED' : 'E_TURN_TIMEOUT'))
+    if (phaseSignal.aborted) onInterrupted()
+    else phaseSignal.addEventListener('abort', onInterrupted, { once: true })
   })
+  const phaseTimer = setTimeout(() => phaseTimeout.abort(), timeoutMs)
 
-  /** 发送阶段失败/中止时的收尾：回复行与账本一起进终态，不留进行中悬案。 */
-  function closeOnSendFailure(code: string, cancelled: boolean, now?: number): void {
-    try {
-      updateAssistantReply(db, { messageId: reply.id, content: '', status: cancelled ? 'cancelled' : 'failed', now })
-    } catch { /* 库也坏时留给启动恢复；错误码仍交给界面。 */ }
-    try {
-      finishAgentRun(db, {
-        runId: run.id, status: cancelled ? 'cancelled' : 'failed',
-        // 请求可能已被对方受理，用量不明：按准备阶段的输入估算兜底，绝不能记零。
-        usage: { inputTokens: Math.max(1, prepared.input.inputTokens), outputTokens: 1, estimated: true },
-        errorCode: cancelled ? undefined : code, now,
-      })
-    } catch { /* 同上。 */ }
-  }
-
-  let response: MessageResponse
   try {
-    response = await sendPreparedEveTurn(db, prepared, signal)
-  } catch (error) {
-    const code = error instanceof Error ? error.message : ''
-    if (code === 'E_CANCELLED') {
-      closeOnSendFailure(code, true)
-      yield { type: 'cancelled' }
-      return { status: 'cancelled', finalText: '', usageEstimated: true }
+    // 准备（读库+预算+建空会话+登记映射）失败时直接上抛：库里没有本轮痕迹。
+    let prepared: PreparedEveTurn
+    try {
+      prepared = await Promise.race([prepare(phaseSignal), interruption])
+    } catch (error) {
+      if (error instanceof Error && error.message === 'E_CANCELLED') {
+        yield { type: 'cancelled' }
+        return { status: 'cancelled', finalText: '', usageEstimated: true }
+      }
+      throw error
     }
-    closeOnSendFailure(code || 'E_EVE_SEND_FAILED', false)
-    yield { type: 'failed', code: code || 'E_EVE_SEND_FAILED' }
-    return { status: 'failed', finalText: '', usageEstimated: true }
-  }
 
-  // 消费事件流；总时限包在句柄外面（见 withTurnTimeout）。
-  const wrapped = withTurnTimeout(response, input.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS, signal)
-  return yield* consumeEveTurn(db, {
-    response: wrapped, replyId: reply.id, runId: run.id,
-    estimatedInputTokens: prepared.input.inputTokens,
-  }, signal)
+    // 回复行先建好：发送失败时它是「保留半截文字、标记失败」的载体。
+    const reply = createAssistantReply(db, { userMessageId: input.userMessageId })
+    // 运行账本在花钱前登记；人设版本由准备结果锁定（试聊为 null，账本允许）。
+    const run = startAgentRun(db, {
+      conversationId: input.conversationId,
+      characterVersionId: prepared.context.persona.versionId,
+      model: input.model, provider: input.provider,
+    })
+
+    /** 发送阶段失败/中止时的收尾：回复行与账本一起进终态，不留进行中悬案。 */
+    function closeOnSendFailure(code: string, cancelled: boolean, now?: number): void {
+      try {
+        updateAssistantReply(db, { messageId: reply.id, content: '', status: cancelled ? 'cancelled' : 'failed', now })
+      } catch { /* 库也坏时留给启动恢复；错误码仍交给界面。 */ }
+      try {
+        finishAgentRun(db, {
+          runId: run.id, status: cancelled ? 'cancelled' : 'failed',
+          // 请求可能已被对方受理，用量不明：按准备阶段的输入估算兜底，绝不能记零。
+          usage: { inputTokens: Math.max(1, prepared.input.inputTokens), outputTokens: 1, estimated: true },
+          errorCode: cancelled ? undefined : code, now,
+        })
+      } catch { /* 同上。 */ }
+    }
+
+    let response: MessageResponse
+    try {
+      const sending = sendPreparedEveTurn(db, prepared, phaseSignal).then((accepted) => {
+        // 超时后才收到受理句柄时也要回收，不能留下无人继续读取的模型回合。
+        if (phaseSignal.aborted) void accepted.cancel().catch(() => { /* 本地已经收尾。 */ })
+        return accepted
+      })
+      response = await Promise.race([sending, interruption])
+    } catch (error) {
+      const code = error instanceof Error ? error.message : ''
+      if (code === 'E_CANCELLED') {
+        closeOnSendFailure(code, true)
+        yield { type: 'cancelled' }
+        return { status: 'cancelled', finalText: '', usageEstimated: true }
+      }
+      closeOnSendFailure(code || 'E_EVE_SEND_FAILED', false)
+      yield { type: 'failed', code: code || 'E_EVE_SEND_FAILED' }
+      return { status: 'failed', finalText: '', usageEstimated: true }
+    }
+
+    // 准备阶段已经用掉的时间不能重新获得；事件流只拿截止前剩余的毫秒数。
+    clearTimeout(phaseTimer)
+    phaseSignal.removeEventListener('abort', onInterrupted!)
+    const wrapped = withTurnTimeout(response, Math.max(0, deadlineAt - Date.now()), signal)
+    return yield* consumeEveTurn(db, {
+      response: wrapped, replyId: reply.id, runId: run.id,
+      estimatedInputTokens: prepared.input.inputTokens,
+    }, signal)
+  } finally {
+    clearTimeout(phaseTimer)
+    phaseSignal.removeEventListener('abort', onInterrupted!)
+  }
 }
 
 /**
@@ -166,18 +200,28 @@ export async function* runPreviewTurn(
  * 消费层「先到先得」的终态规则会保住超时结论，随后真实到达的取消事件不改写它。
  * @param response 原始受理句柄（事件只能被读一遍，替身转手这份唯一性）
  * @param timeoutMs 总时限毫秒数
- * @param signal 用户停止/退出的取消信号；中止时先请框架协作取消
+ * @param signal 用户停止/退出的取消信号；中止时本地立刻收尾，并请框架协作取消
  * @returns 可像原句柄一样迭代/取消的替身
  */
 function withTurnTimeout(response: MessageResponse, timeoutMs: number, signal: AbortSignal): MessageResponse {
   /** 到点记号：用唯一的 symbol，和任何真实事件结果都不会撞。 */
   const expired = Symbol('turn-timeout')
-  /** 用户停止/退出时先请框架协作取消：优雅收场，也避免服务器留孤儿回合。 */
-  const onAbort = () => { void response.cancel().catch(() => { /* 取消失败仍按本地取消收尾。 */ }) }
+  const cancelled = Symbol('turn-cancelled')
+  let cancelRequested = false
+  /** 只向框架请求一次取消；对方不回应时也不能卡住本地的停止按钮。 */
+  function requestCancel(): void {
+    if (cancelRequested) return
+    cancelRequested = true
+    void response.cancel().catch(() => { /* 取消失败仍按本地取消收尾。 */ })
+  }
+  let resolveCancelled: (value: typeof cancelled) => void
+  const cancellationPromise = new Promise<typeof cancelled>((resolve) => { resolveCancelled = resolve })
+  /** 用户停止时唤醒正在等下一段文字的读取，不依赖服务器再送一条事件。 */
+  const onAbort = () => { requestCancel(); resolveCancelled(cancelled) }
   if (signal.aborted) onAbort()
   else signal.addEventListener('abort', onAbort, { once: true })
   return {
-    cancel: () => response.cancel(),
+    cancel: async () => { requestCancel() },
     async *[Symbol.asyncIterator](): AsyncGenerator<MessageStreamEvent> {
       const iterator = response[Symbol.asyncIterator]()
       let timer: ReturnType<typeof setTimeout> | undefined
@@ -187,11 +231,21 @@ function withTurnTimeout(response: MessageResponse, timeoutMs: number, signal: A
       })
       try {
         for (;;) {
-          const raced = await Promise.race([iterator.next(), timerPromise])
+          const raced = await Promise.race([iterator.next(), timerPromise, cancellationPromise])
+          // 即使文字与停止恰好同一刻到达，也以已经中止的本地信号为准。
+          if (raced === cancelled || signal.aborted) {
+            iterator.return?.().catch(() => { /* 底层可能仍在等网络，本地不等待。 */ })
+            yield {
+              type: 'turn.cancelled',
+              data: { sequence: -1, turnId: 'local-cancelled' },
+              meta: { deliveryId: 'local-cancelled', sequence: -1, timestamp: '' },
+            } as unknown as MessageStreamEvent
+            break
+          }
           if (raced === expired) {
             // 先请框架协作取消，再注入失败结论；随后不再等真实事件——
             // 供应商吊住时它们可能永远不来，超时结论必须立刻生效。
-            void response.cancel().catch(() => { /* 取消失败不改变本地超时判定。 */ })
+            requestCancel()
             yield {
               type: 'turn.failed',
               data: { code: 'E_TURN_TIMEOUT', message: '', sequence: -1, turnId: 'local-timeout' },
