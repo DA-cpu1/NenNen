@@ -49,8 +49,8 @@ function sanitizeErrorCode(code: string | undefined, fallback: string): string {
 /**
  * 消费一次已受理的 eve 回合：流式保存回复文字，结束时写终态和用量。
  * 终态判定「先到先得」——比如超限后我们主动取消，随后到达的 turn.cancelled
- * 不能把已定的失败改写成取消。数据库终态写入失败时不抛出：界面按历史重读、
- * 编排层的退出恢复会收拾遗留的进行中状态，这里至少把失败事件交给调用方。
+ * 不能把已定的失败改写成取消。数据库终态写入失败时给明确的保存失败码，
+ * 让界面保留尚不能确认保存的文字；退出恢复会收拾库里遗留的进行中状态。
  * @param db 后台数据库连接
  * @param input 受理句柄、回复编号、运行编号与估算输入
  * @param signal 取消信号；中止视为用户停止，回合记为已取消
@@ -72,6 +72,7 @@ export async function* consumeEveTurn(
   let terminal: TurnOutcome['status'] | undefined
   let errorCode: string | undefined
   let storageErrorCode: string | undefined
+  let terminalSaveErrorCode: string | undefined
 
   const currentText = () => settledText + streamingText
 
@@ -86,18 +87,26 @@ export async function* consumeEveTurn(
   }
 
   /** 请求框架协作取消；取消本身失败不改变已定的终态。 */
-  async function cancelTurn(): Promise<void> {
-    try { await input.response.cancel() } catch { /* 取消失败仍按本地判定的终态收尾。 */ }
+  function cancelTurn(): void {
+    void input.response.cancel().catch(() => { /* 对方不回应时，本地仍须立刻结束。 */ })
   }
 
   if (signal?.aborted) {
     terminal = 'cancelled'
-    await cancelTurn()
+    cancelTurn()
   }
 
   if (terminal === undefined) {
     try {
       for await (const event of input.response) {
+        // 停止后到达的文字不能再显示或入库；取消请求是否成功不影响这道关卡。
+        if (signal?.aborted) {
+          if (terminal === undefined) terminal = 'cancelled'
+          cancelTurn()
+          break
+        }
+        // 终态后仍可收用量，但迟到文字不得改变已经结束的回复。
+        if (terminal !== undefined && (event.type === 'message.appended' || event.type === 'message.completed')) continue
         // data 是 eve 给每类事件规定的载荷位置；switch 按事件名逐类翻译。
         switch (event.type) {
           case 'message.appended':
@@ -115,7 +124,7 @@ export async function* consumeEveTurn(
             if (modelCalls > MAX_MODEL_CALLS_PER_TURN) {
               // 超出额度：主动取消并记失败，后续到达的取消事件不得改写结论。
               if (terminal === undefined) { terminal = 'failed'; errorCode = 'E_TURN_LIMIT' }
-              await cancelTurn()
+              cancelTurn()
             }
             break
           case 'step.completed': {
@@ -191,7 +200,12 @@ export async function* consumeEveTurn(
     } else {
       updateAssistantReply(db, { messageId: input.replyId, content: finalText, status: 'failed' })
     }
-  } catch { /* 终态写不进去时交给退出恢复处理；不吞掉下面的用量记账尝试。 */ }
+  } catch {
+    // 字已显示不代表已经保存：终态写失败必须通知界面保留这份可见文字。
+    terminalSaveErrorCode = 'E_REPLY_SAVE_FAILED'
+    terminal = 'failed'
+    errorCode = errorCode ?? terminalSaveErrorCode
+  }
 
   // 用量三选一：会话级精确 → 步骤级求和 → 保守估算（估算绝不能合计为零）。
   let usage = sessionUsage ?? (stepUsage.inputTokens + stepUsage.outputTokens > 0 ? stepUsage : undefined)
@@ -210,10 +224,14 @@ export async function* consumeEveTurn(
       usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, estimated: usageEstimated },
       errorCode: terminal === 'failed' ? errorCode ?? 'E_TURN_FAILED' : undefined,
     })
-  } catch { /* 记账失败同样留给退出恢复；不让已定的回合结论抛出去。 */ }
+  } catch {
+    // 回复可能已保存，但用量账本还没写成；不能把这一轮报告为完整成功。
+    terminalSaveErrorCode = terminalSaveErrorCode ?? 'E_RUN_SAVE_FAILED'
+    terminal = 'failed'
+  }
 
   if (terminal === 'completed') yield { type: 'done', replyId: input.replyId }
   else if (terminal === 'cancelled') yield { type: 'cancelled' }
-  else yield { type: 'failed', code: errorCode ?? 'E_TURN_FAILED' }
+  else yield { type: 'failed', code: terminalSaveErrorCode ?? errorCode ?? 'E_TURN_FAILED' }
   return { status: terminal, finalText, usageEstimated }
 }

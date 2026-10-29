@@ -216,6 +216,41 @@ describe('eve 回合事件消费（T06⑪a）', () => {
     expect(runRow().status).toBe('cancelled')
   })
 
+  it('停止后迟到的文字和完成事件不显示、不落库，也不能改成成功', async () => {
+    const controller = new AbortController()
+    let cancelCalls = 0
+    const response = {
+      cancel: async () => { cancelCalls += 1 },
+      async *[Symbol.asyncIterator]() {
+        yield appended('半截') as never
+        controller.abort()
+        yield appended('迟到文字') as never
+        yield turnCompleted() as never
+      },
+    } as unknown as MessageResponse
+    const { events, outcome } = await drive(consumeEveTurn(companion.db, {
+      response, replyId, runId, estimatedInputTokens: 100,
+    }, controller.signal))
+    expect(events).toEqual([{ type: 'text', delta: '半截' }, { type: 'cancelled' }])
+    expect(outcome).toMatchObject({ status: 'cancelled', finalText: '半截' })
+    expect(replyRow()).toMatchObject({ content: '半截', status: 'cancelled' })
+    expect(cancelCalls).toBe(1)
+  })
+
+  it('框架取消事件后的迟到文字被拒绝，用量仍可收取', async () => {
+    const { response } = fakeResponse([
+      appended('半截'), turnCancelled(), appended('迟到'), messageDone('错误全文'),
+      sessionCompleted(20, 3),
+    ])
+    const { events, outcome } = await drive(consumeEveTurn(companion.db, {
+      response, replyId, runId, estimatedInputTokens: 100,
+    }))
+    expect(events).toEqual([{ type: 'text', delta: '半截' }, { type: 'cancelled' }])
+    expect(outcome).toMatchObject({ status: 'cancelled', finalText: '半截' })
+    expect(replyRow()).toMatchObject({ content: '半截', status: 'cancelled' })
+    expect(runRow()).toMatchObject({ inputTokens: 20, outputTokens: 3, usageEstimated: 0 })
+  })
+
   it('完成但一个字都没到时记 E_EMPTY_REPLY，不把空白标成成功', async () => {
     const { response } = fakeResponse([stepStarted(0), turnCompleted(), sessionCompleted()])
     const { events } = await drive(consumeEveTurn(companion.db, {
@@ -256,11 +291,10 @@ describe('eve 回合事件消费（T06⑪a）', () => {
       response, replyId, runId, estimatedInputTokens: 100,
     }))
     expect(state.cancelled).toBe(0)
-    // 回合自身失败与存储失败同时发生时，先报回合失败的原因；
-    // 存储码只在「回合本会成功、却存不进去」时才成为失败原因。
+    // 界面必须知道文字未保存，才能保留可见文本；原始回合失败原因仍由账本记载。
     expect(events).toEqual([
       { type: 'text', delta: '可见但未保存' },
-      { type: 'failed', code: 'E_PROVIDER_DOWN' },
+      { type: 'failed', code: 'E_REPLY_SAVE_FAILED' },
     ])
     companion.sqlite.pragma('query_only = OFF')
     // 库恢复后行还是进行中状态：由编排层的退出恢复负责收拾，不在这里补写。
@@ -275,6 +309,56 @@ describe('eve 回合事件消费（T06⑪a）', () => {
     const { events } = await drive(consumeEveTurn(companion.db, {
       response, replyId, runId, estimatedInputTokens: 100,
     }))
-    expect(events.at(-1)).toEqual({ type: 'failed', code: 'E_STORAGE_UNAVAILABLE' })
+    expect(events.at(-1)).toEqual({ type: 'failed', code: 'E_REPLY_SAVE_FAILED' })
+  })
+
+  it('流式保存成功但回复终态 UPDATE 失败时，禁止 done 并明确回复未保存', async () => {
+    // 触发器只拦「完成」那次更新，保证这项检查不是重复测流式写入失败。
+    companion.sqlite.exec(`
+      CREATE TRIGGER fail_reply_completion BEFORE UPDATE OF status ON messages
+      WHEN NEW.role = 'assistant' AND NEW.status = 'completed'
+      BEGIN SELECT RAISE(ABORT, 'fixed-test-failure'); END;
+    `)
+    const { response } = fakeResponse([appended('完整回复'), turnCompleted(), sessionCompleted(20, 3)])
+    const { events, outcome } = await drive(consumeEveTurn(companion.db, {
+      response, replyId, runId, estimatedInputTokens: 100,
+    }))
+    expect(events).toEqual([
+      { type: 'text', delta: '完整回复' }, { type: 'failed', code: 'E_REPLY_SAVE_FAILED' },
+    ])
+    expect(outcome).toMatchObject({ status: 'failed', finalText: '完整回复' })
+    expect(replyRow()).toMatchObject({ status: 'streaming', content: '完整回复' })
+    expect(runRow()).toMatchObject({ status: 'failed', errorCode: 'E_REPLY_SAVE_FAILED', inputTokens: 20, outputTokens: 3 })
+  })
+
+  it('回复已保存但账本 UPDATE 失败时，禁止 done 并明确用量未保存', async () => {
+    companion.sqlite.exec(`
+      CREATE TRIGGER fail_run_completion BEFORE UPDATE ON agent_runs
+      BEGIN SELECT RAISE(ABORT, 'fixed-test-failure'); END;
+    `)
+    const { response } = fakeResponse([appended('完整回复'), turnCompleted(), sessionCompleted(20, 3)])
+    const { events, outcome } = await drive(consumeEveTurn(companion.db, {
+      response, replyId, runId, estimatedInputTokens: 100,
+    }))
+    expect(events).toEqual([
+      { type: 'text', delta: '完整回复' }, { type: 'failed', code: 'E_RUN_SAVE_FAILED' },
+    ])
+    expect(outcome).toMatchObject({ status: 'failed', finalText: '完整回复' })
+    expect(replyRow()).toMatchObject({ status: 'completed', content: '完整回复' })
+    expect(runRow()).toMatchObject({ status: 'running', inputTokens: null, outputTokens: null })
+  })
+
+  it('模型失败和回复保存失败并发时，对外提示未保存、账本保留模型失败原因', async () => {
+    companion.sqlite.exec(`
+      CREATE TRIGGER fail_reply_failure BEFORE UPDATE OF status ON messages
+      WHEN NEW.role = 'assistant' AND NEW.status = 'failed'
+      BEGIN SELECT RAISE(ABORT, 'fixed-test-failure'); END;
+    `)
+    const { response } = fakeResponse([appended('半截'), turnFailed('E_PROVIDER_DOWN')])
+    const { events } = await drive(consumeEveTurn(companion.db, {
+      response, replyId, runId, estimatedInputTokens: 100,
+    }))
+    expect(events.at(-1)).toEqual({ type: 'failed', code: 'E_REPLY_SAVE_FAILED' })
+    expect(runRow()).toMatchObject({ status: 'failed', errorCode: 'E_PROVIDER_DOWN' })
   })
 })
