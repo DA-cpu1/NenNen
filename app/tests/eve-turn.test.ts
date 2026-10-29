@@ -11,7 +11,7 @@ import { saveUserMessage, createAssistantReply, updateAssistantReply } from '../
 import { setRuntimeSessionId } from '../src/data/conversations'
 import { bumpContextEpoch } from '../src/data/epochs'
 import { characters, characterVersions, companionSettings, conversations, messages } from '../src/data/tables'
-import { prepareEveTurn, sendPreparedEveTurn } from '../src/agent/eve-turn'
+import { prepareEveTurn, sendPreparedEveTurn, releasePreparedEveTurn } from '../src/agent/eve-turn'
 import { decodeEveTurnEnvelope } from '../src/shared/eve-turn-envelope'
 import type { EveHandle } from '../src/agent/eve-process'
 
@@ -53,6 +53,25 @@ function runtimeId() {
 }
 
 describe('干净 eve 会话准备（T06⑩a）', () => {
+  it('回合结束只终止自己的框架会话，保留SQLite消息并清便签', async () => {
+    const prepared = await prepare()
+    const before = companion.db.select().from(messages).all()
+    expect(await releasePreparedEveTurn(companion.db, prepared)).toBe(true)
+    expect(fake.reset).toHaveBeenCalledTimes(1)
+    expect(runtimeId()).toBeNull()
+    expect(companion.db.select().from(messages).all()).toEqual(before)
+  })
+
+  it('旧回合回收不擦掉新编号；回收失败不伪造成功或删便签', async () => {
+    const prepared = await prepare()
+    setRuntimeSessionId(companion.db, conversationId, 'newer-turn')
+    expect(await releasePreparedEveTurn(companion.db, prepared)).toBe(true)
+    expect(runtimeId()).toBe('newer-turn')
+    fake.reset.mockRejectedValue(new Error('fixed-secret-and-prompt'))
+    expect(await releasePreparedEveTurn(companion.db, prepared)).toBe(false)
+    expect(runtimeId()).toBe('newer-turn')
+    expect(fake.send).not.toHaveBeenCalled()
+  })
   it('无正文建会话后才登记；返回前不发送、不以受理当回复成功', async () => {
     const signal = new AbortController().signal
     const prepared = await prepare(signal)

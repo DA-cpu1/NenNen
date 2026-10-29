@@ -11,7 +11,7 @@ import type { MessageResponse, MessageStreamEvent } from 'eve/client'
 import { messages, agentRuns } from '../data/tables'
 import { createAssistantReply } from '../data/messages'
 import { startAgentRun } from '../data/agent-runs'
-import { prepareEveTurn, preparePreviewEveTurn, sendPreparedEveTurn, type PreparedEveTurn } from './eve-turn'
+import { prepareEveTurn, preparePreviewEveTurn, sendPreparedEveTurn, releasePreparedEveTurn, type PreparedEveTurn } from './eve-turn'
 import { consumeEveTurn, finalizeTurnWrite, type TurnEvent, type TurnOutcome } from './eve-events'
 import type { EveHandle } from './eve-process'
 import type { ModelInputLimits } from './context-budget'
@@ -75,10 +75,10 @@ async function* runTurn(
     else phaseSignal.addEventListener('abort', onInterrupted, { once: true })
   })
   const phaseTimer = setTimeout(() => phaseTimeout.abort(), timeoutMs)
+  let prepared: PreparedEveTurn | undefined
 
   try {
     // 准备（读库+预算+建空会话+登记映射）失败时直接上抛：库里没有本轮痕迹。
-    let prepared: PreparedEveTurn
     try {
       prepared = await Promise.race([prepare(phaseSignal), interruption])
     } catch (error) {
@@ -103,7 +103,7 @@ async function* runTurn(
       return finalizeTurnWrite(db, {
         replyId: reply.id, runId: run.id, status: cancelled ? 'cancelled' : 'failed', finalText: '',
         // 请求可能已被对方受理，用量不明：按准备阶段的输入估算兜底，绝不能记零。
-        usage: { inputTokens: Math.max(1, prepared.input.inputTokens), outputTokens: 1, estimated: true },
+        usage: { inputTokens: Math.max(1, prepared!.input.inputTokens), outputTokens: 1, estimated: true },
         errorCode: cancelled ? undefined : code,
       })
     }
@@ -134,6 +134,7 @@ async function* runTurn(
   } finally {
     clearTimeout(phaseTimer)
     phaseSignal.removeEventListener('abort', onInterrupted!)
+    if (prepared) await releasePreparedEveTurn(db, prepared)
   }
 }
 

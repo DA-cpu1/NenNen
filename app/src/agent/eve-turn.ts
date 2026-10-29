@@ -4,7 +4,7 @@
  * 每轮换框架会话，用户看到的应用会话和历史不变，也不读取 eve 的旧聊天。
  */
 import { Client, type ClientSession, type MessageResponse } from 'eve/client'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { conversations } from '../data/tables'
 import { buildTurnContext, type BuildTurnContextInput, type TurnContext } from './turn-context'
@@ -139,4 +139,22 @@ export async function sendPreparedEveTurn(
     // 请求失败时可能已被对方受理；不沿用这个准备结果重发，以免发生第二次模型调用。
     throw new Error(signal.aborted ? 'E_CANCELLED' : 'E_EVE_SEND_FAILED')
   }
+}
+
+/**
+ * 一轮已经结束，不让空闲框架会话继续挂着；SQLite里的原话与结果都保留。
+ * @param db 后台数据库连接
+ * @param prepared 这轮独有的框架句柄
+ * @returns 是否成功终止会话并清理对应便签；失败不改写本轮业务结果
+ */
+export async function releasePreparedEveTurn(db: BetterSQLite3Database, prepared: PreparedEveTurn): Promise<boolean> {
+  try {
+    await prepared.session.reset({ signal: AbortSignal.timeout(5_000) })
+    // 新一轮可能已经换了编号：只清理自己的旧便签，不能擦掉别人的新编号。
+    db.update(conversations).set({ runtimeSessionId: null }).where(and(
+      eq(conversations.id, prepared.context.conversationId),
+      eq(conversations.runtimeSessionId, prepared.session.state.sessionId),
+    )).run()
+    return true
+  } catch { return false }
 }
