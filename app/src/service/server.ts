@@ -205,20 +205,21 @@ async function relayTurnStream(
     if (finished) return
     finished = true
     cancelActiveTurn()
-    void turn.events.return(undefined).catch(() => { /* 已被取消时可能不再收尾 */ })
+    // 断开的是界面，后台仍须读到取消终态才能保存半截回复和用量。
+    // 在这里强行 return 会跳过事件生成器尚未执行的收尾代码。
   })
   try {
     for (;;) {
       const step = await turn.events.next()
       if (step.done) break
-      res.write(`data: ${JSON.stringify(step.value)}\n\n`)
+      if (!res.destroyed) res.write(`data: ${JSON.stringify(step.value)}\n\n`)
     }
   } catch {
     // 服务层已把失败转成帧；这条是最后兜底，不给半截流留悬念。
-    res.write(`data: ${JSON.stringify({ type: 'failed', code: 'INTERNAL' })}\n\n`)
+    if (!res.destroyed) res.write(`data: ${JSON.stringify({ type: 'failed', code: 'INTERNAL' })}\n\n`)
   }
   finished = true
-  res.end()
+  if (!res.destroyed) res.end()
 }
 
 /**

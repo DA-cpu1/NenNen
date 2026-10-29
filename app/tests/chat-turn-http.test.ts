@@ -128,6 +128,35 @@ describe('聊天回合 HTTP 端点（T06⑪c2）', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
   })
 
+  it('客户端断开后仍消费到取消终态，不跳过后台的保存收尾', async () => {
+    let release: () => void = () => {}
+    let finalized = false
+    const held = new Promise<void>((resolve) => { release = resolve })
+    startImpl = () => ({
+      userMessageId: 'u',
+      events: (async function* generate() {
+        yield { type: 'saved', userMessageId: 'u', conversationId: 'conv-1' }
+        await held
+        // 模拟停止前已经排队的一帧；取消落库发生在继续消费之后。
+        yield { type: 'text', delta: '固定片段' }
+        finalized = true
+        yield { type: 'cancelled' }
+      })(),
+    })
+    const controller = new AbortController()
+    const response = await post('/chat/turn', validBody, true, controller.signal)
+    await response.body!.getReader().read()
+    controller.abort()
+    const deadline = Date.now() + 2_000
+    while (!cancelledConversations.includes('conv-1') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(cancelledConversations).toContain('conv-1')
+    release()
+    while (!finalized && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(finalized).toBe(true)
+  })
+
   it('取消端点按会话取消并保持幂等语义', async () => {
     const res = await post('/chat/turn/cancel', { conversationId: 'conv-9' })
     expect(res.status).toBe(200)
