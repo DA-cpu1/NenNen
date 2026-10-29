@@ -9,13 +9,13 @@
  *
  * 重入（再调一次）时不重建，复用已有角色和它的正式会话（05 §3）——
  * 「不假设角色 ID 永远是 1」：ID 是随机字符串，重入靠查库认人，不靠猜。
- * 人设占位文本由调用方传入：T04 阶段传占位内容，T03 的正式角色卡
- * 在 T06 接入。
+ * 人设与示例由调用方传入；启动接已确认的角色卡，测试可用固定短文本。
  */
 import { and, asc, eq } from 'drizzle-orm'
 import { randomUUID } from 'node:crypto'
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
+import type { DialogueExample } from '../shared/character-schema'
 import {
   characters,
   characterVersions,
@@ -32,6 +32,8 @@ export interface InitializeCharacterOptions {
   personaText: string
   /** 初始关系设定（如「恋人」） */
   initialRelationship: string
+  /** 原创情境示例；它们不是用户历史。测试不提供时保持空数组。 */
+  dialogueExamples?: DialogueExample[]
   /** 用户时区名，写入主动陪伴设置行 */
   timezone: string
   /** 时间戳仅供自动检查注入固定值（07 §3）；正式调用不传、用当前时间 */
@@ -105,7 +107,7 @@ export function initializeFirstCharacter(
     tx.insert(characters)
       .values({ id: characterId, name: options.name, createdAt: now, updatedAt: now })
       .run()
-    // 第 1 版人设，标记为当前生效（is_active=1）；对话示例先空着（默认 '[]'）
+    // 第 1 版人设与示例一起保存；重启读这份已保存版本，不重新导入样稿。
     tx.insert(characterVersions)
       .values({
         id: `charver-${randomUUID()}`,
@@ -113,6 +115,7 @@ export function initializeFirstCharacter(
         versionNo: 1,
         personaText: options.personaText,
         initialRelationship: options.initialRelationship,
+        dialogueExamplesJson: JSON.stringify(options.dialogueExamples ?? []),
         isActive: 1,
         createdAt: now,
       })

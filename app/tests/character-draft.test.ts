@@ -1,6 +1,6 @@
 /** 草稿边界检查：取消不污染原件、旧文本不丢失、保存不交两份人设。 */
 import { describe, expect, it } from 'vitest'
-import { bodyFromDraft, draftFromCharacter, previewFromDraft, switchDraftMode, validateDraft } from '../src/ui/settings/character-draft'
+import { bodyFromDraft, draftFromCharacter, draftWithRikkaSample, previewFromDraft, switchDraftMode, validateDraft } from '../src/ui/settings/character-draft'
 import type { CharacterOverview } from '../src/shared/data-types'
 
 const character: CharacterOverview = {
@@ -11,6 +11,17 @@ const character: CharacterOverview = {
 }
 
 describe('编辑草稿的数据边界', () => {
+  it('载入样稿只产生可编辑副本，保留名字称呼，不覆盖原件', () => {
+    const original = { ...draftFromCharacter(character), name: '自定义名字', userNickname: '阿达' }
+    const sample = draftWithRikkaSample(original)
+    expect(sample.fullText).toContain('小鸟游六花')
+    expect(sample.dialogueExamples).toHaveLength(13)
+    expect(sample.name).toBe('自定义名字')
+    expect(sample.userNickname).toBe('阿达')
+    sample.dialogueExamples[0].user = '改动副本'
+    expect(draftWithRikkaSample(original).dialogueExamples[0].user).toBe('窗外那片云很像一条龙。')
+    expect(original.fullText).toBe('旧的人设正文')
+  })
   it('试聊只复制当前草稿，后续编辑不改变已发送资料，也不带保存编号', () => {
     const draft = draftFromCharacter(character)
     const preview = previewFromDraft(draft)

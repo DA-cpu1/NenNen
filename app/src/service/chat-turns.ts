@@ -14,15 +14,16 @@ import { runFormalTurn, runPreviewTurn } from '../agent/turn-runner'
 import type { ModelInputLimits } from '../agent/context-budget'
 import type { EveHandle } from '../agent/eve-process'
 import type { TurnEvent, TurnOutcome } from '../agent/eve-events'
+import { COMMON_FACT_RULES } from '../shared/character-sample'
 import {
   resolvePreviewDraft, type ChatTurnRequest, type PreviewTurnRequest, type SseTurnEvent,
 } from '../shared/chat-turn'
 
 /**
- * 共同事实规则的固定文本（02 §1「共同原则」）。正式的规则配置入口在 T11
- * 设置页；在那之前用这份内置文本，不空着——空规则会被上下文准备直接拒绝。
+ * 共同事实规则来自已确认的完整样稿，和角色草稿分开交付，
+ * 防止只接入三句临时规则而丢掉引用、假设和工具结果的具体边界。
  */
-export const COMMON_RULES_TEXT = '不编造没有发生过的共同经历。不用内疚感迫使用户继续聊天。对工具执行结果如实转述。'
+export const COMMON_RULES_TEXT = COMMON_FACT_RULES
 
 /**
  * 模型窗口的暂定值：与 eve Agent 配置里的 modelContextWindowTokens 一致

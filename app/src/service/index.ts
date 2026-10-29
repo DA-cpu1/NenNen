@@ -21,6 +21,7 @@ import { getFormalConversation } from '../data/conversations'
 import { readChatHistory } from '../data/chat-history'
 import { createChatTurnService, PROVISIONAL_MODEL_WINDOW_TOKENS } from './chat-turns'
 import { recoverInterruptedTurns } from '../agent/turn-runner'
+import { RIKKA_SAMPLE } from '../shared/character-sample'
 import { readSetting, writeSetting } from '../data/settings'
 import { CHAT_WINDOW_KEY, PET_WINDOW_KEY, type ChatWindowState, type PetWindowState } from '../shared/window-state'
 
@@ -123,13 +124,12 @@ function main(): void {
       // 迁移抛错不在这里接：让它顺着 start 的 catch 统一走 E_START 退出
       runMigrations(database.sqlite)
       // 首个角色初始化（05 §8）：库是空的就一个事务建齐四件套，已有则
-      // 复用。人设先用占位文本——T03 写好的角色卡到 T06 才接入；
+      // 复用。只有全新库使用已确认的样稿，已有设定绝不被启动覆盖；
       // 时区按用户系统取（如 Asia/Shanghai），取不到退 UTC 不卡启动。
       // 初始化失败同样顺着 catch 走 E_START：没有正式会话的库不值得启动
       initializeFirstCharacter(database.db, {
         name: '六花',
-        personaText: '（占位人设：T03 正式角色卡在 T06 接入）',
-        initialRelationship: '恋人',
+        ...RIKKA_SAMPLE,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       })
       // 退出恢复（04 §9）：上个进程没写完的回复与运行账本收成失败终态，

@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { CharacterProps } from '../App'
-import { bodyFromDraft, draftFromCharacter, validateDraft, type CharacterDraft } from './character-draft'
+import { bodyFromDraft, draftFromCharacter, draftWithRikkaSample, validateDraft, type CharacterDraft } from './character-draft'
 import PersonaFields from './PersonaFields'
 import ExamplesEditor from './ExamplesEditor'
 import ConfirmationDialog from './ConfirmationDialog'
@@ -48,6 +48,7 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
   const [needsRefresh, setNeedsRefresh] = useState(loadError !== null)
   const [cancelRequested, setCancelRequested] = useState(false)
   const [activateNo, setActivateNo] = useState<number | null>(null)
+  const [sampleRequested, setSampleRequested] = useState(false)
   // ref 是跨渲染保留的小盒子：连点发生在按钮来得及变灰前，也只能发一次请求。
   const operationRunning = useRef(false)
   const saveRequest = useRef<{ content: string; id: string } | null>(null)
@@ -198,10 +199,20 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
       busy={previewBusy} onBusyChange={setPreviewBusy} onClose={() => setPreviewOpen(false)} />}
     <footer className={styles.footer}><p>保存生成新版本，从下一轮聊天生效。</p><div>
       <button type="button" className={styles.secondary} disabled={busy || imageBusy || blocked}
+        onClick={() => setSampleRequested(true)}>载入六花样稿 0.1</button>
+      <button type="button" className={styles.secondary} disabled={busy || imageBusy || blocked}
         onClick={() => setPreviewOpen(true)}>试聊当前草稿</button>
       <button type="button" className={styles.secondary} disabled={busy || imageBusy || !dirty} onClick={() => setCancelRequested(true)}>取消修改</button>
       <button type="button" className={styles.primary} disabled={busy || imageBusy || blocked || !dirty} onClick={() => void save()}>{busy ? '正在处理…' : '保存人设版本'}</button>
     </div></footer>
+    {sampleRequested && <ConfirmationDialog title="载入六花样稿 0.1？" onCancel={() => setSampleRequested(false)}
+      actions={<><button autoFocus className={styles.secondary} onClick={() => setSampleRequested(false)}>取消</button>
+        <button className={styles.primary} onClick={() => {
+          changeDraft(draftWithRikkaSample(draft)); setSampleRequested(false)
+        }}>载入草稿</button></>}>
+      <p>将替换草稿中的人设、初始关系与情境示例。可以先试聊或继续编辑，点击保存后才生成正式版本。</p>
+      {dirty && <p className={styles.error}>这些项目当前未保存的修改将被替换。</p>}
+    </ConfirmationDialog>}
     {(cancelRequested || (leaving && dirty && !busy && !previewBusy)) && <ConfirmationDialog title="有未保存的修改"
       onCancel={() => { setCancelRequested(false); onStay() }}
       actions={<>

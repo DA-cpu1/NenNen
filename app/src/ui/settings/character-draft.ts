@@ -5,6 +5,7 @@
 import type { DialogueExample, SaveCharacterVersionBody } from '../../shared/character-schema'
 import type { CharacterOverview } from '../../shared/data-types'
 import type { PreviewTurnRequest } from '../../shared/chat-turn'
+import { RIKKA_SAMPLE } from '../../shared/character-sample'
 import { personaFromSections, sectionsFromPersona, type PersonaSections } from '../../shared/persona-format'
 
 /** 两种编辑模式共用的草稿；切换时明确转换正文。 */
@@ -64,6 +65,19 @@ export function previewFromDraft(draft: CharacterDraft): PreviewTurnRequest['dra
     ...(draft.mode === 'sections'
       ? { personaSections: { ...draft.sections } }
       : { personaFullText: draft.fullText }),
+  }
+}
+
+/**
+ * 主动载入已确认样稿，只替换草稿中的人设、关系和示例；保存前不会改变数据库。
+ * @param draft 当前草稿，保留用户已经填写的名字和称呼
+ * @returns 新草稿，示例逐条复制，编辑时不改到随包样稿
+ */
+export function draftWithRikkaSample(draft: CharacterDraft): CharacterDraft {
+  return {
+    ...draft, mode: 'full', fullText: RIKKA_SAMPLE.personaText,
+    initialRelationship: RIKKA_SAMPLE.initialRelationship,
+    dialogueExamples: RIKKA_SAMPLE.dialogueExamples.map((example) => ({ ...example })),
   }
 }
 
