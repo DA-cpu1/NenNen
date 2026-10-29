@@ -4,6 +4,7 @@
  */
 import type { DialogueExample, SaveCharacterVersionBody } from '../../shared/character-schema'
 import type { CharacterOverview } from '../../shared/data-types'
+import type { PreviewTurnRequest } from '../../shared/chat-turn'
 import { personaFromSections, sectionsFromPersona, type PersonaSections } from '../../shared/persona-format'
 
 /** 两种编辑模式共用的草稿；切换时明确转换正文。 */
@@ -47,6 +48,22 @@ export function bodyFromDraft(draft: CharacterDraft, requestId: string): SaveCha
     requestId, name: draft.name, initialRelationship: draft.initialRelationship,
     userNickname: draft.userNickname, dialogueExamples: draft.dialogueExamples,
     ...(draft.mode === 'sections' ? { personaSections: draft.sections } : { personaFullText: draft.fullText }),
+  }
+}
+
+/**
+ * 试聊复制本次草稿，不保存版本；重试持有这份副本，之后继续编辑不会改变它。
+ * @param draft 当前编辑内容
+ * @returns 只含人设、关系、称呼和示例的试聊资料
+ */
+export function previewFromDraft(draft: CharacterDraft): PreviewTurnRequest['draft'] {
+  return {
+    initialRelationship: draft.initialRelationship,
+    userNickname: draft.userNickname,
+    dialogueExamples: draft.dialogueExamples.map((example) => ({ ...example })),
+    ...(draft.mode === 'sections'
+      ? { personaSections: { ...draft.sections } }
+      : { personaFullText: draft.fullText }),
   }
 }
 

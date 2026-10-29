@@ -1,6 +1,6 @@
 /** 草稿边界检查：取消不污染原件、旧文本不丢失、保存不交两份人设。 */
 import { describe, expect, it } from 'vitest'
-import { bodyFromDraft, draftFromCharacter, switchDraftMode, validateDraft } from '../src/ui/settings/character-draft'
+import { bodyFromDraft, draftFromCharacter, previewFromDraft, switchDraftMode, validateDraft } from '../src/ui/settings/character-draft'
 import type { CharacterOverview } from '../src/shared/data-types'
 
 const character: CharacterOverview = {
@@ -11,6 +11,21 @@ const character: CharacterOverview = {
 }
 
 describe('编辑草稿的数据边界', () => {
+  it('试聊只复制当前草稿，后续编辑不改变已发送资料，也不带保存编号', () => {
+    const draft = draftFromCharacter(character)
+    const preview = previewFromDraft(draft)
+    draft.fullText = '之后修改'
+    draft.dialogueExamples[0].user = '之后修改示例'
+    expect(preview.personaFullText).toBe('旧的人设正文')
+    expect(preview.dialogueExamples?.[0].user).toBe('完成了')
+    expect(preview).not.toHaveProperty('requestId')
+    expect(preview).not.toHaveProperty('name')
+    const sections = { ...draft, mode: 'sections' as const }
+    const copied = previewFromDraft(sections)
+    sections.sections.core = '后续编辑'
+    expect(copied.personaSections?.core).toBe('')
+    expect(copied).not.toHaveProperty('personaFullText')
+  })
   it('修改示例不会污染已读取的原件，重新复制可恢复取消前状态', () => {
     const draft = draftFromCharacter(character)
     draft.dialogueExamples[0].user = '已修改'

@@ -9,6 +9,7 @@ import PersonaFields from './PersonaFields'
 import ExamplesEditor from './ExamplesEditor'
 import ConfirmationDialog from './ConfirmationDialog'
 import CharacterImages from './CharacterImages'
+import PreviewChat from './PreviewChat'
 import styles from './SettingsPage.module.css'
 
 interface SettingsProps extends CharacterProps {
@@ -42,6 +43,8 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [imageBusy, setImageBusy] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewBusy, setPreviewBusy] = useState(false)
   const [needsRefresh, setNeedsRefresh] = useState(loadError !== null)
   const [cancelRequested, setCancelRequested] = useState(false)
   const [activateNo, setActivateNo] = useState<number | null>(null)
@@ -54,9 +57,10 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
 
   useEffect(() => {
     if (!leaving) return
-    if (busy || imageBusy) { setError('正在保存，请稍候再离开。'); onStay() }
+    if (previewBusy) { setError('试聊正在回复，请先停止再离开。'); onStay() }
+    else if (busy || imageBusy) { setError('正在保存，请稍候再离开。'); onStay() }
     else if (!dirty) onLeave()
-  }, [leaving, busy, imageBusy, dirty, onLeave, onStay])
+  }, [leaving, busy, imageBusy, previewBusy, dirty, onLeave, onStay])
 
   /** 修改后的内容是新请求；保持同一内容时失败重试才复用原编号。 */
   function changeDraft(next: CharacterDraft): void {
@@ -190,11 +194,15 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
         </article>)}
       </section>}
     </fieldset>
+    {previewOpen && <PreviewChat draft={draft} enabled={!blocked && !busy && !imageBusy}
+      busy={previewBusy} onBusyChange={setPreviewBusy} onClose={() => setPreviewOpen(false)} />}
     <footer className={styles.footer}><p>保存生成新版本，从下一轮聊天生效。</p><div>
+      <button type="button" className={styles.secondary} disabled={busy || imageBusy || blocked}
+        onClick={() => setPreviewOpen(true)}>试聊当前草稿</button>
       <button type="button" className={styles.secondary} disabled={busy || imageBusy || !dirty} onClick={() => setCancelRequested(true)}>取消修改</button>
       <button type="button" className={styles.primary} disabled={busy || imageBusy || blocked || !dirty} onClick={() => void save()}>{busy ? '正在处理…' : '保存人设版本'}</button>
     </div></footer>
-    {(cancelRequested || (leaving && dirty && !busy)) && <ConfirmationDialog title="有未保存的修改"
+    {(cancelRequested || (leaving && dirty && !busy && !previewBusy)) && <ConfirmationDialog title="有未保存的修改"
       onCancel={() => { setCancelRequested(false); onStay() }}
       actions={<>
         <button autoFocus className={styles.secondary} onClick={() => { setCancelRequested(false); onStay() }}>继续编辑</button>

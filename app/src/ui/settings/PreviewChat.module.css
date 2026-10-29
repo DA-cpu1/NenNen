@@ -1,0 +1,14 @@
+/* 试聊沿用角色编辑页的暖白与淡紫；回复区域限高，长文本不会撑走操作栏。 */
+.panel { margin: 0 32px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); overflow: auto; flex-shrink: 0; max-height: 56vh; }
+.header { display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 14px 16px; }
+.header h2 { margin: 0 0 6px; font-size: 15px; }
+.header p, .hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.header button { flex-shrink: 0; border: 1px solid var(--border); background: var(--panel); color: var(--ink); border-radius: 7px; padding: 6px 10px; }
+.history { max-height: 18vh; overflow: auto; padding: 0 16px; }
+.history article { margin-bottom: 12px; }
+.user, .reply { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.7; padding: 10px 12px; margin: 8px 0; border-radius: 8px; background: var(--accent-soft-weak); }
+.user { margin-left: 32px; background: var(--accent-soft); }
+.reply { margin-right: 32px; }
+.user strong, .reply strong { display: block; margin-bottom: 4px; font-size: 12px; }
+.panel > .hint { padding: 0 16px; }
+@media (max-width: 800px) { .panel { margin-left: 20px; margin-right: 20px; } }
