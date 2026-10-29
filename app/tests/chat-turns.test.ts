@@ -7,7 +7,7 @@ import { desc, eq } from 'drizzle-orm'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { runMigrations } from '../src/data/migrations'
 import { initializeFirstCharacter } from '../src/data/character-init'
-import { agentRuns, conversations, messages } from '../src/data/tables'
+import { agentRuns, characters, characterVersions, companionSettings, conversations, messages } from '../src/data/tables'
 import { createChatTurnService } from '../src/service/chat-turns'
 import type { EveHandle } from '../src/agent/eve-process'
 import type { SseTurnEvent } from '../src/shared/chat-turn'
@@ -83,6 +83,21 @@ function latestReply() {
     .orderBy(desc(messages.seq)).limit(1).get()!
 }
 
+/** 测试第二角色也建齐角色、人设、正式会话与设置，避免用半套资料掩盖隔离问题。 */
+function addSecondCharacter(): string {
+  const character = companion.db.select().from(characters).get()!
+  const version = companion.db.select().from(characterVersions).get()!
+  const conversation = companion.db.select().from(conversations).get()!
+  const settings = companion.db.select().from(companionSettings).get()!
+  companion.db.transaction((tx) => {
+    tx.insert(characters).values({ ...character, id: 'second-character', name: '第二角色', createdAt: character.createdAt + 1 }).run()
+    tx.insert(characterVersions).values({ ...version, id: 'second-version', characterId: 'second-character', personaText: '第二角色固定人设' }).run()
+    tx.insert(conversations).values({ ...conversation, id: 'second-conversation', characterId: 'second-character' }).run()
+    tx.insert(companionSettings).values({ ...settings, characterId: 'second-character' }).run()
+  })
+  return 'second-conversation'
+}
+
 describe('聊天回合服务（T06⑪c1）', () => {
   it('正常回合：首帧 saved，转发文字与完成帧，结束腾出登记簿', async () => {
     const { response } = fakeResponse([appended('你好'), turnCompleted(), sessionCompleted()])
@@ -101,22 +116,75 @@ describe('聊天回合服务（T06⑪c1）', () => {
     expect(turns.activeCount()).toBe(0)
   })
 
-  it('活动回合期间同会话新请求被登记簿挡下，其他会话不受影响', async () => {
-    const { response } = fakeResponse([appended('慢'), turnCompleted(), sessionCompleted()], true)
-    fake.send.mockResolvedValue(response)
-    // 同角色再开一条正式会话，验证登记按会话隔离（首版每角色一条，这里只测隔离语义）。
-    const formal = companion.db.select().from(conversations).get()!
-    companion.db.insert(conversations).values({ ...formal, id: 'conv-2' }).run()
+  it('同角色新请求被挡下，不同完整角色可以同时回复并各自停止', async () => {
+    const secondConversationId = addSecondCharacter()
+    fake.send.mockResolvedValueOnce(fakeResponse([appended('甲的半截')], true).response)
+      .mockResolvedValueOnce(fakeResponse([appended('乙的半截')], true).response)
     const turns = service()
     const first = turns.startTurn({ conversationId, requestId: 'r1', content: '第一句' })
     expect(() => turns.startTurn({ conversationId, requestId: 'r2', content: '插队' }))
       .toThrow('E_TURN_IN_PROGRESS')
-    const second = turns.startTurn({ conversationId: 'conv-2', requestId: 'r2', content: '另一会话' })
+    const second = turns.startTurn({ conversationId: secondConversationId, requestId: 'r2', content: '另一角色' })
     expect(second.userMessageId).not.toBe(first.userMessageId)
-    // 各自收尾：第一路取消收流；第二路只取消不消费（事件流是惰性的，不读就不跑）。
+    await first.events.next()
+    expect((await first.events.next()).value).toEqual({ type: 'text', delta: '甲的半截' })
+    await second.events.next()
+    expect((await second.events.next()).value).toEqual({ type: 'text', delta: '乙的半截' })
+    expect(turns.activeCount()).toBe(2)
     turns.cancelTurn(conversationId)
     await collect(first.events)
-    turns.cancelTurn('conv-2')
+    expect(turns.activeCount()).toBe(1)
+    turns.cancelTurn(secondConversationId)
+    await collect(second.events)
+    expect(turns.activeCount()).toBe(0)
+    expect(fake.send).toHaveBeenCalledTimes(2)
+    expect(companion.db.select().from(messages).where(eq(messages.conversationId, conversationId)).all()).toHaveLength(2)
+    expect(companion.db.select().from(messages).where(eq(messages.conversationId, secondConversationId)).all()).toHaveLength(2)
+  })
+
+  it.each(['normal', 'preview'] as const)('%s 活动时同角色另一入口被拒，取消后释放且拒绝不新增会话或消息', async (mode) => {
+    fake.send.mockResolvedValue(fakeResponse([appended('回复'), turnCompleted(), sessionCompleted()]).response)
+    const turns = service()
+    const previewRequest = { requestId: 'p1', content: '试聊', draft: { personaFullText: '草稿', initialRelationship: '恋人' } }
+    const formalRequest = { conversationId, requestId: 'r1', content: '正式聊天' }
+    const first = mode === 'normal' ? turns.startTurn(formalRequest) : turns.startPreviewTurn(previewRequest)
+    const messageCount = companion.db.select().from(messages).all().length
+    const conversationCount = companion.db.select().from(conversations).all().length
+    expect(() => mode === 'normal' ? turns.startPreviewTurn(previewRequest) : turns.startTurn(formalRequest))
+      .toThrow('E_TURN_IN_PROGRESS')
+    expect(companion.db.select().from(messages).all()).toHaveLength(messageCount)
+    expect(companion.db.select().from(conversations).all()).toHaveLength(conversationCount)
+    const activeConversationId = mode === 'normal' ? conversationId
+      : companion.db.select().from(conversations).where(eq(conversations.mode, 'preview')).get()!.id
+    turns.cancelTurn(activeConversationId)
+    await collect(first.events)
+    const after = mode === 'normal' ? turns.startPreviewTurn(previewRequest) : turns.startTurn(formalRequest)
+    expect((await collect(after.events)).at(-1)).toEqual({ type: 'done', replyId: latestReply().id })
+    expect(turns.activeCount()).toBe(0)
+  })
+
+  it('正式入口伪造preview会话在保存前被拒，缺失会话也不留数据或调用模型', () => {
+    const normal = companion.db.select().from(conversations).get()!
+    companion.db.insert(conversations).values({ ...normal, id: 'forged-preview', mode: 'preview' }).run()
+    const turns = service()
+    expect(() => turns.startTurn({ conversationId: 'forged-preview', requestId: 'r1', content: '伪造正式' }))
+      .toThrow('E_PREVIEW_NOT_ALLOWED')
+    expect(() => turns.startTurn({ conversationId: 'missing', requestId: 'r2', content: '无会话' }))
+      .toThrow('E_CONVERSATION_NOT_FOUND')
+    expect(companion.db.select().from(messages).all()).toHaveLength(0)
+    expect(companion.db.select().from(agentRuns).all()).toHaveLength(0)
+    expect(fake.create).not.toHaveBeenCalled()
+    expect(fake.send).not.toHaveBeenCalled()
+    expect(turns.activeCount()).toBe(0)
+  })
+
+  it('试聊依赖未就绪时撤回新preview会话，拒绝不留空壳', () => {
+    const turns = createChatTurnService({ getDb: () => companion.db, getEve: () => undefined, limits: { modelWindowTokens: 32_000 } })
+    expect(() => turns.startPreviewTurn({
+      requestId: 'p1', content: '试聊', draft: { personaFullText: '草稿', initialRelationship: '恋人' },
+    })).toThrow('E_EVE_UNAVAILABLE')
+    expect(companion.db.select().from(conversations).where(eq(conversations.mode, 'preview')).all()).toHaveLength(0)
+    expect(companion.db.select().from(messages).all()).toHaveLength(0)
   })
 
   it('没有 eve 或没有库时给出明确错误码，不碰数据', () => {
@@ -254,6 +322,12 @@ describe('聊天回合服务（T06⑪c1）', () => {
     expect(frames.at(-1)).toEqual({ type: 'failed', code: 'E_CONTEXT_BUDGET_EXCEEDED' })
     expect(companion.db.select().from(messages).all()).toHaveLength(1)
     expect(companion.db.select().from(agentRuns).all()).toHaveLength(0)
+    expect(turns.activeCount()).toBe(0)
+    // 正式回合失败后，试聊也能取得同一角色的占用，不被上一轮遗留登记挡住。
+    const next = turns.startPreviewTurn({
+      requestId: 'after-failure', content: '试聊', draft: { personaFullText: '草稿', initialRelationship: '恋人' },
+    })
+    expect((await collect(next.events)).at(-1)).toEqual({ type: 'failed', code: 'E_CONTEXT_BUDGET_EXCEEDED' })
     expect(turns.activeCount()).toBe(0)
   })
 

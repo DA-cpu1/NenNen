@@ -1,12 +1,12 @@
 /**
  * 聊天回合的后台服务：管「谁正在说话」这本登记簿，把界面请求接到回合编排。
- * 一个会话同一时刻只允许一个活动回合——并发连点由这里挡下，而不是让两个
+ * 一个角色同一时刻只允许一个活动回合——正式聊天和试聊也不能同时回复，避免两个
  * 模型调用互相覆盖框架会话映射。事件流对外只出不进：界面的停止请求走
  * cancelTurn（打断 AbortController），不往流里塞命令。
  */
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { and, eq } from 'drizzle-orm'
-import { messages } from '../data/tables'
+import { conversations, messages } from '../data/tables'
 import { saveUserMessage } from '../data/messages'
 import { getFirstCharacter } from '../data/character-init'
 import { ensurePreviewConversation } from '../data/conversations'
@@ -76,9 +76,10 @@ export interface ChatTurnService {
  * @returns 回合服务
  */
 export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnService {
-  // conversationId → 该回合的取消控制器。登记即占用：新的同会话请求在
-  // 保存消息之前就被挡下，不会出现两轮并发的模型调用。
+  // 会话编号用来定位停止对象，角色编号用来挡下正式/试聊之间的并发。
+  // 两份登记一起建立、一起清理；挡下请求时还没有保存新的用户消息。
   const active = new Map<string, AbortController>()
+  const activeCharacters = new Set<string>()
   // 只临时保留尚未写成的结果，不写日志；同一请求重试时先补写，不能再花一次模型钱。
   const pendingWrites = new Map<string, PendingTurnWrite>()
 
@@ -104,6 +105,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
    */
   function guardedEvents(
     conversationId: string,
+    characterId: string,
     userMessageId: string,
     controller: AbortController,
     runStart: (signal: AbortSignal) => AsyncGenerator<TurnEvent, TurnOutcome>,
@@ -131,6 +133,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
         yield { type: 'failed', code }
       } finally {
         active.delete(conversationId)
+        activeCharacters.delete(characterId)
       }
     })()
   }
@@ -140,10 +143,16 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     conversationId: string,
     requestId: string,
     content: string,
-  ): { db: BetterSQLite3Database; eve: EveHandle | undefined; savedMessageId: string; pendingWrite?: PendingTurnWrite } {
+    expectedMode: 'normal' | 'preview',
+  ): { db: BetterSQLite3Database; eve: EveHandle | undefined; savedMessageId: string; characterId: string; pendingWrite?: PendingTurnWrite } {
     const db = deps.getDb()
     if (!db) throw new Error('E_DB_NOT_OPEN')
-    if (active.has(conversationId)) throw new Error('E_TURN_IN_PROGRESS')
+    const conversation = db.select().from(conversations).where(eq(conversations.id, conversationId)).get()
+    if (!conversation) throw new Error('E_CONVERSATION_NOT_FOUND')
+    if (conversation.mode !== expectedMode) {
+      throw new Error(expectedMode === 'normal' ? 'E_PREVIEW_NOT_ALLOWED' : 'E_PREVIEW_REQUIRED')
+    }
+    if (activeCharacters.has(conversation.characterId)) throw new Error('E_TURN_IN_PROGRESS')
     const existing = db.select().from(messages).where(and(
       eq(messages.conversationId, conversationId), eq(messages.clientRequestId, requestId),
     )).get()
@@ -151,14 +160,14 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     if (existing && pendingWrite) {
       if (existing.role !== 'user' || existing.content !== content) throw new Error('E_REQUEST_CONFLICT')
       // 补写不依赖 eve 仍在运行；即使模型后台已退出，也能把已收到的答案存好。
-      return { db, eve: undefined, savedMessageId: existing.id, pendingWrite }
+      return { db, eve: undefined, savedMessageId: existing.id, characterId: conversation.characterId, pendingWrite }
     }
     const eve = deps.getEve()
     if (!eve) throw new Error('E_EVE_UNAVAILABLE')
     // 落库带防重：同编号同正文返回原消息；同编号换正文报冲突。
     const saved = saveUserMessage(db, { conversationId, requestId, content })
     assertNotAnswered(db, saved.message.id)
-    return { db, eve, savedMessageId: saved.message.id }
+    return { db, eve, savedMessageId: saved.message.id, characterId: conversation.characterId }
   }
 
   return {
@@ -172,12 +181,13 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     },
 
     startTurn: (request) => {
-      const { db, eve, savedMessageId, pendingWrite } = beginTurn(request.conversationId, request.requestId, request.content)
+      const { db, eve, savedMessageId, characterId, pendingWrite } = beginTurn(request.conversationId, request.requestId, request.content, 'normal')
       const controller = new AbortController()
       active.set(request.conversationId, controller)
+      activeCharacters.add(characterId)
       return {
         userMessageId: savedMessageId,
-        events: guardedEvents(request.conversationId, savedMessageId, controller,
+        events: guardedEvents(request.conversationId, characterId, savedMessageId, controller,
           (signal) => pendingWrite ? replayWrite(db, pendingWrite) : runFormalTurn(db, eve!, {
             conversationId: request.conversationId, userMessageId: savedMessageId,
             commonRules: COMMON_RULES_TEXT, limits: deps.limits,
@@ -194,15 +204,21 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
       if (!peekDb) throw new Error('E_DB_NOT_OPEN')
       const character = getFirstCharacter(peekDb)
       if (!character) throw new Error('E_CHARACTER_NOT_FOUND')
+      if (activeCharacters.has(character.id)) throw new Error('E_TURN_IN_PROGRESS')
       // preview 会话由后台解析/创建：界面不能指定会话，也不能借试聊碰正式会话。
-      const conversation = ensurePreviewConversation(peekDb, character.id)
-      const { db, eve, savedMessageId, pendingWrite } = beginTurn(conversation.id, request.requestId, request.content)
+      // 新建会话与接收请求一起检查；后者失败时前者也撤回，不留一次失败试聊的空壳。
+      const { conversation, started } = peekDb.transaction(() => {
+        const conversation = ensurePreviewConversation(peekDb, character.id)
+        return { conversation, started: beginTurn(conversation.id, request.requestId, request.content, 'preview') }
+      })
+      const { db, eve, savedMessageId, characterId, pendingWrite } = started
       const controller = new AbortController()
       active.set(conversation.id, controller)
+      activeCharacters.add(characterId)
       return {
         userMessageId: savedMessageId,
         conversationId: conversation.id,
-        events: guardedEvents(conversation.id, savedMessageId, controller,
+        events: guardedEvents(conversation.id, characterId, savedMessageId, controller,
           (signal) => pendingWrite ? replayWrite(db, pendingWrite) : runPreviewTurn(db, eve!, {
             conversationId: conversation.id, userMessageId: savedMessageId,
             commonRules: COMMON_RULES_TEXT, draft, limits: deps.limits,
