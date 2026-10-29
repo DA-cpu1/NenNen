@@ -8,6 +8,7 @@ import { defineAgent, defineDynamic } from 'eve'
 import { wrapLanguageModel } from 'ai'
 import { waitSecrets } from './lib/stdin-secrets'
 import { createCompanionContextMiddleware } from './lib/context-middleware'
+import { createModelStepLimitMiddleware } from './lib/model-step-limit'
 
 export default defineAgent({
   // 禁止复制自己启动子 Agent；本项目的记忆整理也不是第二个自由行动的 Agent。
@@ -18,7 +19,7 @@ export default defineAgent({
     events: {
       // step.started 在真正执行模型的那一步内运行，返回的模型不进入检查点。
       // session.started / turn.started 只允许返回模型名字，不能拿来装运行期密钥。
-      'step.started': async () => {
+      'step.started': async (event) => {
         const { modelApiKey } = await waitSecrets()
         if (!modelApiKey) throw new Error('E_NO_MODEL_KEY')
         const provider = createOpenAICompatible({
@@ -30,7 +31,8 @@ export default defineAgent({
         })
         return {
           model: wrapLanguageModel({
-            model: provider('glm-5.3-flash'), middleware: createCompanionContextMiddleware(),
+            model: provider('glm-5.3-flash'),
+            middleware: [createModelStepLimitMiddleware(event), createCompanionContextMiddleware()],
           }),
           // 这是本次短消息验证的暂定预算，尚不是供应商容量的实测结论。
           modelContextWindowTokens: 128_000,
