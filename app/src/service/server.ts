@@ -281,10 +281,13 @@ export function startBackendServer(
   options: BackendOptions = {},
 ): Promise<BackendServer> {
   return new Promise((resolve, reject) => {
+    // 关闭服务时同时叫停开机探针；不能让退出还等一轮30秒模型自测。
+    const shutdown = new AbortController()
+    let stopped: Promise<void> | undefined
     // 回调用了 async（/model/ping 要等模型回话），所以整体包 try/catch，
     // 不让任何意外把整个进程带崩
     const server = createServer((req, res) => {
-      void handleRequest(req, res, token, options).catch(() => {
+      void handleRequest(req, res, token, options, shutdown.signal).catch(() => {
         sendJson(res, 500, { ok: false, code: 'INTERNAL' })
       })
     })
@@ -300,10 +303,13 @@ export function startBackendServer(
       }
       resolve({
         port: addr.port,
-        stop: () =>
-          new Promise<void>((done) => {
+        stop: () => {
+          stopped ??= new Promise<void>((done) => {
+            shutdown.abort()
             server.close(() => done())
-          }),
+          })
+          return stopped
+        },
       })
     })
   })
@@ -315,6 +321,7 @@ async function handleRequest(
   res: ServerResponse,
   token: string,
   options: BackendOptions,
+  shutdownSignal: AbortSignal,
 ): Promise<void> {
   // 每个请求都要带暗号，因为 HTTP 是"无记忆"的：处理完这通电话就忘了
   // 你是谁，没有"开头自我介绍一次、后面就认识你"。暗号装在请求头里
@@ -323,6 +330,10 @@ async function handleRequest(
   // 暗号不对就统一拒接，不说"差一点就对了"（那是在帮试探者缩小范围）
   if (!isAuthorized(req, token)) {
     sendJson(res, 401, { ok: false, code: 'UNAUTHORIZED' })
+    return
+  }
+  if (shutdownSignal.aborted) {
+    sendJson(res, 503, { ok: false, code: 'BACKEND_STOPPING' })
     return
   }
   // 基础健康检查：主进程开机后拿它自测通道
@@ -342,10 +353,11 @@ async function handleRequest(
       const result: ModelCallResult = await call(
         apiKey,
         '请只回复两个字：收到',
-        AbortSignal.timeout(30_000),
+        AbortSignal.any([shutdownSignal, AbortSignal.timeout(30_000)]),
       )
       sendJson(res, 200, { ok: true, text: result.text, usage: result.usage ?? null })
     } catch (error) {
+      if (shutdownSignal.aborted) res.setHeader('connection', 'close')
       // 模型调用失败：把原因带回去（错误消息里不会有密钥），主进程记日志
       const message = error instanceof Error ? error.message : 'unknown'
       sendJson(res, 502, { ok: false, code: 'MODEL_ERROR', message })
@@ -363,9 +375,10 @@ async function handleRequest(
       return
     }
     try {
-      const result = await options.pingAgent(AbortSignal.timeout(30_000))
+      const result = await options.pingAgent(AbortSignal.any([shutdownSignal, AbortSignal.timeout(30_000)]))
       sendJson(res, 200, { ok: true, text: result.text, usage: result.usage ?? null })
     } catch {
+      if (shutdownSignal.aborted) res.setHeader('connection', 'close')
       // 不传原始错误消息；第三方错误对象可能包含提示词或密钥。
       sendJson(res, 502, { ok: false, code: 'AGENT_ERROR' })
     }

@@ -24,6 +24,36 @@ afterAll(async () => {
 })
 
 describe('后台服务监听', () => {
+  it.each(['/agent/ping', '/model/ping'])('关闭服务会中止正在等待的%s，不等满30秒且重复stop复用', async (path) => {
+    let entered!: () => void
+    let aborted = false
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    /** 固定探针直到退出信号才结束，不能靠真实网络快慢碰巧通过。 */
+    const probe = (signal: AbortSignal) => new Promise<never>((_resolve, reject) => {
+      entered()
+      signal.addEventListener('abort', () => {
+        aborted = true
+        reject(new Error('fixed-probe-cancelled'))
+      }, { once: true })
+    })
+    const fake = await startBackendServer(TOKEN, {
+      modelApiKey: 'fixed-test-key', pingAgent: probe,
+      callModel: async (_key, _prompt, signal) => probe(signal!),
+    })
+    extraServers.push(fake)
+    const response = fetch(`http://127.0.0.1:${fake.port}${path}`, { headers: { 'x-session-token': TOKEN } })
+    await started
+    const stopStartedAt = Date.now()
+    const closing = fake.stop()
+    expect(fake.stop()).toBe(closing)
+    await closing
+    expect(Date.now() - stopStartedAt).toBeLessThan(2_000)
+    expect(aborted).toBe(true)
+    const result = await response
+    expect(result.status).toBe(502)
+    expect((await result.json()).ok).toBe(false)
+  })
+
   it('绑定 127.0.0.1 的随机端口', () => {
     expect(server).toBeDefined()
     expect(server!.port).toBeGreaterThan(0)
