@@ -1,5 +1,5 @@
 /** 基本信息和人设输入框。这里只编辑草稿，不发请求、不直接写数据库。 */
-import { switchDraftMode, type CharacterDraft } from './character-draft'
+import { draftBudgetWarning, switchDraftMode, type CharacterDraft } from './character-draft'
 import styles from './SettingsPage.module.css'
 
 interface PersonaFieldsProps {
@@ -14,6 +14,7 @@ interface PersonaFieldsProps {
  * @returns 基本信息与人设卡片
  */
 export default function PersonaFields({ draft, onChange, onError }: PersonaFieldsProps) {
+  const budgetWarning = draftBudgetWarning(draft)
   /** 全文拆不开就留在原模式，明确告诉用户标准标题是什么。 */
   function changeMode(mode: CharacterDraft['mode']): void {
     const next = switchDraftMode(draft, mode)
@@ -45,6 +46,7 @@ export default function PersonaFields({ draft, onChange, onError }: PersonaField
           {['核心性格', '语言习惯', '背景边界'][index]}
           <textarea rows={4} value={draft.sections[key]} onChange={(event) => onChange({ ...draft, sections: { ...draft.sections, [key]: event.target.value } })} />
         </label>)}
+      {budgetWarning && <p role="status" className={styles.hint}>{budgetWarning}</p>}
       <aside className={styles.principles}><strong>共同原则 · 始终生效</strong><p>不编造共同经历 · 不用内疚迫使你聊天 · 操作成功后才确认</p></aside>
     </section>
   </>

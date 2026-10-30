@@ -5,7 +5,7 @@
 import type { DialogueExample, SaveCharacterVersionBody } from '../../shared/character-schema'
 import type { CharacterOverview } from '../../shared/data-types'
 import type { PreviewTurnRequest } from '../../shared/chat-turn'
-import { RIKKA_SAMPLE } from '../../shared/character-sample'
+import { COMMON_FACT_RULES, RIKKA_SAMPLE } from '../../shared/character-sample'
 import { personaFromSections, sectionsFromPersona, type PersonaSections } from '../../shared/persona-format'
 
 /** 两种编辑模式共用的草稿；切换时明确转换正文。 */
@@ -94,6 +94,26 @@ export function validateDraft(draft: CharacterDraft): string | null {
   if (draft.dialogueExamples.length > 20) return '情境示例最多保留 20 条。'
   const index = draft.dialogueExamples.findIndex((item) => !item.user.trim() || !item.character.trim())
   return index < 0 ? null : `请补齐第 ${index + 1} 条示例的用户话语和角色回应。`
+}
+
+/**
+ * 提前提示人设本身已放不下；不截短、不阻止用户保存原稿。
+ * @param draft 当前草稿，示例是可选内容，所以不拿它们误判核心人设过长
+ * @returns 明确超限时的中文建议；null只代表未触发此提示，不保证实际请求能放下
+ */
+export function draftBudgetWarning(draft: CharacterDraft): string | null {
+  const personaText = draft.mode === 'full' ? draft.fullText.trim() : personaFromSections(draft.sections)
+  // TextEncoder在普通浏览器就能按UTF-8数出字节，不需要给界面开启Node权限。
+  // 这里只算已知的必需部分；发送时后台还会检查版本、当前消息与完整协议开销。
+  const mandatory = [
+    { role: 'system', content: COMMON_FACT_RULES },
+    { role: 'system', content: '本轮角色设定：\n' + JSON.stringify({
+      name: draft.name, personaText, initialRelationship: draft.initialRelationship, userNickname: draft.userNickname,
+    }) },
+    { role: 'user', content: '' },
+  ]
+  const estimate = new TextEncoder().encode(JSON.stringify(mandatory)).byteLength + 256
+  return estimate > 12_000 ? '人设、关系和称呼已超过本轮输入预算，请缩短设定后再试聊；还需要为你的消息留出空间。' : null
 }
 
 /**

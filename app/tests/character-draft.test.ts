@@ -1,6 +1,6 @@
 /** 草稿边界检查：取消不污染原件、旧文本不丢失、保存不交两份人设。 */
 import { describe, expect, it } from 'vitest'
-import { bodyFromDraft, draftFromCharacter, draftWithRikkaSample, previewFromDraft, switchDraftMode, validateDraft } from '../src/ui/settings/character-draft'
+import { bodyFromDraft, draftBudgetWarning, draftFromCharacter, draftWithRikkaSample, previewFromDraft, switchDraftMode, validateDraft } from '../src/ui/settings/character-draft'
 import type { CharacterOverview } from '../src/shared/data-types'
 
 const character: CharacterOverview = {
@@ -11,6 +11,17 @@ const character: CharacterOverview = {
 }
 
 describe('编辑草稿的数据边界', () => {
+  it('核心设定本身超预算时提示缩短，但不截原文或把可选示例当必需内容', () => {
+    const original = draftFromCharacter(character)
+    const long = { ...original, fullText: '汉'.repeat(8_000) }
+    expect(draftBudgetWarning(long)).toContain('请缩短设定')
+    expect(long.fullText).toHaveLength(8_000)
+    expect(validateDraft(long)).toBeNull()
+    expect(draftBudgetWarning({ ...original, dialogueExamples: [{ scene: '', user: '汉'.repeat(8_000), character: '答' }] })).toBeNull()
+    expect(draftBudgetWarning({ ...original, initialRelationship: '汉'.repeat(8_000) })).toContain('预算')
+    expect(draftBudgetWarning({ ...original, mode: 'sections', sections: { core: '汉'.repeat(8_000), speech: '', background: '' } })).toContain('预算')
+    expect(draftBudgetWarning(draftWithRikkaSample(original))).toBeNull()
+  })
   it('载入样稿只产生可编辑副本，保留名字称呼，不覆盖原件', () => {
     const original = { ...draftFromCharacter(character), name: '自定义名字', userNickname: '阿达' }
     const sample = draftWithRikkaSample(original)

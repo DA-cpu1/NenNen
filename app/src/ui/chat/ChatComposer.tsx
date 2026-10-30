@@ -25,6 +25,18 @@ interface ChatComposerProps {
 }
 
 type TurnPhase = 'idle' | 'sending' | 'stopping'
+
+/** 固定失败码对应可执行的建议；未知失败保留固定码，方便定位，不显示供应商原始报错。 */
+const failureHints: Record<string, string> = {
+  E_CONTEXT_BUDGET_EXCEEDED: '本轮内容超过输入预算，请缩短消息或人设后再发送。',
+  AGENT_UNAVAILABLE: '模型尚未连接，请先检查模型配置后重试。',
+  TURN_IN_PROGRESS: '这个角色仍在回复，请等回复结束或先停止。',
+  E_TURN_TIMEOUT: '本轮等待已超过90秒，回复已停止，可以重试。',
+  E_TURN_LIMIT: '本轮已达到3次生成上限，回复未完成。',
+  STREAM_ENDED: '回复连接已断开，已收到的文字仍保留，可以重试。',
+  BACKEND_UNREACHABLE: '后台暂时无法连接，请稍后重试。',
+  E_EVE_SEND_FAILED: '消息未能交给模型，请重试。',
+}
 interface RetryPayload {
   requestId: string
   content: string
@@ -218,7 +230,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
     {(errorCode || retry) && <div className={styles.notice}>
       {errorCode && <span role="alert" className={styles.error}>
         {errorCode === 'CANCEL_FAILED' ? '停止请求未确认，可再次停止' :
-          pendingSave.current ? '本轮未完整保存，请先重试保存，再发送新消息' : `回复未完成（${errorCode}）`}
+          pendingSave.current ? '本轮未完整保存，请先重试保存，再发送新消息' : failureHints[errorCode] ?? `回复未完成（${errorCode}）`}
       </span>}
       {retry && !busy && <button type="button" className={styles.retry} disabled={!enabled}
         onClick={() => void startTurn(retry)}>重试</button>}
