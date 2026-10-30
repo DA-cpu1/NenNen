@@ -58,7 +58,7 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
 
   useEffect(() => {
     if (!leaving) return
-    if (previewBusy) { setError('试聊正在回复，请先停止再离开。'); onStay() }
+    if (previewBusy) { setError('请先停止试聊或重试保存后再离开。'); onStay() }
     else if (busy || imageBusy) { setError('正在保存，请稍候再离开。'); onStay() }
     else if (!dirty) onLeave()
   }, [leaving, busy, imageBusy, previewBusy, dirty, onLeave, onStay])

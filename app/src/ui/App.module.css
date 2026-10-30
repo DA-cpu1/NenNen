@@ -66,3 +66,7 @@
   min-width: 0; /* 允许子内容收缩换行，不把导航挤歪 */
   display: flex;
 }
+
+/* 正式聊天保持挂载以保护未保存结果；隐藏时不占布局，也不进入键盘焦点顺序。 */
+.pageSlot { display: flex; flex: 1; min-width: 0; }
+.pageSlot[hidden] { display: none; }

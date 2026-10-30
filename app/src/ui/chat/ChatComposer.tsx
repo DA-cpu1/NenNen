@@ -47,6 +47,8 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
   const conversationId = useRef<string | null>(null)
   const phaseRef = useRef<TurnPhase>('idle')
   const replyText = useRef('')
+  /** 未保存的文字按原编号保留，不能借给下一条新消息。 */
+  const pendingSave = useRef<{ requestId: string; text: string } | null>(null)
   const hintTimer = useRef<number | undefined>(undefined)
   const mounted = useRef(true)
   // ref 让一次订阅总能调用当前页面的通知函数，不捕获旧状态。
@@ -67,7 +69,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
   }
 
   /** 收尾只执行一次；未保存或断流的可见文字留下，不能假装已入库。 */
-  function settleTurn(status: VisibleAttempt['status'], code: string | null): void {
+  function settleTurn(status: VisibleAttempt['status'], code: string | null, confirmed = false): void {
     const payload = active.current
     if (!payload) return
     clearHintTimer()
@@ -75,12 +77,16 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
     conversationId.current = null
     phaseRef.current = 'idle'
     setPhase('idle')
-    const unsaved = code === 'E_REPLY_SAVE_FAILED' || code === 'E_RUN_SAVE_FAILED' || code === 'STREAM_ENDED'
-    setStreamText(unsaved ? replyText.current : '')
+    const saveFailed = code === 'E_REPLY_SAVE_FAILED' || code === 'E_RUN_SAVE_FAILED'
+    if (saveFailed) pendingSave.current = { requestId: payload.requestId, text: replyText.current }
+    else if (confirmed && pendingSave.current?.requestId === payload.requestId) pendingSave.current = null
+    const stillUnsaved = pendingSave.current?.requestId === payload.requestId
+    setStreamText(stillUnsaved ? pendingSave.current!.text : code === 'STREAM_ENDED' ? replyText.current : '')
     setWaitingHint(false)
     setErrorCode(code)
-    setRetry(status === 'failed' ? payload : null)
-    callbacks.current.onBusyChange?.(false)
+    setRetry(status === 'failed' || stillUnsaved ? payload : null)
+    // 试聊未保存时也要保护面板，不能收起后把唯一可见副本丢掉。
+    callbacks.current.onBusyChange?.(stillUnsaved)
     callbacks.current.onAttemptSettled?.({ requestId: payload.requestId, content: payload.content, text: replyText.current, status })
     callbacks.current.onTurnSettled()
   }
@@ -118,9 +124,9 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
         callbacks.current.onTurnSettled()
         // 先按停止再收到首帧时，等拿到真实会话编号再请求取消。
         if (phaseRef.current === 'stopping') void cancelKnownTurn()
-      } else if (frame.type === 'done') settleTurn('completed', null)
-      else if (frame.type === 'cancelled') settleTurn('cancelled', null)
-      else settleTurn('failed', frame.code)
+      } else if (frame.type === 'done') settleTurn('completed', null, true)
+      else if (frame.type === 'cancelled') settleTurn('cancelled', null, true)
+      else settleTurn('failed', frame.code, true)
     })
     return () => {
       mounted.current = false
@@ -136,6 +142,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
   /** 固定请求再异步读取，按钮变灰前的连续点击也只能送出一轮。 */
   async function startTurn(payload: RetryPayload): Promise<void> {
     if (phaseRef.current !== 'idle' || !enabled) return
+    if (pendingSave.current && pendingSave.current.requestId !== payload.requestId) return
     const api = window.appApi
     if (!api?.onChatTurnEvent || !api.startChatTurn || !api.startPreviewTurn) {
       setErrorCode('CHANNEL_MISSING')
@@ -147,7 +154,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
     phaseRef.current = 'sending'
     callbacks.current.onBusyChange?.(true)
     // 补写失败的重试没有新模型文字，继续留住原结果，不能一点重试就抹掉它。
-    const retainedText = errorCode === 'E_REPLY_SAVE_FAILED' || errorCode === 'E_RUN_SAVE_FAILED' ? replyText.current : ''
+    const retainedText = pendingSave.current?.requestId === payload.requestId ? pendingSave.current.text : ''
     replyText.current = retainedText
     setPhase('sending')
     setStreamText(retainedText)
@@ -174,7 +181,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
       if (!mounted.current || active.current !== payload) return
       if (!result.ok) {
         settleTurn(result.code === 'ALREADY_REPLIED' ? 'completed' : 'failed',
-          result.code === 'ALREADY_REPLIED' ? null : result.code ?? 'SEND_FAILED')
+          result.code === 'ALREADY_REPLIED' ? null : result.code ?? 'SEND_FAILED', result.code === 'ALREADY_REPLIED')
       } else if (isStopping()) void cancelKnownTurn()
     } catch {
       if (mounted.current && active.current === payload) settleTurn('failed', 'SEND_FAILED')
@@ -183,7 +190,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
 
   /** 原样发送，包括首尾空白；后台仍会重新检查长度。 */
   function send(): void {
-    if (phaseRef.current !== 'idle' || !enabled || !text.trim() || tooLong) return
+    if (phaseRef.current !== 'idle' || !enabled || !text.trim() || tooLong || pendingSave.current) return
     const payload = { requestId: crypto.randomUUID(), content: text, draft: previewDraft }
     setText('')
     void startTurn(payload)
@@ -206,7 +213,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
     {(errorCode || retry) && <div className={styles.notice}>
       {errorCode && <span role="alert" className={styles.error}>
         {errorCode === 'CANCEL_FAILED' ? '停止请求未确认，可再次停止' :
-          ['E_REPLY_SAVE_FAILED', 'E_RUN_SAVE_FAILED'].includes(errorCode) ? '本轮未完整保存，请保留可见文字并重试' : `回复未完成（${errorCode}）`}
+          pendingSave.current ? '本轮未完整保存，请先重试保存，再发送新消息' : `回复未完成（${errorCode}）`}
       </span>}
       {retry && !busy && <button type="button" className={styles.retry} disabled={!enabled}
         onClick={() => void startTurn(retry)}>重试</button>}
@@ -218,7 +225,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
         aria-label={previewDraft ? '试聊输入框' : '聊天输入框'} />
       {busy ? <button type="button" className={styles.stop} disabled={phase === 'stopping'} onClick={stop}>
         {phase === 'stopping' ? '停止中' : '停止'}</button>
-        : <button type="button" className={styles.send} disabled={!enabled || !text.trim() || tooLong} onClick={send}>发送</button>}
+        : <button type="button" className={styles.send} disabled={!enabled || !text.trim() || tooLong || pendingSave.current !== null} onClick={send}>发送</button>}
     </div>
     {tooLong && <p className={styles.error}>单条最多 {MAX_CHAT_INPUT_CHARACTERS} 个字符（当前 {codePoints}），请分段发送</p>}
   </footer>

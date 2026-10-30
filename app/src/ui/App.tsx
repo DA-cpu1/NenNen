@@ -1,6 +1,6 @@
 /**
  * 聊天窗的「壳」：左边一条窄导航（聊天 / 角色设置，设计稿 full-ui-v1），
- * 右边是当前页。聊天页已能查看正式历史，消息收发由 T06 后续步骤接入。
+ * 右边是当前页。聊天页切到设置后仍保留，避免丢掉未保存文字和重试编号。
  *
  * 角色概览（名字、图片路径、人设版本）在这里统一取一次、传给两页：
  * 设置页保存后调 reload() 刷新，聊天页跟着换新名字/新立绘——
@@ -112,7 +112,9 @@ export default function App() {
         </button>
       </nav>
       <main className={styles.body}>
-        {page === 'chat' ? <ChatPage {...shared} /> : <SettingsPage {...shared}
+        {/* 隐藏只改变可见性，不卸载输入区；返回聊天时仍能重试保存原结果。 */}
+        <div className={styles.pageSlot} hidden={page !== 'chat'}><ChatPage {...shared} /></div>
+        {page === 'settings' && <SettingsPage {...shared}
           leaving={leaveTarget !== null} onLeave={completeLeave} onStay={cancelLeave} />}
       </main>
     </div>
