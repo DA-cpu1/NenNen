@@ -55,7 +55,7 @@ interface Window {
       cancelled?: boolean
       code?: string
     }>
-    /** 订阅回合事件流；frame 为 null 表示该回合的流已结束。先订阅再启动。 */
+    /** 先订阅再启动；有终态以终态为准，缺终态的断流才用frame:null通知收尾。 */
     onChatTurnEvent: (callback: (message: {
       requestId: string
       frame: import('../shared/chat-turn').SseTurnEvent | null
