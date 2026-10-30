@@ -50,12 +50,17 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
   /** 未保存的文字按原编号保留，不能借给下一条新消息。 */
   const pendingSave = useRef<{ requestId: string; text: string } | null>(null)
   const hintTimer = useRef<number | undefined>(undefined)
+  const liveArea = useRef<HTMLDivElement>(null)
   const mounted = useRef(true)
   // ref 让一次订阅总能调用当前页面的通知函数，不捕获旧状态。
   const callbacks = useRef({ onTurnSettled, onAttemptSettled, onBusyChange })
   callbacks.current = { onTurnSettled, onAttemptSettled, onBusyChange }
   const codePoints = [...text].length
   const tooLong = codePoints > MAX_CHAT_INPUT_CHARACTERS
+  // 文字逐段增长时，只滚动实时条自己的内容，不拉动整个设置页。
+  useEffect(() => {
+    if (liveArea.current) liveArea.current.scrollTop = liveArea.current.scrollHeight
+  }, [streamText])
 
   /** 停止首字闹钟，防止结束后冒出过时提示。 */
   function clearHintTimer(): void {
@@ -206,7 +211,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
 
   const busy = phase !== 'idle'
   return <footer className={styles.composer}>
-    {(busy || streamText !== '') && <div className={styles.live} aria-live="polite">
+    {(busy || streamText !== '') && <div className={styles.live} ref={liveArea} aria-live="polite">
       {streamText ? <p className={styles.liveText}>{streamText}</p>
         : <p className={styles.hint}>{phase === 'stopping' ? '正在停止…' : waitingHint ? '对方还在思考，稍等一下…' : '正在输入…'}</p>}
     </div>}
