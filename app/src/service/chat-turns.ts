@@ -67,6 +67,8 @@ export interface ChatTurnService {
   cancelTurn: (conversationId: string) => boolean
   /** 当前活动回合数；检查与验收用。 */
   activeCount: () => number
+  /** 退出前停止受理，取消并等已有回合保存终态；重复调用共用同一次收尾。 */
+  stop: () => Promise<void>
 }
 
 /**
@@ -76,12 +78,67 @@ export interface ChatTurnService {
  * @returns 回合服务
  */
 export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnService {
+  /** 完成信号让退出流程等到取消落库，不能只发出取消就关闭数据库。 */
+  interface ActiveTurn {
+    controller: AbortController
+    started: boolean
+    events?: AsyncGenerator<SseTurnEvent>
+    completed: Promise<void>
+    finish: () => void
+  }
   // 会话编号用来定位停止对象，角色编号用来挡下正式/试聊之间的并发。
   // 两份登记一起建立、一起清理；挡下请求时还没有保存新的用户消息。
-  const active = new Map<string, AbortController>()
+  const active = new Map<string, ActiveTurn>()
   const activeCharacters = new Set<string>()
   // 只临时保留尚未写成的结果，不写日志；同一请求重试时先补写，不能再花一次模型钱。
   const pendingWrites = new Map<string, PendingTurnWrite>()
+  let closing = false
+  let stopping: Promise<void> | undefined
+
+  /** 无界面读取的已受理流也需要收尾；已中止的信号保证不会因此开始模型调用。 */
+  async function drain(events: AsyncGenerator<SseTurnEvent>): Promise<void> {
+    for await (const _event of events) { /* 退出时只保存结果，不再等待界面展示。 */ }
+  }
+
+  /**
+   * 停止受理并排空活动回合，最后再尝试补写尚未保存的原结果。
+   * @returns 所有本轮落库尝试结束后完成；不会再次调用模型
+   */
+  function stop(): Promise<void> {
+    if (stopping) return stopping
+    closing = true
+    const turns = [...active.values()]
+    for (const turn of turns) turn.controller.abort()
+    for (const turn of turns) {
+      if (!turn.started && turn.events) void drain(turn.events).catch(() => {})
+    }
+    stopping = Promise.all(turns.map((turn) => turn.completed)).then(() => {
+      const db = deps.getDb()
+      if (!db) return
+      for (const [userMessageId, write] of pendingWrites) {
+        if (!finalizeTurnWrite(db, write).outcome.pendingWrite) pendingWrites.delete(userMessageId)
+      }
+    })
+    return stopping
+  }
+
+  /** 登记活动回合和完成信号，再把流交给HTTP层；避免退出发生在两者之间。 */
+  function registerTurn(
+    conversationId: string,
+    characterId: string,
+    userMessageId: string,
+    runStart: (signal: AbortSignal) => AsyncGenerator<TurnEvent, TurnOutcome>,
+  ): AsyncGenerator<SseTurnEvent> {
+    let finish!: () => void
+    const turn: ActiveTurn = {
+      controller: new AbortController(), started: false,
+      completed: new Promise<void>((resolve) => { finish = resolve }), finish: () => finish(),
+    }
+    active.set(conversationId, turn)
+    activeCharacters.add(characterId)
+    turn.events = guardedEvents(conversationId, characterId, userMessageId, turn, runStart)
+    return turn.events
+  }
 
   /** 保存重试没有模型阶段，只把内存里的原结果再交给同一组落库检查。 */
   async function* replayWrite(db: BetterSQLite3Database, write: PendingTurnWrite): AsyncGenerator<TurnEvent, TurnOutcome> {
@@ -107,13 +164,14 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     conversationId: string,
     characterId: string,
     userMessageId: string,
-    controller: AbortController,
+    turn: ActiveTurn,
     runStart: (signal: AbortSignal) => AsyncGenerator<TurnEvent, TurnOutcome>,
   ): AsyncGenerator<SseTurnEvent> {
     return (async function* generate(): AsyncGenerator<SseTurnEvent> {
+      turn.started = true
       try {
         yield { type: 'saved', userMessageId, conversationId }
-        const runner = runStart(controller.signal)
+        const runner = runStart(turn.controller.signal)
         let terminalEvent: TurnEvent | undefined
         for (;;) {
           const step = await runner.next()
@@ -134,6 +192,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
       } finally {
         active.delete(conversationId)
         activeCharacters.delete(characterId)
+        turn.finish()
       }
     })()
   }
@@ -145,6 +204,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     content: string,
     expectedMode: 'normal' | 'preview',
   ): { db: BetterSQLite3Database; eve: EveHandle | undefined; savedMessageId: string; characterId: string; pendingWrite?: PendingTurnWrite } {
+    if (closing) throw new Error('E_BACKEND_STOPPING')
     const db = deps.getDb()
     if (!db) throw new Error('E_DB_NOT_OPEN')
     const conversation = db.select().from(conversations).where(eq(conversations.id, conversationId)).get()
@@ -172,22 +232,20 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
 
   return {
     activeCount: () => active.size,
+    stop,
 
     cancelTurn: (conversationId) => {
-      const controller = active.get(conversationId)
-      if (!controller) return false
-      controller.abort()
+      const turn = active.get(conversationId)
+      if (!turn) return false
+      turn.controller.abort()
       return true
     },
 
     startTurn: (request) => {
       const { db, eve, savedMessageId, characterId, pendingWrite } = beginTurn(request.conversationId, request.requestId, request.content, 'normal')
-      const controller = new AbortController()
-      active.set(request.conversationId, controller)
-      activeCharacters.add(characterId)
       return {
         userMessageId: savedMessageId,
-        events: guardedEvents(request.conversationId, characterId, savedMessageId, controller,
+        events: registerTurn(request.conversationId, characterId, savedMessageId,
           (signal) => pendingWrite ? replayWrite(db, pendingWrite) : runFormalTurn(db, eve!, {
             conversationId: request.conversationId, userMessageId: savedMessageId,
             commonRules: COMMON_RULES_TEXT, limits: deps.limits,
@@ -197,6 +255,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     },
 
     startPreviewTurn: (request) => {
+      if (closing) throw new Error('E_BACKEND_STOPPING')
       // 草稿先归一：分区/全文二选一的规则与保存路径同源，坏草稿不出服务层。
       const draft = resolvePreviewDraft(request)
       if (!draft) throw new Error('E_INVALID_DRAFT_PERSONA')
@@ -212,13 +271,10 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
         return { conversation, started: beginTurn(conversation.id, request.requestId, request.content, 'preview') }
       })
       const { db, eve, savedMessageId, characterId, pendingWrite } = started
-      const controller = new AbortController()
-      active.set(conversation.id, controller)
-      activeCharacters.add(characterId)
       return {
         userMessageId: savedMessageId,
         conversationId: conversation.id,
-        events: guardedEvents(conversation.id, characterId, savedMessageId, controller,
+        events: registerTurn(conversation.id, characterId, savedMessageId,
           (signal) => pendingWrite ? replayWrite(db, pendingWrite) : runPreviewTurn(db, eve!, {
             conversationId: conversation.id, userMessageId: savedMessageId,
             commonRules: COMMON_RULES_TEXT, draft, limits: deps.limits,

@@ -99,6 +99,38 @@ function addSecondCharacter(): string {
 }
 
 describe('聊天回合服务（T06⑪c1）', () => {
+  it('退出等待已开始回合取消落库，停止后拒绝正式和试聊新请求，重复stop复用', async () => {
+    const { response } = fakeResponse([appended('退出前的半截')], true)
+    fake.send.mockResolvedValue(response)
+    const turns = service()
+    const { events } = turns.startTurn({ conversationId, requestId: 'shutdown-r1', content: '固定问题' })
+    await events.next()
+    await events.next()
+    const stopped = turns.stop()
+    expect(turns.stop()).toBe(stopped)
+    expect(() => turns.startTurn({ conversationId, requestId: 'shutdown-r2', content: '不能插队' }))
+      .toThrow('E_BACKEND_STOPPING')
+    expect(() => turns.startPreviewTurn({ requestId: 'shutdown-p1', content: '不能试聊',
+      draft: { personaFullText: '固定草稿', initialRelationship: '恋人' } })).toThrow('E_BACKEND_STOPPING')
+    expect((await collect(events)).at(-1)).toEqual({ type: 'cancelled' })
+    await stopped
+    expect(latestReply()).toMatchObject({ content: '退出前的半截', status: 'cancelled' })
+    expect(companion.db.select().from(agentRuns).get()).toMatchObject({ status: 'cancelled' })
+    expect(turns.activeCount()).toBe(0)
+    expect(fake.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('尚无界面消费的已受理回合也能退出，不触发模型或留下活动占用', async () => {
+    const turns = service()
+    turns.startTurn({ conversationId, requestId: 'shutdown-unread', content: '已保存但未开始' })
+    await turns.stop()
+    expect(turns.activeCount()).toBe(0)
+    expect(fake.create).not.toHaveBeenCalled()
+    expect(fake.send).not.toHaveBeenCalled()
+    expect(companion.db.select().from(messages).all()).toHaveLength(1)
+    expect(companion.db.select().from(agentRuns).all()).toHaveLength(0)
+  })
+
   it('正常回合：首帧 saved，转发文字与完成帧，结束腾出登记簿', async () => {
     const { response } = fakeResponse([appended('你好'), turnCompleted(), sessionCompleted()])
     fake.send.mockResolvedValue(response)

@@ -96,6 +96,8 @@ function main(): void {
   async function shutdown(): Promise<void> {
     if (closing) return
     closing = true
+    // 先禁止新回合并等取消结果写完，HTTP仍在读取流，所以不会把保存收尾截断。
+    await chatTurns.stop()
     await server?.stop()
     await eve?.stop()
     // 连接不关的话文件会被一直占用；而且 WAL 模式下没正常关闭，
