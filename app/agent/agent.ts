@@ -9,6 +9,7 @@ import { wrapLanguageModel } from 'ai'
 import { waitSecrets } from './lib/stdin-secrets'
 import { createCompanionContextMiddleware } from './lib/context-middleware'
 import { createModelStepLimitMiddleware } from './lib/model-step-limit'
+import { MODEL_CONTEXT_WINDOW_TOKENS } from '../src/shared/model-limits'
 
 export default defineAgent({
   // 禁止复制自己启动子 Agent；本项目的记忆整理也不是第二个自由行动的 Agent。
@@ -34,8 +35,8 @@ export default defineAgent({
             model: provider('glm-5.3-flash'),
             middleware: [createModelStepLimitMiddleware(event), createCompanionContextMiddleware()],
           }),
-          // 这是本次短消息验证的暂定预算，尚不是供应商容量的实测结论。
-          modelContextWindowTokens: 128_000,
+          // 与后台共用官方标注下的保守窗口；实际调用还受12,000输入硬上限约束。
+          modelContextWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS,
         }
       },
     },
