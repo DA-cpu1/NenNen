@@ -356,11 +356,10 @@ async function handleRequest(
         AbortSignal.any([shutdownSignal, AbortSignal.timeout(30_000)]),
       )
       sendJson(res, 200, { ok: true, text: result.text, usage: result.usage ?? null })
-    } catch (error) {
+    } catch {
       if (shutdownSignal.aborted) res.setHeader('connection', 'close')
-      // 模型调用失败：把原因带回去（错误消息里不会有密钥），主进程记日志
-      const message = error instanceof Error ? error.message : 'unknown'
-      sendJson(res, 502, { ok: false, code: 'MODEL_ERROR', message })
+      // 供应商错误可能夹带密钥或提示词；只给固定码，不能进入主进程日志。
+      sendJson(res, 502, { ok: false, code: 'MODEL_ERROR' })
     }
     return
   }

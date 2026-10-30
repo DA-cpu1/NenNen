@@ -577,11 +577,11 @@ describe('模型自测端点 /model/ping', () => {
     expect(receivedPrompt).toBe('请只回复两个字：收到')
   })
 
-  it('模型函数抛错时返回 502 MODEL_ERROR 并带原因', async () => {
+  it('模型函数抛错时只返回 502 MODEL_ERROR，不把密钥或提示词交给主进程', async () => {
     const fake = await startBackendServer(TOKEN, {
       modelApiKey: 'fake-key-123',
       callModel: async () => {
-        throw new Error('模拟供应商断线')
+        throw new Error('fixed-secret-key + 不应进入主进程日志的完整提示词')
       },
     })
     extraServers.push(fake)
@@ -589,10 +589,10 @@ describe('模型自测端点 /model/ping', () => {
       headers: { 'x-session-token': TOKEN },
     })
     expect(res.status).toBe(502)
-    const body = (await res.json()) as { ok: boolean; code: string; message: string }
-    expect(body.ok).toBe(false)
-    expect(body.code).toBe('MODEL_ERROR')
-    expect(body.message).toContain('模拟供应商断线')
+    const body = await res.text()
+    expect(JSON.parse(body)).toEqual({ ok: false, code: 'MODEL_ERROR' })
+    expect(body).not.toContain('fixed-secret-key')
+    expect(body).not.toContain('完整提示词')
   })
 
   it('不带令牌打 /model/ping 同样 401', async () => {
