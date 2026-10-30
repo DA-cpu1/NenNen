@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { startBackend, type BackendHandle } from './backend'
+import { createQuitBarrier } from './quit-barrier'
 import { registerAppAssetProtocol, registerAppAssetSchemePrivileges } from './app-asset'
 import { registerBridgeRequests } from '../bridge/requests'
 import { registerChatStreamBridge } from '../bridge/chat-stream'
@@ -528,6 +529,9 @@ function createPetWindow(): void {
 
 /** 当前的后台进程句柄；每次启动重新雇一个 */
 let backend: BackendHandle | undefined
+/** 启动尚未报到时也能退出；退出先取消这次启动，再等它清理完。 */
+let backendStarting: Promise<BackendHandle> | undefined
+const backendStartupAbort = new AbortController()
 
 /** 托盘图标：16×16 淡紫圆点 PNG 的 base64（由 scripts/make-tray-icon.mjs
  *  生成，设计稿的「tiny lavender app tray icon」）。放代码里而不是图片
@@ -602,10 +606,18 @@ if (!app.requestSingleInstanceLock()) {
     app.quit()
   })
 
-  // 程序退出前收尾：桌宠脱手、后台下班、托盘图标销毁
+  // 先拦住退出，等后台保存取消状态、回收eve与执行目录后再放行。
+  app.on('before-quit', createQuitBarrier(async () => {
+    quitting = true
+    stopPetDrag()
+    backendStartupAbort.abort()
+    const handle = backend ?? await backendStarting?.catch(() => undefined)
+    await handle?.stop()
+  }, () => app.quit(), () => console.error('[后台] E_BACKEND_STOP_FAILED')))
+
+  // 后台已收尾后才走到will-quit；这里只销毁桌面资源，不再强杀后台。
   app.on('will-quit', () => {
     stopPetDrag()
-    backend?.stop()
     tray?.destroy()
   })
 
@@ -623,8 +635,10 @@ if (!app.requestSingleInstanceLock()) {
  */
 async function startBackendWithSelfCheck(): Promise<void> {
   const modelKey = readModelKey()
-  const handle = await startBackend(modelKey)
+  backendStarting = startBackend(modelKey, backendStartupAbort.signal)
+  const handle = await backendStarting
   backend = handle
+  if (quitting) { await handle.stop(); return }
 
   // 两窗口位置恢复：只依赖后台服务本身，不依赖模型密钥。第一件事就做
   // ——先落位再显示，后面的认证与模型自测不阻挡窗口出现。

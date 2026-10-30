@@ -112,7 +112,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
       .toThrow('E_BACKEND_STOPPING')
     expect(() => turns.startPreviewTurn({ requestId: 'shutdown-p1', content: '不能试聊',
       draft: { personaFullText: '固定草稿', initialRelationship: '恋人' } })).toThrow('E_BACKEND_STOPPING')
-    expect((await collect(events)).at(-1)).toEqual({ type: 'cancelled' })
+    // 退出流程自己接手尾部，不依赖界面再读一帧；终态以落库结果确认。
     await stopped
     expect(latestReply()).toMatchObject({ content: '退出前的半截', status: 'cancelled' })
     expect(companion.db.select().from(agentRuns).get()).toMatchObject({ status: 'cancelled' })

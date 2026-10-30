@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
+import { makeBackendStop } from './backend-stop'
 
 /** 后台进程的"工作证"：端口号 + 暗号 + 下班按钮 */
 export interface BackendHandle {
@@ -16,7 +17,7 @@ export interface BackendHandle {
   /** 暗号：主进程打电话时用。只存在内存里——不打印、不给窗口界面 */
   token: string
   /** 让后台进程下班；对已退出的进程再按也无害 */
-  stop(): void
+  stop(): Promise<void>
 }
 
 /** 等报到的闹钟：后台还要等 eve 启动，给 20 秒；超时明确失败，避免窗口永远等。 */
@@ -27,9 +28,10 @@ const START_TIMEOUT_MS = 20_000
  * 开发时用系统 Node 24.10.0 跑构建产物；打包后用应用自己的 exe 运行后台脚本。
  * eve 要求 Node 至少为 24；安装后和无开发环境下的数据库读写仍待验证（08 V06）。
  * @param modelApiKey 模型密钥（可选）：和暗号一样从管子送过去，只进内存
+ * @param signal 应用在后台尚未就绪时退出，也要停止这次启动并等待收尾
  * @returns 工作证（端口号 + 暗号 + 下班按钮）
  */
-export function startBackend(modelApiKey?: string): Promise<BackendHandle> {
+export function startBackend(modelApiKey?: string, signal?: AbortSignal): Promise<BackendHandle> {
   return new Promise((resolve, reject) => {
     // 每次开机现编一个新暗号：32 字节纯随机数，自己编给自己用——
     // 两个进程都是本程序的，不像网页登录那样由服务器"下发"。
@@ -65,6 +67,7 @@ export function startBackend(modelApiKey?: string): Promise<BackendHandle> {
       // ELECTRON_RUN_AS_NODE 也是公开的运行方式开关，不是机密
       ...(packaged ? { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } } : {}),
     })
+    const stop = makeBackendStop(child)
 
     // "结局只定一次"的标记：闹钟、崩溃、报到三处都可能宣布结局，
     // 谁先到谁算，后来的直接忽略，收尾动作不重复做
@@ -80,9 +83,13 @@ export function startBackend(modelApiKey?: string): Promise<BackendHandle> {
       if (settled) return
       settled = true
       clearTimeout(timeout)
-      child.kill()
-      reject(error)
+      signal?.removeEventListener('abort', onAbort)
+      // 启动失败也先给后台清理机会；退出流程等待这个Promise，不留下一半启动的eve。
+      void stop().catch(() => {}).finally(() => reject(error))
     }
+    const onAbort = () => fail(new Error('E_BACKEND_START_CANCELLED'))
+    signal?.addEventListener('abort', onAbort, { once: true })
+    child.stdin?.on('error', () => fail(new Error('E_BACKEND_PIPE_FAILED')))
 
     // 死法一：进程压根没起来（比如系统里找不到 node）
     child.on('error', (error) => fail(error))
@@ -109,17 +116,17 @@ export function startBackend(modelApiKey?: string): Promise<BackendHandle> {
       }
       settled = true
       clearTimeout(timeout)
+      signal?.removeEventListener('abort', onAbort)
       resolve({
         port: Number(match[1]),
         token,
-        stop: () => {
-          child.kill()
-        },
+        stop,
       })
     })
 
     // 管道协议：第 1 行暗号，第 2 行模型密钥（没配置就发空行占位）。
     // 这两样东西离开主进程内存的唯一一条路就是这根管子
-    child.stdin?.write(`${token}\n${modelApiKey ?? ''}\n`)
+    if (signal?.aborted) onAbort()
+    else child.stdin?.write(`${token}\n${modelApiKey ?? ''}\n`)
   })
 }

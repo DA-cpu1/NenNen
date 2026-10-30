@@ -25,13 +25,6 @@ import {
  */
 export const COMMON_RULES_TEXT = COMMON_FACT_RULES
 
-/**
- * 模型窗口的暂定值：与 eve Agent 配置里的 modelContextWindowTokens 一致
- * （08 记录过它是未实测的暂定数）。注意它不会放宽 12,000 的输入硬上限；
- * 真实窗口容量在真机验收（⑪i）时核实后收进 08。
- */
-export const PROVISIONAL_MODEL_WINDOW_TOKENS = 128_000
-
 /** 依 08 的 T01 基线记账用名称；换模型入口在 T11。 */
 const MODEL_NAME = 'glm-5.3-flash'
 const PROVIDER_NAME = 'zhipu'
@@ -81,7 +74,6 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
   /** 完成信号让退出流程等到取消落库，不能只发出取消就关闭数据库。 */
   interface ActiveTurn {
     controller: AbortController
-    started: boolean
     events?: AsyncGenerator<SseTurnEvent>
     completed: Promise<void>
     finish: () => void
@@ -95,7 +87,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
   let closing = false
   let stopping: Promise<void> | undefined
 
-  /** 无界面读取的已受理流也需要收尾；已中止的信号保证不会因此开始模型调用。 */
+  /** 退出时接手未读的流尾部；异步生成器会排队处理next，不会重复执行落库。 */
   async function drain(events: AsyncGenerator<SseTurnEvent>): Promise<void> {
     for await (const _event of events) { /* 退出时只保存结果，不再等待界面展示。 */ }
   }
@@ -110,7 +102,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     const turns = [...active.values()]
     for (const turn of turns) turn.controller.abort()
     for (const turn of turns) {
-      if (!turn.started && turn.events) void drain(turn.events).catch(() => {})
+      if (turn.events) void drain(turn.events).catch(() => {})
     }
     stopping = Promise.all(turns.map((turn) => turn.completed)).then(() => {
       const db = deps.getDb()
@@ -131,7 +123,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
   ): AsyncGenerator<SseTurnEvent> {
     let finish!: () => void
     const turn: ActiveTurn = {
-      controller: new AbortController(), started: false,
+      controller: new AbortController(),
       completed: new Promise<void>((resolve) => { finish = resolve }), finish: () => finish(),
     }
     active.set(conversationId, turn)
@@ -168,7 +160,6 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     runStart: (signal: AbortSignal) => AsyncGenerator<TurnEvent, TurnOutcome>,
   ): AsyncGenerator<SseTurnEvent> {
     return (async function* generate(): AsyncGenerator<SseTurnEvent> {
-      turn.started = true
       try {
         yield { type: 'saved', userMessageId, conversationId }
         const runner = runStart(turn.controller.signal)

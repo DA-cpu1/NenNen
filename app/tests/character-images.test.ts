@@ -32,7 +32,7 @@ beforeEach(() => {
     }
     return Response.json({ ok: true, character: { characterId: 'char-fixed', desktopImagePath: currentPath } })
   }))
-  registerCharacterImagePicking(() => ({ port: 1, token: 'fixed-test-token', stop() {} }), saved)
+  registerCharacterImagePicking(() => ({ port: 1, token: 'fixed-test-token', stop: async () => {} }), saved)
 })
 afterEach(() => {
   vi.unstubAllGlobals()
