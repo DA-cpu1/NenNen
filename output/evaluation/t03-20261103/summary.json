@@ -1,0 +1,65 @@
+{
+  "runId": "2026-11-03T08-10-25-825Z-real",
+  "model": "glm-5.3-flash",
+  "budgetCny": 0.6,
+  "attemptedCases": 12,
+  "completeCases": 8,
+  "attemptedTurns": 30,
+  "completeTurns": 26,
+  "unrunTurns": 6,
+  "requests": 32,
+  "inputTokens": 61959,
+  "outputTokens": 17755,
+  "unknownUsageRequests": 0,
+  "costEstimateCny": 0.09928119999999999,
+  "costNote": "按公开未命中输入单价和实际 token 估算，未扣缓存优惠；非账户账单。",
+  "firstVisibleSampleCount": 26,
+  "medianFirstVisibleMs": 12989,
+  "p95FirstVisibleMs": 27411,
+  "percentileMethod": "仅完整轮，排序后第 ceil(n×0.95) 项",
+  "totalSeconds": 479.324,
+  "interruptions": [
+    {
+      "id": "P04-u2",
+      "errorCode": "E_OUTPUT_TRUNCATED"
+    },
+    {
+      "id": "P05-u2",
+      "errorCode": "E_OUTPUT_TRUNCATED"
+    },
+    {
+      "id": "P11-u1",
+      "errorCode": "E_OUTPUT_TRUNCATED"
+    },
+    {
+      "id": "P18-u1",
+      "errorCode": "E_CONTEXT_BUDGET_EXCEEDED"
+    }
+  ],
+  "toolCoverage": [
+    {
+      "id": "P11",
+      "calls": 0,
+      "expectedBranchObserved": false
+    },
+    {
+      "id": "P18",
+      "calls": 1,
+      "expectedBranchObserved": true
+    }
+  ],
+  "humanFeedback": {
+    "caseId": "P01",
+    "evaluator": "用户",
+    "recordedOn": "2026-11-03",
+    "verbatim": "我感觉3句都不像，感觉就是一个普通的AI，没啥特色",
+    "scores": {
+      "recognition": null,
+      "naturalness": null,
+      "situation": null
+    },
+    "interpretation": "用户指出整组三轮角色辨识度不足；未提供数字，不替用户填分。"
+  },
+  "numericScoredCases": 0,
+  "conclusion": "本轮第一阶段未通过；人工评分未完成，不给模型或人设填通过分。"
+}

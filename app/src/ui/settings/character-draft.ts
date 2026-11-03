@@ -69,7 +69,7 @@ export function previewFromDraft(draft: CharacterDraft): PreviewTurnRequest['dra
 }
 
 /**
- * 主动载入已确认样稿，只替换草稿中的人设、关系和示例；保存前不会改变数据库。
+ * 主动载入当前候选样稿，只替换草稿中的人设、关系和示例；保存前不会改变数据库。
  * @param draft 当前草稿，保留用户已经填写的名字和称呼
  * @returns 新草稿，示例逐条复制，编辑时不改到随包样稿
  */

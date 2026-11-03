@@ -1,0 +1,138 @@
+{
+  "runIds": [
+    "2026-11-03T09-00-57-094Z-quality-check-real",
+    "2026-11-03T09-05-16-596Z-quality-remaining-real"
+  ],
+  "baselineId": "2026-11-03T08-10-25-825Z-real",
+  "sampleVersion": "0.2",
+  "model": "glm-5.3-flash",
+  "caseIds": [
+    "P01",
+    "P03",
+    "P04",
+    "P05",
+    "P06",
+    "P07",
+    "P08",
+    "P09",
+    "P10",
+    "P11",
+    "P15",
+    "P18"
+  ],
+  "plannedTurns": 36,
+  "attemptedTurns": 34,
+  "completeCases": 11,
+  "completeTurns": 33,
+  "requests": 37,
+  "inputTokens": 78560,
+  "outputTokens": 26139,
+  "unknownUsageRequests": 0,
+  "activeSeconds": 671.5909999999999,
+  "firstVisibleSampleCount": 33,
+  "medianFirstVisibleMs": 15608,
+  "p95FirstVisibleMs": 37465,
+  "maxFirstVisibleMs": 73029,
+  "costEstimateCny": 0.13603720000000002,
+  "costNote": "按供应商实际token及公开未命中单价估算，未扣缓存优惠，非账户账单。",
+  "amountLimitCny": null,
+  "applicationOutputLimit": null,
+  "inputLimit": 12000,
+  "removedGroups": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0
+  ],
+  "interruptions": [
+    {
+      "id": "P18-u1",
+      "errorCode": "E_CONTEXT_BUDGET_EXCEEDED"
+    }
+  ],
+  "toolResults": [
+    {
+      "caseId": "P11",
+      "turn": 1,
+      "toolName": "remember_explicit",
+      "output": {
+        "ok": true,
+        "memoryId": "fixture-preferred-name",
+        "revision": 1,
+        "status": "saved"
+      }
+    },
+    {
+      "caseId": "P15",
+      "turn": 1,
+      "toolName": "search_memories",
+      "output": {
+        "ok": true,
+        "memories": []
+      }
+    },
+    {
+      "caseId": "P15",
+      "turn": 2,
+      "toolName": "search_memories",
+      "output": {
+        "ok": true,
+        "memories": []
+      }
+    },
+    {
+      "caseId": "P18",
+      "turn": 1,
+      "toolName": "remember_explicit",
+      "output": {
+        "ok": false,
+        "code": "STORAGE_UNAVAILABLE",
+        "retryable": false,
+        "message": "本次未能保存，下次打开不能保证可用。"
+      }
+    }
+  ],
+  "sourceHash": "ac5bc89dd2a95d76e2a1aa99b9911b1f8a27f229da01783247a457fa141bf973",
+  "humanFeedback": {
+    "caseId": "P01",
+    "sampleVersion": "0.2",
+    "verbatim": "好点，但是也一般，接着去跑先吧",
+    "numericScoresProvided": false,
+    "interpretation": "比0.1有所改善，仍未获角色质量通过；数字分保持空白。"
+  },
+  "comparisonLimit": "提示词与应用输出限制同时变化，不能将差异全部归因于提示词；每版只采样一次，非完全盲评。",
+  "conclusion": "第一阶段内容已保留；人工评分与边界判断未齐，T03不判通过。"
+}
