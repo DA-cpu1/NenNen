@@ -5,8 +5,9 @@
 import { describe, expect, it } from 'vitest'
 import { checkModelInputBudget, prepareBudgetedContext } from '../src/agent/context-budget'
 import type { ContextMessage, TurnContext } from '../src/agent/turn-context'
+import { MODEL_CONTEXT_WINDOW_TOKENS, MODEL_OUTPUT_RESERVE_TOKENS } from '../src/shared/model-limits'
 
-const limits = { modelWindowTokens: 32_000 }
+const limits = { modelWindowTokens: 32_000, outputReserveTokens: 1_000 }
 
 /** 每次返回独立的人设和消息，避免某项检查改动资料后影响下一项。 */
 function context(): TurnContext {
@@ -28,19 +29,32 @@ function message(
 }
 
 describe('输入预算与历史裁剪（T06⑨b）', () => {
-  it('12,000 估算 token 的边界可用，多一个则拒绝；默认留 1,000 给回复', () => {
-    // ASCII 字母各一字节；JSON 字符串有两个引号，另外有 256 的协议预留。
-    expect(checkModelInputBudget('a'.repeat(11_742), limits)).toEqual({
-      inputTokens: 12_000, inputLimit: 12_000, maxOutputTokens: 1_000, usageEstimated: true,
+  it('产品只给模型最大回复留空位，不把预留变成请求输出上限', () => {
+    const result = checkModelInputBudget('a'.repeat(20_000), {
+      modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS,
     })
-    expect(() => checkModelInputBudget('a'.repeat(11_743), limits)).toThrow('E_CONTEXT_BUDGET_EXCEEDED')
+    expect(result.inputLimit).toBe(868_928)
+    expect(result.maxOutputTokens).toBeUndefined()
+  })
+
+  it.each([-1, 1.5, NaN, Infinity])('拒绝不合法的独立回复预留 %s', (outputReserveTokens) => {
+    expect(() => checkModelInputBudget('短句', { ...limits, outputReserveTokens })).toThrow('E_INVALID_MODEL_LIMITS')
+  })
+
+  it('输入可超过旧 12,000 额度，只在模型窗口扣除预留后的边界拒绝', () => {
+    // ASCII 字母各一字节；JSON 字符串有两个引号，另外有 256 的协议预留。
+    expect(checkModelInputBudget('a'.repeat(30_742), limits)).toEqual({
+      inputTokens: 31_000, inputLimit: 31_000, outputReserveTokens: 1_000,
+      maxOutputTokens: undefined, usageEstimated: true,
+    })
+    expect(() => checkModelInputBudget('a'.repeat(30_743), limits)).toThrow('E_CONTEXT_BUDGET_EXCEEDED')
   })
 
   it('较小模型窗口减去输出预留后才是有效输入上限', () => {
-    expect(checkModelInputBudget('a'.repeat(742), { modelWindowTokens: 2_000 })).toMatchObject({
+    expect(checkModelInputBudget('a'.repeat(742), { modelWindowTokens: 2_000, outputReserveTokens: 1_000 })).toMatchObject({
       inputTokens: 1_000, inputLimit: 1_000,
     })
-    expect(() => checkModelInputBudget('a'.repeat(743), { modelWindowTokens: 2_000 }))
+    expect(() => checkModelInputBudget('a'.repeat(743), { modelWindowTokens: 2_000, outputReserveTokens: 1_000 }))
       .toThrow('E_CONTEXT_BUDGET_EXCEEDED')
     expect(checkModelInputBudget('a'.repeat(742), { modelWindowTokens: 1_500, maxOutputTokens: 500 }))
       .toMatchObject({ inputLimit: 1_000, maxOutputTokens: 500 })
@@ -55,7 +69,8 @@ describe('输入预算与历史裁剪（T06⑨b）', () => {
   })
 
   it('输出预留已经用尽窗口时拒绝，即使输入很短也不放行', () => {
-    expect(() => checkModelInputBudget('', { modelWindowTokens: 1_000 })).toThrow('E_CONTEXT_BUDGET_EXCEEDED')
+    expect(() => checkModelInputBudget('', { modelWindowTokens: 1_000, outputReserveTokens: 1_000 }))
+      .toThrow('E_CONTEXT_BUDGET_EXCEEDED')
   })
 
   it('计入中文、emoji、转义和工具资料，始终标成估算', () => {
@@ -64,7 +79,7 @@ describe('输入预算与历史裁剪（T06⑨b）', () => {
     const emoji = checkModelInputBudget('😀😀', limits)
     expect(chinese.inputTokens).toBeGreaterThan(ascii.inputTokens)
     expect(emoji.inputTokens).toBeGreaterThan(chinese.inputTokens)
-    expect(() => checkModelInputBudget({ prompt: '很短', tools: [{ description: 'a'.repeat(12_000) }] }, limits))
+    expect(() => checkModelInputBudget({ prompt: '很短', tools: [{ description: 'a'.repeat(32_000) }] }, limits))
       .toThrow('E_CONTEXT_BUDGET_EXCEEDED')
   })
 
@@ -89,11 +104,11 @@ describe('输入预算与历史裁剪（T06⑨b）', () => {
   it('很长人设或必需资料放不下时明确失败，不静默截断', () => {
     const input = context()
     input.persona.personaText = '人设'.repeat(6_000)
-    expect(() => prepareBudgetedContext(input, limits)).toThrow('E_CONTEXT_BUDGET_EXCEEDED')
+    expect(() => prepareBudgetedContext(input, { modelWindowTokens: 12_000 })).toThrow('E_CONTEXT_BUDGET_EXCEEDED')
     expect(input.persona.personaText).toBe('人设'.repeat(6_000))
     input.persona.personaText = '短人设'
     input.currentMessage.content = '中'.repeat(8_000)
-    expect(() => prepareBudgetedContext(input, limits)).toThrow('E_CONTEXT_BUDGET_EXCEEDED')
+    expect(() => prepareBudgetedContext(input, { modelWindowTokens: 12_000 })).toThrow('E_CONTEXT_BUDGET_EXCEEDED')
     expect(input.currentMessage.content).toHaveLength(8_000)
   })
 
@@ -111,7 +126,7 @@ describe('输入预算与历史裁剪（T06⑨b）', () => {
       message('new-u', 3, 'user', '最近问题'), message('new-a', 4, 'assistant', '最近回复', 'new-u'),
     ]
     const before = JSON.stringify(input)
-    const result = prepareBudgetedContext(input, { modelWindowTokens: 2_500 })
+    const result = prepareBudgetedContext(input, { modelWindowTokens: 2_500, outputReserveTokens: 1_000 })
     expect(result.historyMessageIds).toEqual(['new-u', 'new-a'])
     expect(result.exampleCount).toBe(0)
     expect(result.inputTokens).toBeLessThanOrEqual(1_500)

@@ -62,6 +62,9 @@ const provider = createServer(async (request, response) => {
   }
   authenticatedCalls += 1
   const parsed = JSON.parse(body)
+  // 检查实际eve发出的HTTP请求，避免只改后台而仍被框架塞回旧的输出额度。
+  assert.equal(parsed.max_tokens, undefined, '产品请求不应设置应用输出上限')
+  assert.equal(parsed.max_completion_tokens, undefined, '产品请求不应设置另一种输出上限字段')
   toolCount += (parsed.tools ?? []).length
   response.writeHead(200, { 'content-type': 'text/event-stream' })
   for (const payload of [
@@ -207,7 +210,8 @@ try {
       const chatResponse = await fetch(`${url}/chat/turn`, {
         method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
         body: JSON.stringify({ conversationId: conversation.conversationId,
-          requestId: `package-probe-${index}`, content: '请只回复两个字：收到' }),
+          // 5,000个汉字在8,000字符输入限制内，但超过旧12,000字节估算额度。
+          requestId: `package-probe-${index}`, content: '中'.repeat(5_000) }),
         signal: AbortSignal.timeout(35_000),
       })
       assert.equal(chatResponse.status, 200)

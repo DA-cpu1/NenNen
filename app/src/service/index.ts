@@ -20,7 +20,7 @@ import {
 import { getFormalConversation } from '../data/conversations'
 import { readChatHistory } from '../data/chat-history'
 import { createChatTurnService } from './chat-turns'
-import { MODEL_CONTEXT_WINDOW_TOKENS } from '../shared/model-limits'
+import { MODEL_CONTEXT_WINDOW_TOKENS, MODEL_OUTPUT_RESERVE_TOKENS } from '../shared/model-limits'
 import { recoverInterruptedTurns } from '../agent/turn-runner'
 import { RIKKA_SAMPLE } from '../shared/character-sample'
 import { readSetting, writeSetting } from '../data/settings'
@@ -75,7 +75,7 @@ function main(): void {
   const chatTurns = createChatTurnService({
     getDb: () => database?.db,
     getEve: () => eve,
-    limits: { modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS },
+    limits: { modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS },
   })
   options.startChatTurn = chatTurns.startTurn
   options.startPreviewTurn = chatTurns.startPreviewTurn

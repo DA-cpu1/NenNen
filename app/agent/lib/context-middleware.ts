@@ -6,6 +6,7 @@
 import type { LanguageModelMiddleware } from 'ai'
 import { checkModelInputBudget } from '../../src/agent/context-budget'
 import { decodeEveTurnEnvelope } from '../../src/shared/eve-turn-envelope'
+import { MODEL_CONTEXT_WINDOW_TOKENS, MODEL_OUTPUT_RESERVE_TOKENS } from '../../src/shared/model-limits'
 
 type ModelCallOptions = Parameters<NonNullable<LanguageModelMiddleware['transformParams']>>[0]['params']
 type ModelPrompt = ModelCallOptions['prompt']
@@ -42,6 +43,8 @@ export function createCompanionContextMiddleware(): LanguageModelMiddleware {
           const transformed = {
             ...params, prompt: [...prompt, ...continuation], maxOutputTokens: envelope.maxOutputTokens,
           }
+          // 未设上限时连字段也删除，防止继承框架旧的1,000额度；供应商自行决定输出。
+          if (envelope.maxOutputTokens === undefined) delete transformed.maxOutputTokens
           try {
             // 数还原后的实际输入，不数信封；工具说明、结果和响应格式也一并计入。
             checkModelInputBudget(transformed, envelope)
@@ -59,8 +62,11 @@ export function createCompanionContextMiddleware(): LanguageModelMiddleware {
       if (users.length !== 1 || userText(users[0]) !== '请只回复两个字：收到') {
         throw new Error('E_EVE_CONTEXT_REQUIRED')
       }
-      const transformed = { ...params, maxOutputTokens: 1_000 }
-      checkModelInputBudget(transformed, { modelWindowTokens: 13_000 })
+      const transformed = { ...params }
+      delete transformed.maxOutputTokens
+      checkModelInputBudget(transformed, {
+        modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+      })
       return transformed
     },
   }

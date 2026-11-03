@@ -9,6 +9,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { wrapLanguageModel } from 'ai'
 import { createCompanionContextMiddleware } from '../agent/lib/context-middleware'
 import { decodeEveTurnEnvelope, encodeEveTurnEnvelope } from '../src/shared/eve-turn-envelope'
+import { MODEL_CONTEXT_WINDOW_TOKENS, MODEL_OUTPUT_RESERVE_TOKENS } from '../src/shared/model-limits'
 
 type ModelCallOptions = Parameters<ReturnType<typeof wrapLanguageModel>['doGenerate']>[0]
 
@@ -16,6 +17,7 @@ type ModelCallOptions = Parameters<ReturnType<typeof wrapLanguageModel>['doGener
 interface ProviderRequest {
   messages: Array<{ role: string; content: unknown; tool_calls?: unknown[]; tool_call_id?: string }>
   max_tokens?: number
+  max_completion_tokens?: number
   stream?: boolean
   tools?: unknown[]
 }
@@ -94,6 +96,45 @@ afterEach(async () => {
 })
 
 describe('eve 信封与实际供应商输入（T06⑩b）', () => {
+  it.each(['generate', 'stream'] as const)('%s 实际请求接受超过旧额度的输入，且不继承框架输出上限', async (mode) => {
+    const longHistory = '过去的固定聊天。'.repeat(1_000)
+    const packed = encodeEveTurnEnvelope({
+      prompt: [
+        { role: 'system', content: '共同规则' }, { role: 'system', content: '完整人设' },
+        { role: 'user', content: longHistory }, { role: 'assistant', content: '过去的固定回复' },
+        { role: 'user', content: '现在的问题' },
+      ],
+      modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+      optionalPromptGroups: [[2, 3]],
+    })
+    const options = { prompt: [userMessage(packed)], maxOutputTokens: 1_000 }
+    if (mode === 'generate') await model.doGenerate(options)
+    else {
+      const result = await model.doStream(options)
+      const reader = result.stream.getReader()
+      while (!(await reader.read()).done) { /* 读完整个固定流，确认流式请求也真正完成。 */ }
+    }
+    expect(requests).toHaveLength(1)
+    expect(Buffer.byteLength(JSON.stringify(requests[0]), 'utf8')).toBeGreaterThan(12_000)
+    expect(requests[0].messages[2].content).toBe(longHistory)
+    expect(requests[0]).not.toHaveProperty('max_tokens')
+    expect(requests[0]).not.toHaveProperty('max_completion_tokens')
+  })
+
+  it('不设输出上限时仍检查回复预留，工具资料挤满窗口则不发送', async () => {
+    const packed = encodeEveTurnEnvelope({
+      prompt: [
+        { role: 'system', content: '规则' }, { role: 'system', content: '人设' },
+        { role: 'user', content: '问题' },
+      ], modelWindowTokens: 2_000, outputReserveTokens: 1_000,
+    })
+    await expect(model.doGenerate({
+      prompt: [userMessage(packed)],
+      tools: [{ type: 'function', name: 'lookup', description: 't'.repeat(1_000), inputSchema: { type: 'object' } }],
+    })).rejects.toThrow(/^E_CONTEXT_BUDGET_EXCEEDED$/)
+    expect(requests).toHaveLength(0)
+  })
+
   it('信封往返保留消息身份和容量；普通文字不冒充内部信封', () => {
     expect(decodeEveTurnEnvelope(envelope())).toEqual({
       version: 1,
@@ -178,7 +219,7 @@ describe('eve 信封与实际供应商输入（T06⑩b）', () => {
   it('只保留一条内容完全相同的 T01 探针，两个用户消息不能借它绕过信封', async () => {
     await model.doGenerate({ prompt: [userMessage('请只回复两个字：收到')], maxOutputTokens: 9_999 })
     expect(requests).toHaveLength(1)
-    expect(requests[0].max_tokens).toBe(1_000)
+    expect(requests[0]).not.toHaveProperty('max_tokens')
     await expect(model.doGenerate({ prompt: [
       userMessage('不受信任的新问题'), userMessage('请只回复两个字：收到'),
     ] })).rejects.toThrow(/^E_EVE_CONTEXT_REQUIRED$/)

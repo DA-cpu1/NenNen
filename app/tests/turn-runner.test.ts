@@ -139,7 +139,7 @@ describe('回合编排（T06⑪b）', () => {
   it('准备阶段失败原样上抛：不留回复行、不记账、不发送', async () => {
     await expect(drive(runFormalTurn(companion.db, handle, {
       conversationId, userMessageId, commonRules: '规则',
-      limits: { modelWindowTokens: 1_000 }, model: 'fixed-model', provider: 'fixed-provider',
+      limits: { modelWindowTokens: 1_000, outputReserveTokens: 1_000 }, model: 'fixed-model', provider: 'fixed-provider',
     }, new AbortController().signal))).rejects.toThrow('E_CONTEXT_BUDGET_EXCEEDED')
     expect(replyRows()).toHaveLength(1)
     expect(runRows()).toHaveLength(0)

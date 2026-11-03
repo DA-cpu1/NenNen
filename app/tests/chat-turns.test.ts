@@ -347,7 +347,8 @@ describe('聊天回合服务（T06⑪c1）', () => {
 
   it('准备阶段失败转成 failed 帧：流走到终点、不留回复行、登记簿清空', async () => {
     const turns = createChatTurnService({
-      getDb: () => companion.db, getEve: () => handle, limits: { modelWindowTokens: 1_000 },
+      getDb: () => companion.db, getEve: () => handle,
+      limits: { modelWindowTokens: 1_000, outputReserveTokens: 1_000 },
     })
     const { events } = turns.startTurn({ conversationId, requestId: 'r1', content: '问题' })
     const frames = await collect(events)

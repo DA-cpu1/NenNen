@@ -11,6 +11,8 @@ import type { DialogueExample } from '../shared/character-schema'
 /** 模型窗口必须由适配层核对后传入，不能猜一个很大的默认值放行。 */
 export interface ModelInputLimits {
   modelWindowTokens: number
+  /** 只给回复留位置，不向供应商设置输出上限；显式 maxOutputTokens 优先。 */
+  outputReserveTokens?: number
   maxOutputTokens?: number
 }
 
@@ -24,7 +26,8 @@ export interface ContextPromptMessage {
 export interface InputBudget {
   inputTokens: number
   inputLimit: number
-  maxOutputTokens: number
+  outputReserveTokens: number
+  maxOutputTokens?: number
   usageEstimated: true
 }
 
@@ -40,25 +43,28 @@ export interface BudgetedTurnContext extends InputBudget {
 /**
  * 检查一次完整请求的保守估算；工具续轮也须把 prompt、工具说明与结果一起传进来。
  * @param input 可以转成 JSON 的完整输入内容，不含密钥，不会写入日志
- * @param limits 已核对的模型窗口和输出预留，输出默认 1,000 token
+ * @param limits 已核对的模型窗口、回复预留及可选的显式输出上限
  * @returns 预算内的估算值和有效上限
  * @throws E_INVALID_MODEL_LIMITS 窗口/输出不合法；E_INVALID_MODEL_INPUT 不是 JSON 内容；
  * E_CONTEXT_BUDGET_EXCEEDED 输入放不下
  */
 export function checkModelInputBudget(input: unknown, limits: ModelInputLimits): InputBudget {
-  const maxOutputTokens = limits.maxOutputTokens ?? 1_000
+  const { maxOutputTokens } = limits
+  const outputReserveTokens = maxOutputTokens ?? limits.outputReserveTokens ?? 0
   if (!Number.isSafeInteger(limits.modelWindowTokens) || limits.modelWindowTokens <= 0 ||
-      !Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) {
+      !Number.isSafeInteger(outputReserveTokens) || outputReserveTokens < 0 ||
+      (maxOutputTokens !== undefined && (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0))) {
     throw new Error('E_INVALID_MODEL_LIMITS')
   }
-  const inputLimit = Math.min(12_000, limits.modelWindowTokens - maxOutputTokens)
+  // 只按模型容量扣除回复空间，不再叠加应用自己的 12,000 输入额度。
+  const inputLimit = limits.modelWindowTokens - outputReserveTokens
   // JSON 的引号、字段名、换行转义也计入；额外留 256 给消息边界等协议开销。
   // UTF-8 是文字转字节的编码，中文通常占三字节，因此此估算会比简单数汉字更严。
   const serialized = JSON.stringify(input)
   if (serialized === undefined) throw new Error('E_INVALID_MODEL_INPUT')
   const inputTokens = Buffer.byteLength(serialized, 'utf8') + 256
   if (inputTokens > inputLimit) throw new Error('E_CONTEXT_BUDGET_EXCEEDED')
-  return { inputTokens, inputLimit, maxOutputTokens, usageEstimated: true }
+  return { inputTokens, inputLimit, outputReserveTokens, maxOutputTokens, usageEstimated: true }
 }
 
 /** 把选中的资料转成固定顺序的文字输入；不改变原来的快照或用户原文。 */

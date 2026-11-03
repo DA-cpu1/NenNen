@@ -35,7 +35,7 @@ export default defineAgent({
             model: provider('glm-5.3-flash'),
             middleware: [createModelStepLimitMiddleware(event), createCompanionContextMiddleware()],
           }),
-          // 与后台共用官方标注下的保守窗口；实际调用还受12,000输入硬上限约束。
+          // 与后台共用已核对的模型窗口；输入仍留回复空间，不另加应用小额度。
           modelContextWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS,
         }
       },

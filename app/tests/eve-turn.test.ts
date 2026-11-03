@@ -100,7 +100,8 @@ describe('干净 eve 会话准备（T06⑩a）', () => {
     setRuntimeSessionId(companion.db, conversationId, 'original')
     await expect(prepareEveTurn(companion.db, handle, {
       conversationId, userMessageId, commonRules: '规则',
-    }, { modelWindowTokens: 1_000 }, new AbortController().signal)).rejects.toThrow('E_CONTEXT_BUDGET_EXCEEDED')
+    }, { modelWindowTokens: 1_000, outputReserveTokens: 1_000 }, new AbortController().signal))
+      .rejects.toThrow('E_CONTEXT_BUDGET_EXCEEDED')
     expect(runtimeId()).toBe('original')
     expect(fake.create).not.toHaveBeenCalled()
   })
@@ -195,7 +196,7 @@ describe('干净 eve 会话准备（T06⑩a）', () => {
     const [body, options] = fake.send.mock.calls[0]
     expect(decodeEveTurnEnvelope(body)).toMatchObject({
       prompt: prepared.input.prompt, optionalPromptGroups: prepared.input.optionalPromptGroups,
-      modelWindowTokens: 13_000, maxOutputTokens: 1_000,
+      modelWindowTokens: 32_000, outputReserveTokens: 0,
     })
     expect(options).toEqual({ signal, streamReconnectPolicy: { reconnect: false } })
     expect(companion.db.select().from(messages).all()).toHaveLength(3)

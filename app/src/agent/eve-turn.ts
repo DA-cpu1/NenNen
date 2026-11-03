@@ -128,8 +128,9 @@ export async function sendPreparedEveTurn(
       current.runtimeSessionId !== prepared.session.state.sessionId) throw new Error('E_CONTEXT_CHANGED')
   const message = encodeEveTurnEnvelope({
     prompt: prepared.input.prompt, optionalPromptGroups: prepared.input.optionalPromptGroups,
-    // 只交付有效输入上限与输出之和；不会把原模型的大窗口重新用来放宽 12,000 上限。
-    modelWindowTokens: prepared.input.inputLimit + prepared.input.maxOutputTokens,
+    // 把回复空位一起交付，实际请求加上工具说明后也必须给回复留下相同空间。
+    modelWindowTokens: prepared.input.inputLimit + prepared.input.outputReserveTokens,
+    outputReserveTokens: prepared.input.outputReserveTokens,
     maxOutputTokens: prepared.input.maxOutputTokens,
   })
   sentTurns.add(prepared)
