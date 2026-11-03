@@ -3,6 +3,8 @@
  * 连续启动两次：第一次含「运行期换密钥」（供应商只认新密钥后后台整体换 eve）；
  * 两次分别验证正常关闭和强制结束后台时密钥重传与 eve 无残留；
  * 两轮共用同一个数据库文件：第一轮写入的值，第二轮重启后必须原样读到。
+ * --packaged 改用实际随包 exe 和归档入口，防止开发态能跑、安装后却缺文件。
+ * --package-dir 可指定从安装包解出的目录，复查最终交付的文件，而不安装到用户目录。
  */
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -11,15 +13,31 @@ import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { resolve, join } from 'node:path'
+import { basename, resolve, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const appDir = resolve(import.meta.dirname, '..')
+const packageDirIndex = process.argv.indexOf('--package-dir')
+if (packageDirIndex >= 0 && !process.argv[packageDirIndex + 1]) throw new Error('E_PACKAGE_DIRECTORY_REQUIRED')
+const packaged = process.argv.includes('--packaged') || packageDirIndex >= 0
+const packageDir = packageDirIndex >= 0
+  ? resolve(process.argv[packageDirIndex + 1]) : join(appDir, 'release/win-unpacked')
+const runtimeDir = packaged ? join(packageDir, 'resources/app.asar.unpacked') : appDir
+const executable = packaged ? join(packageDir, '二次元女友.exe') : process.execPath
+const runtimeProcessName = packaged ? '二次元女友.exe' : 'node.exe'
+const serviceEntry = packaged
+  ? join(packageDir, 'resources/app.asar/out/main/service.js')
+  : join(appDir, 'out/main/service.js')
 // 两轮共用的临时数据库目录，结束时整体删除。放系统临时目录而不是仓库里：
 // 数据库开着 WAL 模式，旁边会多出 -wal/-shm 两个附属文件，别让它们混进项目
 const dbDir = await mkdtemp(join(tmpdir(), 'companion-db-probe-'))
 const dbPath = join(dbDir, 'probe.db')
+// 这些只是测试库里的固定相对路径，检查升级重启会不会把两张图片的设置丢掉。
+const imagePaths = {
+  desktopImagePath: 'characters/package-probe/desktop-fixed.png',
+  portraitImagePath: 'characters/package-probe/portrait-fixed.png',
+}
 // 两把假密钥：A 是开机的，B 是运行期换上的
 const modelKeyA = randomBytes(32).toString('base64url')
 const modelKeyB = randomBytes(32).toString('base64url')
@@ -43,7 +61,8 @@ const provider = createServer(async (request, response) => {
     return
   }
   authenticatedCalls += 1
-  toolCount += (JSON.parse(body).tools ?? []).length
+  const parsed = JSON.parse(body)
+  toolCount += (parsed.tools ?? []).length
   response.writeHead(200, { 'content-type': 'text/event-stream' })
   for (const payload of [
     { choices: [{ index: 0, delta: { role: 'assistant', content: '收到' }, finish_reason: null }] },
@@ -54,8 +73,9 @@ const provider = createServer(async (request, response) => {
 
 /** 查找后台的直接子进程编号；本项目的目标平台是 Windows。 */
 async function childPids(parentPid) {
+  // Windows 还可能创建 conhost.exe（控制台辅助进程）；它不是第二个 eve。
   const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-Command',
-    `@(Get-CimInstance Win32_Process -Filter "ParentProcessId = ${parentPid} AND Name = 'node.exe'" | Select-Object -ExpandProperty ProcessId) | ConvertTo-Json -Compress`], { timeout: 15_000 })
+    `@(Get-CimInstance Win32_Process -Filter "ParentProcessId = ${parentPid} AND Name = '${runtimeProcessName}'" | Select-Object -ExpandProperty ProcessId) | ConvertTo-Json -Compress`], { timeout: 15_000, windowsHide: true })
   const parsed = stdout.trim() ? JSON.parse(stdout) : []
   return Array.isArray(parsed) ? parsed : [parsed]
 }
@@ -82,10 +102,15 @@ async function secretFiles(directory) {
 /** 启动真实业务后台，以两行 stdin 交付假机密，并等 READY。
  *  数据库路径走命令行参数（不是机密，不占密钥管子），两轮传同一个文件。 */
 async function boot(token, modelKey, providerPort) {
-  const child = spawn(process.execPath, ['out/main/service.js', '--db', dbPath], {
+  const child = spawn(executable, [serviceEntry, '--db', dbPath], {
     cwd: appDir,
-    env: { ...process.env, COMPANION_MODEL_BASE_URL: `http://127.0.0.1:${providerPort}/v1` },
+    env: {
+      ...process.env,
+      ...(packaged ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+      COMPANION_MODEL_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
+    },
     stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
   })
   child.stdin.on('error', () => {})
   try {
@@ -136,7 +161,7 @@ try {
       })
       assert.equal(response.status, 200)
       assert.deepEqual(await response.json(), { ok: true, text: '收到', usage: { inputTokens: 8, outputTokens: 2 } })
-      // 期望值按实际发生累计：第一轮两次（换钥前后各一），第二轮一次
+      // 每个实际请求都单独累计，避免少跑一步却误报整条链路通过。
       expectedCalls += 1
       assert.equal(calls, expectedCalls, '模拟模型请求数应与预期完全一致')
       console.log(JSON.stringify({ run: index + 1, unauthorized: 401, wrongOrOldToken: 401, replyMatches: true, inputTokens: 8, outputTokens: 2, elapsedMs: Date.now() - started }))
@@ -158,6 +183,41 @@ try {
         assert.deepEqual(dbState, { ok: true, globalMemoryEpoch: 1 }, '重启后必须读到上一轮写入的值')
         console.log(JSON.stringify({ run: 2, dbPersisted: 1 }))
       }
+
+      // 角色读取失败正是本次用户看到的症状；图片路径也必须跨后台重启保留。
+      const headers = { 'x-session-token': tokens[index] }
+      const characterResponse = await fetch(`${url}/character`, { headers })
+      assert.equal(characterResponse.status, 200)
+      const { character } = await characterResponse.json()
+      assert.ok(character.activeVersion.personaText.trim())
+      if (index === 0) {
+        const savedImages = await fetch(`${url}/character/images`, {
+          method: 'PUT', headers: { ...headers, 'content-type': 'application/json' },
+          body: JSON.stringify(imagePaths),
+        })
+        assert.equal(savedImages.status, 200)
+      } else {
+        assert.equal(character.desktopImagePath, imagePaths.desktopImagePath)
+        assert.equal(character.portraitImagePath, imagePaths.portraitImagePath)
+      }
+      const conversationResponse = await fetch(`${url}/formal-conversation`, { headers })
+      assert.equal(conversationResponse.status, 200)
+      const { conversation } = await conversationResponse.json()
+      // 还要跑正式聊天，而不只跑固定连通探针；固定输入与回复都不打印到日志。
+      const chatResponse = await fetch(`${url}/chat/turn`, {
+        method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ conversationId: conversation.conversationId,
+          requestId: `package-probe-${index}`, content: '请只回复两个字：收到' }),
+        signal: AbortSignal.timeout(35_000),
+      })
+      assert.equal(chatResponse.status, 200)
+      const chatEvents = await chatResponse.text()
+      assert.ok(chatEvents.includes('"type":"done"'))
+      assert.ok(chatEvents.includes('"delta":"收到"'))
+      expectedCalls += 1
+      assert.equal(calls, expectedCalls)
+      console.log(JSON.stringify({ run: index + 1, characterReadable: true,
+        imagesPersisted: index === 1, formalChatCompleted: true }))
 
       // ── 运行期换密钥（只测第一轮）：供应商作废旧密钥 → 送新密钥进后台 ──
       if (index === 0) {
@@ -200,14 +260,17 @@ try {
       console.log(JSON.stringify({ run: index + 1, shutdown: index === 0 ? 'normal' : 'forced', eveExited: true }))
     }
   }
-  const leaks = await secretFiles(join(appDir, '.eve')) + await secretFiles(join(appDir, '.output'))
+  // 除回合目录外，框架还会留下执行锁文件；整个运行目录都要查，避免漏掉机密。
+  const leaks = await secretFiles(join(runtimeDir, '.eve')) + await secretFiles(join(runtimeDir, '.output'))
   assert.equal(leaks, 0)
   assert.equal([modelKeyA, modelKeyB, ...tokens, '请只回复两个字'].some((text) => logs.includes(text)), false)
-  assert.equal(authenticatedCalls, 3)
+  assert.equal(authenticatedCalls, 5)
   assert.equal(toolCount, 0)
-  console.log(JSON.stringify({ calls, authenticatedCalls, toolCount, secretFiles: leaks, logsClean: true }))
+  console.log(JSON.stringify({ packaged, calls, authenticatedCalls, toolCount, secretFiles: leaks, logsClean: true }))
 } finally {
   await new Promise((done) => provider.close(done))
   // 临时数据库目录整体清理；库文件内容不含机密，删除即止
+  assert.equal(resolve(dbDir, '..'), resolve(tmpdir()), '只清理系统临时目录内的本轮测试库')
+  assert.ok(basename(dbDir).startsWith('companion-db-probe-'))
   await rm(dbDir, { recursive: true, force: true })
 }

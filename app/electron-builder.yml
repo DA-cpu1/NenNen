@@ -15,14 +15,13 @@ files:
   - scripts/eve-entry.mjs
   - package.json
 
-# 从 asar 档案里「拆出来」按普通文件放的清单。为什么：后台服务和 eve 是
-# 独立进程（用应用 exe 客串 Node 跑），读不了 asar 档案；它们的入口、
-# 脚本和全部运行依赖必须以普通文件形态出现在 app.asar.unpacked 目录
+# 后台及共用代码块一起留在 app.asar，避免只搬入口却漏掉它引用的文件。
+# 当前 Electron 的 Node 模式能读取这个档案，普通依赖也不必拆成数千个小文件。
+# eve 的执行产物仍按普通目录启动；原生模块（例如 SQLite 的 .node 驱动）
+# 由 electron-builder 默认的 smartUnpack 自动放到档案外，供系统加载。
 asarUnpack:
-  - out/main/service.js
   - .output/**
   - scripts/eve-entry.mjs
-  - node_modules/**
 
 # 暂时跳过原生模块重建，保留现有打包方案；这不是安装版数据库已经通过的证明。
 # better-sqlite3 13.0.3 的本地源码使用 Node-API（减少对特定 Node 版本的依赖），

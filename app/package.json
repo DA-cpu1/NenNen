@@ -1,6 +1,6 @@
 {
   "name": "desktop-companion",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "二次元女友桌面陪伴应用（Electron + React + eve + SQLite）",
   "author": "DA-cpu1",
   "private": true,
@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "build:agent": "node scripts/build-agent.mjs",
     "check:agent": "node scripts/probe-eve.mjs",
-    "build:win": "npm run build:agent && electron-vite build && electron-builder --win nsis"
+    "check:package": "node scripts/probe-eve.mjs --packaged",
+    "build:win": "npm run build:agent && electron-vite build && electron-builder --win nsis && npm run check:package"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "3.0.71",

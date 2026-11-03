@@ -26,7 +26,7 @@ const START_TIMEOUT_MS = 20_000
 /**
  * 雇一个后台进程并等它报到。
  * 开发时用系统 Node 24.10.0 跑构建产物；打包后用应用自己的 exe 运行后台脚本。
- * eve 要求 Node 至少为 24；安装后和无开发环境下的数据库读写仍待验证（08 V06）。
+ * eve 要求 Node 至少为 24；随包探针检查数据库读写，无开发环境账户仍需另验（08 V06）。
  * @param modelApiKey 模型密钥（可选）：和暗号一样从管子送过去，只进内存
  * @param signal 应用在后台尚未就绪时退出，也要停止这次启动并等待收尾
  * @returns 工作证（端口号 + 暗号 + 下班按钮）
@@ -40,13 +40,14 @@ export function startBackend(modelApiKey?: string, signal?: AbortSignal): Promis
 
     // 跑后台用哪个程序：开发环境用系统 node；打包后用户机器上未必装了 Node，
     // 改用应用自己的 exe 客串（ELECTRON_RUN_AS_NODE=1 让它以 Node 模式运行脚本）。
-    // 既有记录报告内嵌 Node 24.22.0，并验证过免安装目录中的后台/eve 启动与请求送达；
-    // 后台尚未接入数据库，不能把这些结果写成安装后数据库也已通过（08 C02）。
-    // 后台脚本的位置也分两套：打包后它被放在 asar 档案外的
-    // app.asar.unpacked 目录——独立进程读不了 asar 档案里的文件
+    // 当前内嵌 Node 为 24.22.0；随包探针已覆盖后台/eve、固定回复与数据库重启续接。
+    // 无开发环境账户和原生驱动重新生成的检查仍需单独完成（08 C02）。
+    // 后台要和它引用的共用代码块待在同一个档案里，否则只搬出 service.js，
+    // 就会找不到旁边的 chunks。已实测当前 Electron 的 Node 模式能读取 asar；
+    // 这让普通依赖也能留在一个档案内，安装时不用逐个释放数千个小文件。
     const packaged = app.isPackaged
     const serviceEntry = packaged
-      ? join(process.resourcesPath, 'app.asar.unpacked', 'out', 'main', 'service.js')
+      ? join(process.resourcesPath, 'app.asar', 'out', 'main', 'service.js')
       : join(__dirname, 'service.js')
 
     // 数据库文件放 Electron 的用户数据目录（05 §1：用系统 API 取位置，

@@ -3,7 +3,7 @@
  * 机密只通过 stdin 在内存间交付；stdout 只报 READY 端口，stderr 只报固定错误码。
  * 数据库不是机密（只是一个文件位置）：路径经命令行参数 --db 传入，在这里打开。
  */
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { startBackendServer, type BackendOptions, type BackendServer } from './server'
 import { startEve, type EveHandle } from '../agent/eve-process'
 import { pingEve } from '../agent/eve-client'
@@ -26,8 +26,10 @@ import { RIKKA_SAMPLE } from '../shared/character-sample'
 import { readSetting, writeSetting } from '../data/settings'
 import { CHAT_WINDOW_KEY, PET_WINDOW_KEY, type ChatWindowState, type PetWindowState } from '../shared/window-state'
 
-/** 应用根目录：编译产物在 out/main/，往上两级正好是 app/ */
-const APP_DIR = resolve(__dirname, '../..')
+/** 后台代码可从只读的 asar 档案启动，eve 的执行文件和临时目录仍放在档案外。 */
+const compiledAppDir = resolve(__dirname, '../..')
+// 开发时这里是 app/；打包时是 app.asar。只转换完整目录名，防止误改用户路径。
+const APP_DIR = basename(compiledAppDir) === 'app.asar' ? `${compiledAppDir}.unpacked` : compiledAppDir
 
 /**
  * 从命令行参数里找 `--db 路径`；没传返回 undefined。

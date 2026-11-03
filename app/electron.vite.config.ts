@@ -8,7 +8,8 @@ import { resolve } from 'node:path'
 
 export default defineConfig({
   // 桌面主进程 + 后台服务子进程入口：同为 Node 环境一起构建
-  // 输出按入口名分目录：out/main/index.js、out/service/index.js（entryFileNames 按入口键命名）
+  // 两个入口输出到 out/main/index.js 和 out/main/service.js；共同代码会拆到
+  // 同目录的 chunks/，发布时必须一起携带，不能只拿走 service.js。
   main: {
     plugins: [externalizeDepsPlugin()],
     build: {
