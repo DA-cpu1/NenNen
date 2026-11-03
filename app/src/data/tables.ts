@@ -4,7 +4,13 @@
  * 结构和 docs/sdd/schema.sql 样稿保持一致。
  * 表跟着各自的功能任务再加，一次铺 15 张只会留下一堆没人用、没法验证的死代码。
  */
-import { integer, sqliteTable, text, type AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
+import {
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  type AnySQLiteColumn,
+} from 'drizzle-orm/sqlite-core'
 
 /** 「共享记忆版本」表：整个库只有一行、一个数字，像电梯里的检修标签——
  *  用户改了跨角色共享的资料，数字就 +1；后台任务看到数字变了，
@@ -270,3 +276,81 @@ export const agentRuns = sqliteTable('agent_runs', {
   /** 结束时间；进行中（running）时为空 */
   finishedAt: integer('finished_at'),
 })
+
+/** 「长期记忆」表：从聊天里提炼出的、关于用户的短记录——「用户希望被
+ *  称为阿达」「这周在赶项目」。和 messages 的分工：messages 存原话，
+ *  memories 存「值得长期记住的结论」；一条记忆通过 memory_sources 指回
+ *  它依据的原始消息，「这结论哪来的」永远有账可对（05 §2/§4）。
+ *  同一归属下同一个 memory_key 只许一条 status='active' 的记录，由两个
+ *  部分唯一索引强制（one_active_character_memory_key /
+ *  one_active_global_memory_key）——程序写漏检查、想同时留两个「当前
+ *  称呼」，数据库当场报错兜底（05 §5）。T07 步骤① 建表 */
+export const memories = sqliteTable('memories', {
+  /** 程序生成的不重复字符串 ID，同 characters.id 的理由 */
+  id: text('id').primaryKey(),
+  /** 归属范围：character 当前角色私有 / global 用户指定跨角色共享。
+   *  数据库 CHECK 保证 scope 和 character_id 必须配套——global 不许挂
+   *  角色、character 必须挂角色，杜绝「说不清属于谁」的记忆（05 §3） */
+  scope: text('scope').notNull(),
+  /** 属于哪个角色（外键：删角色时记忆一起删）；scope='global' 时必须为空 */
+  characterId: text('character_id').references(() => characters.id, {
+    onDelete: 'cascade',
+  }),
+  /** 类别：fact 事实 / preference 偏好 / episode 经历 / temporary 近期
+   *  状态（带过期时间那类）/ interaction_request 明确相处要求——
+   *  02 §2「记什么、不记什么」那张表按这几类落地 */
+  kind: text('kind').notNull(),
+  /** 可替换的具体属性名（如 preferred_name）：同一属性的新旧值靠它配对，
+   *  新值写入时旧值标 superseded。经历类没有固定键，留空 */
+  memoryKey: text('memory_key'),
+  /** 给用户看、供模型读的简短中文记录。status='deleted'（已忘记）时必须
+   *  清成空串：忘记的承诺是「正文不残留」，由数据库 CHECK 强制——
+   *  只改状态不清正文会被当场拒绝（05 §6） */
+  content: text('content').notNull(),
+  /** 这条怎么来的：user_explicit 用户明确说出 / conversation_event
+   *  从对话提取的有依据经历 / user_edit 用户在页面填写（05 §4） */
+  origin: text('origin').notNull(),
+  /** 状态：active 有效 / superseded 被新值替代 / expired 已过期 /
+   *  deleted 已忘记。后三种行保留作历史，不再当当前事实使用 */
+  status: text('status').notNull().default('active'),
+  /** 修订号：每次内容或状态变化 +1。后台任务提交候选时核对它——
+   *  数字对不上说明手里的版本已过时，拒收旧结果（05 §4） */
+  revision: integer('revision').notNull().default(1),
+  /** 本条替代的旧记忆 ID（「现在不喝咖啡」替代「爱喝咖啡」）。
+   *  自引用同表 id，写法上要延迟取值，见 messages.replyToId */
+  supersedesId: text('supersedes_id').references((): AnySQLiteColumn => memories.id, {
+    onDelete: 'set null',
+  }),
+  /** 从什么时候开始有效（UTC 毫秒数字） */
+  validFrom: integer('valid_from').notNull(),
+  /** 到什么时候不再算当前状态；永久性记忆为空。数据库 CHECK 保证
+   *  expires_at >= valid_from（结束时间不可能早于开始时间）。检索时
+   *  它和 status 一起过滤——到期没来得及改状态的不许再当现状用（02 §2） */
+  expiresAt: integer('expires_at'),
+  /** 创建时间（UTC 毫秒数字） */
+  createdAt: integer('created_at').notNull(),
+  /** 最后更新时间 */
+  updatedAt: integer('updated_at').notNull(),
+})
+
+/** 「记忆来源」表：一条记忆和它依据的原始消息的对照——只存两个 ID，
+ *  不复制原文片段（原文永远以 messages 为准，一处修改全局生效）。
+ *  忘记某条记忆时，靠这张表反查「哪些消息是它的依据」并排除出模型
+ *  上下文（05 §6，具体排除动作是 T08 的活）。(memory_id, message_id)
+ *  是复合主键：两列合起来当主键，同一依据不重复登记 */
+export const memorySources = sqliteTable(
+  'memory_sources',
+  {
+    /** 属于哪条记忆（外键：删记忆时对照行一起删） */
+    memoryId: text('memory_id')
+      .notNull()
+      .references(() => memories.id, { onDelete: 'cascade' }),
+    /** 依据哪条消息（外键：删消息时对照行一起删） */
+    messageId: text('message_id')
+      .notNull()
+      .references(() => messages.id, { onDelete: 'cascade' }),
+  },
+  // 复合主键：单独哪列都可重复（一条记忆多个来源、一条消息支撑多条
+  // 记忆），但两列的组合全表唯一——第二次插完全相同的一对当场报错
+  (t) => [primaryKey({ columns: [t.memoryId, t.messageId] })],
+)

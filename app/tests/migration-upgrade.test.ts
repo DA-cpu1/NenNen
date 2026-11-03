@@ -1,6 +1,6 @@
 /**
- * 最小旧库升级样例（T04 步骤⑧创建，05 §7；T05① 扩展到 v6）：证明
- * 「老用户升级新版」这条路真的能走通。做法是演一遍历史——
+ * 最小旧库升级样例（T04 步骤⑧创建，05 §7；T05① 扩展到 v6，T07① 扩展到
+ * v8）：证明「老用户升级新版」这条路真的能走通。做法是演一遍历史——
  * 第一幕用「只含第一张装修单」的清单造出 v1 旧库（这正是当年 v1 版
  * 程序留下的库的样子），塞一行老数据、关库（旧程序退出）；
  * 第二幕重新打开（新版程序启动），用完整清单升级，检查：
@@ -15,7 +15,15 @@ import { eq } from 'drizzle-orm'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { MIGRATIONS, runMigrations, type Migration } from '../src/data/migrations'
 import { initializeFirstCharacter } from '../src/data/character-init'
-import { appState, agentRuns, characterVersions } from '../src/data/tables'
+import {
+  agentRuns,
+  appState,
+  characterVersions,
+  conversations,
+  memories,
+  memorySources,
+  messages,
+} from '../src/data/tables'
 import { readSetting, writeSetting } from '../src/data/settings'
 
 let dir: string
@@ -51,22 +59,22 @@ describe('最小旧库升级样例（T04 步骤⑧）', () => {
     ).toEqual({ n: 0 })
     old.close() // 旧版程序退出，数据落盘
 
-    // ── 第二幕：新版程序启动，翻记录本补做 v2～v7 ──
+    // ── 第二幕：新版程序启动，翻记录本补做 v2～v8 ──
     const upgraded = openCompanionDatabase(dbPath)
     runMigrations(upgraded.sqlite)
 
-    // 记录本登记齐当前全部 7 张单
+    // 记录本登记齐当前全部 8 张单
     const records = upgraded.sqlite
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as Array<{ version: number }>
-    expect(records.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7])
+    expect(records.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
 
     // 旧数据一行不丢：老用户的版本号还是 3，没有被初始化逻辑重置成 0
     const state = upgraded.db.select().from(appState).where(eq(appState.id, 1)).get()
     expect(state?.globalMemoryEpoch).toBe(3)
 
-    // 新表全部就位：抽查 v2～v5、v7 各一张代表表
-    for (const table of ['app_settings', 'characters', 'conversations', 'tool_operations', 'agent_runs']) {
+    // 新表全部就位：抽查 v2～v5、v7、v8 各一张代表表
+    for (const table of ['app_settings', 'characters', 'conversations', 'tool_operations', 'agent_runs', 'memories']) {
       const row = upgraded.sqlite
         .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name=?")
         .get(table) as { n: number }
@@ -137,6 +145,100 @@ describe('最小旧库升级样例（T04 步骤⑧）', () => {
       .get() as { n: number }
     expect(index.n).toBe(1)
 
+    // v8 的记忆两表不是「看起来有表」而是真能用：沿真实外键链
+    // （角色 → 会话 → 消息 → 记忆 → 来源）各插一行，列名类型全走一遍。
+    // 先补一条用户消息——记忆必须能指回真实消息，不能凭空出现
+    const conversation = upgraded.db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.characterId, initial.characterId))
+      .get()
+    upgraded.db
+      .insert(messages)
+      .values({
+        id: 'msg-upgrade-001',
+        conversationId: conversation?.id ?? '',
+        seq: 1,
+        role: 'user',
+        content: '以后叫我阿达',
+        status: 'completed',
+        clientRequestId: 'upgrade-memory-request-1',
+        createdAt: 1740000010000,
+      })
+      .run()
+    upgraded.db
+      .insert(memories)
+      .values({
+        id: 'mem-upgrade-001',
+        scope: 'character',
+        characterId: initial.characterId,
+        kind: 'preference',
+        memoryKey: 'preferred_name',
+        content: '用户希望被称为阿达',
+        origin: 'user_explicit',
+        validFrom: 1740000010000,
+        createdAt: 1740000010000,
+        updatedAt: 1740000010000,
+      })
+      .run()
+    upgraded.db
+      .insert(memorySources)
+      .values({ memoryId: 'mem-upgrade-001', messageId: 'msg-upgrade-001' })
+      .run()
+    // 读回来对得上，说明 Drizzle 定义和迁移 SQL 的列名没写歪
+    const saved = upgraded.db.select().from(memories).all()
+    expect(saved).toHaveLength(1)
+    expect(saved[0]).toMatchObject({
+      id: 'mem-upgrade-001',
+      status: 'active',
+      revision: 1,
+    })
+
+    // 三个数据库级防线逐个点名（写漏程序检查时由它们兜底，05 §3/§5/§6）：
+    // 1) 复合主键：同一对「记忆 × 消息」不许登记第二遍
+    expect(() =>
+      upgraded.db
+        .insert(memorySources)
+        .values({ memoryId: 'mem-upgrade-001', messageId: 'msg-upgrade-001' })
+        .run(),
+    ).toThrow()
+    // 2) 部分唯一索引：同角色同属性键只许一条有效记录（第二个「当前称呼」）
+    expect(() =>
+      upgraded.db
+        .insert(memories)
+        .values({
+          ...saved[0],
+          id: 'mem-upgrade-002',
+          content: '用户希望被称为小陈',
+        })
+        .run(),
+    ).toThrow()
+    // 3) scope 配套 CHECK：global 记忆不许挂角色（「说不清属于谁」直接拒）
+    expect(() =>
+      upgraded.db
+        .insert(memories)
+        .values({
+          ...saved[0],
+          id: 'mem-upgrade-003',
+          scope: 'global',
+        })
+        .run(),
+    ).toThrow()
+    // 4) 忘记清正文 CHECK：标 deleted 却留着内容，当场拒绝（05 §6）
+    expect(() =>
+      upgraded.db
+        .update(memories)
+        .set({ status: 'deleted' })
+        .where(eq(memories.id, 'mem-upgrade-001'))
+        .run(),
+    ).toThrow()
+
+    // 检索用的索引也跟着建出来了（有效记忆的按归属+状态+类别查找）
+    const lookupIndex = upgraded.sqlite
+      .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='index' AND name='memories_lookup'")
+      .get() as { n: number }
+    expect(lookupIndex.n).toBe(1)
+
     upgraded.close()
   })
 
@@ -189,13 +291,13 @@ INSERT INTO no_such_table VALUES (1);
     const state = db.db.select().from(appState).where(eq(appState.id, 1)).get()
     expect(state?.globalMemoryEpoch).toBe(5)
 
-    // 4) 恢复：换回正确清单重跑，v2～v7 正常补齐——坏单子
+    // 4) 恢复：换回正确清单重跑，v2～v8 正常补齐——坏单子
     //    没有把升级路堵死
     runMigrations(db.sqlite)
     const fixed = db.sqlite
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as Array<{ version: number }>
-    expect(fixed.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7])
+    expect(fixed.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
 
     db.close()
   })

@@ -180,6 +180,48 @@ CREATE TABLE agent_runs (
 CREATE INDEX runs_for_budget ON agent_runs(trigger_type, started_at);
 `,
   },
+  {
+    version: 8,
+    summary:
+      '记忆域两表：memories 长期记忆（属性键/新旧替代/时效/忘记清正文）+ memory_sources 记忆与来源消息对照（T07 步骤①，05 §2/§4/§5）',
+    // 约束照 docs/sdd/schema.sql 样稿原样搬：样稿已被 validate-spec.mjs
+    // 在内存库里逐条验证过，这里不二次发明，保持两边一字不差
+    sql: `
+CREATE TABLE memories (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL CHECK (scope IN ('character','global')),
+  character_id TEXT REFERENCES characters(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('fact','preference','episode','temporary','interaction_request')),
+  memory_key TEXT,
+  content TEXT NOT NULL,
+  origin TEXT NOT NULL CHECK (origin IN ('user_explicit','conversation_event','user_edit')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','superseded','expired','deleted')),
+  revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+  supersedes_id TEXT REFERENCES memories(id) ON DELETE SET NULL,
+  valid_from INTEGER NOT NULL,
+  expires_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK ((scope = 'character' AND character_id IS NOT NULL) OR (scope = 'global' AND character_id IS NULL)),
+  CHECK (expires_at IS NULL OR expires_at >= valid_from),
+  CHECK ((status = 'deleted' AND content = '') OR (status <> 'deleted' AND length(trim(content)) > 0))
+);
+CREATE UNIQUE INDEX one_active_character_memory_key
+  ON memories(character_id, memory_key)
+  WHERE scope = 'character' AND status = 'active' AND memory_key IS NOT NULL;
+CREATE UNIQUE INDEX one_active_global_memory_key
+  ON memories(memory_key)
+  WHERE scope = 'global' AND status = 'active' AND memory_key IS NOT NULL;
+CREATE INDEX memories_lookup ON memories(scope, character_id, status, kind, updated_at);
+
+CREATE TABLE memory_sources (
+  memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  PRIMARY KEY (memory_id, message_id)
+);
+CREATE INDEX sources_by_message ON memory_sources(message_id);
+`,
+  },
 ]
 
 /** 给一份 SQL 算"指纹"（sha256）：同样的内容永远得到同一串字符，
