@@ -6,9 +6,11 @@ import { ensurePreviewConversation } from '../src/data/conversations'
 import { initializeFirstCharacter } from '../src/data/character-init'
 import { bumpCharacterMemoryEpoch, bumpContextEpoch, bumpGlobalMemoryEpoch } from '../src/data/epochs'
 import { saveUserMessage } from '../src/data/messages'
+import { saveCharacterMemory } from '../src/data/memories'
 import { runMigrations } from '../src/data/migrations'
-import { conversations, memoryJobs, messages } from '../src/data/tables'
+import { conversations, memories, memoryJobs, memorySources, messages } from '../src/data/tables'
 import { claimMemoryJob, readMemoryJobWork, registerMemoryJob } from '../src/jobs/memory-jobs'
+import { commitMemoryCandidates } from '../src/jobs/commit-candidates'
 
 const now = 1_740_000_000_000
 let companion: CompanionDb
@@ -29,6 +31,12 @@ afterEach(() => companion.close())
 /** 写超过触发线的虚构消息，用于检查批次登记。 */
 function message(requestId: string, conversation = conversationId) {
   return saveUserMessage(companion.db, { requestId, conversationId: conversation, content: '长'.repeat(6_001), now }).message
+}
+
+/** 造一项格式有效的固定候选，具体错误由各场景单独改变。 */
+function candidate(sourceId: string) {
+  return { action: 'add', kind: 'fact', memoryKey: 'project', content: '用户正在做桌面项目',
+    sourceMessageIds: [sourceId], expiresAt: null, replacesMemoryId: null }
 }
 
 describe('整理任务登记与领取', () => {
@@ -86,5 +94,77 @@ describe('整理任务登记与领取', () => {
       start: { seq: remaining.seq, offset: 6_000 }, end: { seq: remaining.seq, offset: 0 },
       sources: [{ id: remaining.id, content: '长' }],
     })
+  })
+})
+
+describe('整理候选原子提交', () => {
+  it('保存、来源和书签一起提交，同一批重放只返回已完成', () => {
+    const { db } = companion
+    const source = message('source')
+    const job = registerMemoryJob(db, conversationId, now)!
+    const work = claimMemoryJob(db, job.id, now)!
+    expect(commitMemoryCandidates(db, work, [candidate(source.id)], new Map(), now + 1))
+      .toEqual({ status: 'completed', saved: 1 })
+    expect(commitMemoryCandidates(db, work, [candidate(source.id)], new Map(), now + 2))
+      .toEqual({ status: 'already_completed' })
+    expect(db.select().from(memories).all()).toHaveLength(1)
+    expect(db.select().from(memorySources).all()).toMatchObject([{ messageId: source.id }])
+    expect(db.select().from(conversations).get()).toMatchObject({ lastProcessedSeq: source.seq, lastProcessedOffset: 0 })
+  })
+
+  it('一批第二项来源无效时撤回第一项、来源和进度；后来发的原话不属于本批', () => {
+    const { db } = companion
+    const source = message('source')
+    const job = registerMemoryJob(db, conversationId, now)!
+    const work = claimMemoryJob(db, job.id, now)!
+    const future = message('future')
+    expect(commitMemoryCandidates(db, work, [candidate(source.id), candidate(future.id)], new Map(), now + 1))
+      .toEqual({ status: 'invalid_candidates' })
+    expect(db.select().from(memories).all()).toEqual([])
+    expect(db.select().from(memorySources).all()).toEqual([])
+    expect(db.select().from(conversations).get()?.lastProcessedSeq).toBe(0)
+  })
+
+  it('任务运行中修改任一版本后拒绝旧结果并保留书签', () => {
+    const { db } = companion
+    const source = message('source')
+    const job = registerMemoryJob(db, conversationId, now)!
+    const work = claimMemoryJob(db, job.id, now)!
+    bumpContextEpoch(db, conversationId)
+    expect(commitMemoryCandidates(db, work, [candidate(source.id)], new Map(), now + 1)).toEqual({ status: 'stale' })
+    expect(db.select().from(memoryJobs).get()?.status).toBe('stale')
+    expect(db.select().from(conversations).get()?.lastProcessedSeq).toBe(0)
+    expect(db.select().from(memories).all()).toEqual([])
+  })
+
+  it('到期旧属性在同批写新值时标为过期，候选本身过期时跳过', () => {
+    const { db } = companion
+    const oldSource = saveUserMessage(db, { conversationId, requestId: 'old', content: '旧项目', now: now - 100 }).message
+    expect(saveCharacterMemory(db, { conversationId, kind: 'fact', memoryKey: 'project', content: '旧项目',
+      origin: 'user_explicit', sourceMessageIds: [oldSource.id], expiresAt: now, now: now - 100 }).status).toBe('saved')
+    const source = message('source')
+    const work = claimMemoryJob(db, registerMemoryJob(db, conversationId, now)!.id, now)!
+    expect(commitMemoryCandidates(db, work, [candidate(source.id),
+      { ...candidate(oldSource.id), kind: 'temporary', memoryKey: 'old_state', expiresAt: now - 1 }], new Map(), now + 1))
+      .toEqual({ status: 'completed', saved: 1 })
+    expect(db.select().from(memories).orderBy(memories.createdAt).all()).toMatchObject([
+      { content: '旧项目', status: 'expired', revision: 2 }, { content: '用户正在做桌面项目', status: 'active' },
+    ])
+  })
+
+  it('替换必须是模型见过的同角色修订，旧原话不能覆盖后面明确保存的值', () => {
+    const { db } = companion
+    const source = message('earlier')
+    const later = message('later')
+    const recent = saveCharacterMemory(db, { conversationId, kind: 'fact', memoryKey: 'project', content: '后来新值',
+      origin: 'user_explicit', sourceMessageIds: [later.id], expiresAt: null, now }).status
+    expect(recent).toBe('saved')
+    const old = db.select().from(memories).get()!
+    const work = claimMemoryJob(db, registerMemoryJob(db, conversationId, now)!.id, now)!
+    const replacement = { ...candidate(source.id), action: 'replace', replacesMemoryId: old.id }
+    expect(commitMemoryCandidates(db, work, [replacement], new Map(), now + 1)).toEqual({ status: 'invalid_candidates' })
+    expect(commitMemoryCandidates(db, work, [replacement], new Map([[old.id, old.revision]]), now + 1))
+      .toEqual({ status: 'invalid_candidates' })
+    expect(db.select().from(memories).get()?.content).toBe('后来新值')
   })
 })
