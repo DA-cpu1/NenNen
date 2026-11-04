@@ -293,7 +293,7 @@ export const memories = sqliteTable('memories', {
   /** 归属范围：character 当前角色私有 / global 用户指定跨角色共享。
    *  数据库 CHECK 保证 scope 和 character_id 必须配套——global 不许挂
    *  角色、character 必须挂角色，杜绝「说不清属于谁」的记忆（05 §3） */
-  scope: text('scope').notNull(),
+  scope: text('scope', { enum: ['character', 'global'] }).notNull(),
   /** 属于哪个角色（外键：删角色时记忆一起删）；scope='global' 时必须为空 */
   characterId: text('character_id').references(() => characters.id, {
     onDelete: 'cascade',
@@ -301,7 +301,7 @@ export const memories = sqliteTable('memories', {
   /** 类别：fact 事实 / preference 偏好 / episode 经历 / temporary 近期
    *  状态（带过期时间那类）/ interaction_request 明确相处要求——
    *  02 §2「记什么、不记什么」那张表按这几类落地 */
-  kind: text('kind').notNull(),
+  kind: text('kind', { enum: ['fact', 'preference', 'episode', 'temporary', 'interaction_request'] }).notNull(),
   /** 可替换的具体属性名（如 preferred_name）：同一属性的新旧值靠它配对，
    *  新值写入时旧值标 superseded。经历类没有固定键，留空 */
   memoryKey: text('memory_key'),

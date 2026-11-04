@@ -70,7 +70,8 @@ export function saveUserMessage(
     const message = tx.insert(messages).values({
       id: `msg-${randomUUID()}`,
       conversationId: input.conversationId,
-      seq: (last?.seq ?? 0) + 1,
+      // 删除原话可能让当前最后一条早于整理书签，新消息不能落到书签前面。
+      seq: Math.max(last?.seq ?? 0, conversation.lastProcessedSeq) + 1,
       role: 'user',
       content: input.content,
       // 用户的话已完整收到；角色是否回复成功将由独立的回复消息记录。
@@ -123,10 +124,12 @@ export function createAssistantReply(db: BetterSQLite3Database, input: CreateAss
     const last = tx.select({ seq: messages.seq }).from(messages)
       .where(eq(messages.conversationId, user.conversationId))
       .orderBy(desc(messages.seq)).limit(1).get()
+    const conversation = tx.select({ cursor: conversations.lastProcessedSeq }).from(conversations)
+      .where(eq(conversations.id, user.conversationId)).get()!
     // 会话来自数据库里的原消息，不能把 A 角色的回复挂进 B 的聊天。
     return tx.insert(messages).values({
       id: `msg-${randomUUID()}`, conversationId: user.conversationId,
-      seq: (last?.seq ?? 0) + 1, role: 'assistant', content: '', status: 'pending',
+      seq: Math.max(last?.seq ?? 0, conversation.cursor) + 1, role: 'assistant', content: '', status: 'pending',
       replyToId: user.id, createdAt: input.now ?? Date.now(),
     }).returning().get()
   })

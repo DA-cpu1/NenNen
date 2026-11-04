@@ -104,11 +104,11 @@ describe('聊天回合服务（T06⑪c1）', () => {
     const { db } = companion
     const firstCharacter = db.select().from(conversations).where(eq(conversations.id, conversationId)).get()!.characterId
     const secondCharacter = db.select().from(conversations).where(eq(conversations.id, secondId)).get()!.characterId
-    db.insert(memories).values([
+    db.insert(memories).values(([
       { id: 'private', scope: 'character', characterId: firstCharacter, content: '喜欢水彩' },
       { id: 'shared', scope: 'global', characterId: null, content: '水彩在客厅' },
       { id: 'other', scope: 'character', characterId: secondCharacter, content: '水彩在卧室' },
-    ].map((row) => ({ ...row, kind: 'fact', origin: 'user_edit', validFrom: 1, createdAt: 1, updatedAt: 1 }))).run()
+    ] as const).map((row) => ({ ...row, kind: 'fact' as const, origin: 'user_edit', validFrom: 1, createdAt: 1, updatedAt: 1 }))).run()
     fake.send.mockResolvedValue(fakeResponse([appended('固定半截')], true).response)
     const turns = service()
     const request = { sessionId: 'eve-1', tool: 'search_memories', input: { query: '水彩' } } as const

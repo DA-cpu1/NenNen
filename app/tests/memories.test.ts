@@ -3,8 +3,10 @@ import { eq } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { listCurrentMemories, saveCharacterMemory, type SaveCharacterMemoryInput } from '../src/data/memories'
+import { listManagedMemories, mutateMemory } from '../src/data/memory-management'
+import { saveUserMessage } from '../src/data/messages'
 import { runMigrations } from '../src/data/migrations'
-import { characters, conversations, memories, memorySources, messages } from '../src/data/tables'
+import { characters, contextExclusions, conversations, memories, memorySources, messages, toolOperations } from '../src/data/tables'
 
 const now = 1_740_000_000_000
 const initial: SaveCharacterMemoryInput = {
@@ -111,5 +113,78 @@ describe('记忆读写', () => {
     expect(() => saveCharacterMemory(db, { ...initial, content: '新值', now: now + 1 })).toThrow()
     expect(db.select().from(memories).all()).toMatchObject([{ content: initial.content, status: 'active', revision: 1 }])
     expect(db.select().from(characters).where(eq(characters.id, 'a')).get()?.memoryEpoch).toBe(1)
+  })
+})
+
+describe('纠正与忘记', () => {
+  it('A11 纠正后只有新值生效，旧值有时间和来源，重复请求不再写入', () => {
+    const { db } = companion
+    saveCharacterMemory(db, initial)
+    const [old] = listCurrentMemories(db, 'a', now)
+    const context = { conversationId: 'normal', requestId: 'edit-1' }
+    const change = { action: 'correct', memoryId: old.id, expectedRevision: old.revision, content: '用户希望被称为小陈' } as const
+    const first = mutateMemory(db, context, change, now + 1)
+    expect(first.conversationIds).toEqual(['normal'])
+    expect(mutateMemory(db, context, change, now + 2)).toEqual({ receipt: first.receipt, conversationIds: [] })
+    expect(() => mutateMemory(db, { ...context, requestId: 'edit-2' }, change, now + 2)).toThrow('STALE_REVISION')
+    expect(listCurrentMemories(db, 'a', now + 2)).toMatchObject([{ content: change.content }])
+    expect(listManagedMemories(db, 'a', now + 2)).toMatchObject([
+      { status: 'active', content: change.content },
+      { status: 'superseded', content: initial.content, sources: [{ id: 'original' }], validFrom: now },
+    ])
+  })
+
+  it('默认忘记整条属性链、共同来源和请求原话，其他角色的原话不动', () => {
+    const { db } = companion
+    saveCharacterMemory(db, initial)
+    saveCharacterMemory(db, { ...initial, memoryKey: 'other_fact', content: '同一条原话里的事实' })
+    saveCharacterMemory(db, { ...initial, conversationId: 'other', sourceMessageIds: ['other-source'] })
+    const target = listCurrentMemories(db, 'a', now).find((row) => row.memoryKey === initial.memoryKey)!
+    const { receipt } = mutateMemory(db, { conversationId: 'normal', requestId: 'edit-1' }, {
+      action: 'correct', memoryId: target.id, expectedRevision: target.revision, content: '用户希望被称为小陈',
+    }, now + 1)
+    const result = mutateMemory(db, { conversationId: 'normal', requestMessageId: 'new-name' }, {
+      action: 'forget', memoryId: receipt.memoryId, expectedRevision: receipt.revision, deleteSources: false,
+    }, now + 2)
+    expect(result.receipt).toMatchObject({ affectedMemories: 3, removedSources: 0 })
+    expect(listManagedMemories(db, 'a', now + 2)).toEqual([])
+    expect(listCurrentMemories(db, 'b', now + 2)).toHaveLength(1)
+    expect(db.select().from(contextExclusions).all().map((row) => row.messageId).sort()).toEqual(['new-name', 'original', 'reply'])
+    expect(db.select().from(messages).where(eq(messages.id, 'original')).get()).toMatchObject({ excludedFromContext: 1, content: '虚构测试原话' })
+    expect(db.select().from(toolOperations).all().every((row) => !row.resultJson?.includes('小陈'))).toBe(true)
+  })
+
+  it('试聊、越权角色、伪造来源和聊天要求删除原文均不落库', () => {
+    const { db } = companion
+    saveCharacterMemory(db, initial)
+    const [target] = listCurrentMemories(db, 'a', now)
+    const change = { action: 'forget', memoryId: target.id, expectedRevision: target.revision, deleteSources: true } as const
+    expect(() => mutateMemory(db, { conversationId: 'preview', requestMessageId: 'preview-source' }, change, now)).toThrow('SOURCE_NOT_ALLOWED')
+    expect(() => mutateMemory(db, { conversationId: 'other', requestId: 'outside' }, change, now)).toThrow('NOT_FOUND')
+    expect(() => mutateMemory(db, { conversationId: 'normal', requestMessageId: 'other-source' }, change, now)).toThrow('SOURCE_NOT_ALLOWED')
+    expect(() => mutateMemory(db, { conversationId: 'normal', requestMessageId: 'new-name' }, change, now)).toThrow('SOURCE_NOT_ALLOWED')
+    expect(db.select().from(toolOperations).all()).toEqual([])
+    expect(listCurrentMemories(db, 'a', now)).toEqual([target])
+  })
+
+  it('同时删除原文时事务回滚完整，成功后新消息不会落到原整理书签前面', () => {
+    const { db, sqlite } = companion
+    db.delete(messages).where(eq(messages.id, 'new-name')).run()
+    db.delete(messages).where(eq(messages.id, 'reply')).run()
+    db.update(conversations).set({ lastProcessedSeq: 1, lastProcessedOffset: 1 }).where(eq(conversations.id, 'normal')).run()
+    saveCharacterMemory(db, initial)
+    const [target] = listCurrentMemories(db, 'a', now)
+    const change = { action: 'forget', memoryId: target.id, expectedRevision: target.revision, deleteSources: true } as const
+    const context = { conversationId: 'normal', requestId: 'erase-1' }
+    sqlite.exec("CREATE TRIGGER reject_erase BEFORE DELETE ON messages BEGIN SELECT RAISE(ABORT, '拒绝删除'); END")
+    expect(() => mutateMemory(db, context, change, now + 1)).toThrow()
+    expect(listCurrentMemories(db, 'a', now + 1)).toEqual([target])
+    expect(db.select().from(contextExclusions).all()).toEqual([])
+    expect(db.select().from(toolOperations).all()).toEqual([])
+    sqlite.exec('DROP TRIGGER reject_erase')
+    expect(mutateMemory(db, context, change, now + 2).receipt.removedSources).toBe(1)
+    expect(db.select().from(messages).where(eq(messages.id, 'original')).get()).toBeUndefined()
+    expect(db.select().from(conversations).where(eq(conversations.id, 'normal')).get()).toMatchObject({ lastProcessedSeq: 1, lastProcessedOffset: 0 })
+    expect(saveUserMessage(db, { conversationId: 'normal', requestId: 'later', content: '新话题' }).message.seq).toBe(2)
   })
 })
