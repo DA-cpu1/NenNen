@@ -40,6 +40,8 @@ export interface ChatTurnServiceDeps {
   getEve: () => EveHandle | undefined
   /** 模型窗口与输出预留；测试可注入小窗口制造预算失败。 */
   limits: ModelInputLimits
+  /** 正式聊天保存原话或结束回复后，请后台重查整理触发条件。 */
+  wakeMemoryJobs?: () => void
 }
 
 /** 回合服务的对外能力。 */
@@ -129,11 +131,15 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     characterId: string,
     userMessageId: string,
     runStart: (turn: ActiveTurn) => AsyncGenerator<TurnEvent, TurnOutcome>,
+    onSettled?: () => void,
   ): AsyncGenerator<SseTurnEvent> {
     let finish!: () => void
     const turn: ActiveTurn = {
       controller: new AbortController(),
-      completed: new Promise<void>((resolve) => { finish = resolve }), finish: () => finish(),
+      completed: new Promise<void>((resolve) => { finish = resolve }), finish: () => {
+        finish()
+        onSettled?.()
+      },
     }
     active.set(conversationId, turn)
     activeCharacters.add(characterId)
@@ -290,19 +296,18 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
 
     startTurn: (request) => {
       const { db, eve, savedMessageId, characterId, pendingWrite } = beginTurn(request.conversationId, request.requestId, request.content, 'normal')
-      return {
-        userMessageId: savedMessageId,
-        events: registerTurn(request.conversationId, characterId, savedMessageId,
-          (turn) => pendingWrite ? replayWrite(db, pendingWrite) : runFormalTurn(db, eve!, {
-            conversationId: request.conversationId, userMessageId: savedMessageId,
-            commonRules: COMMON_RULES_TEXT, limits: deps.limits,
-            model: MODEL_NAME, provider: PROVIDER_NAME,
-            registerToolSession: (session) => {
-              turn.toolSession = { ...session, executions: 0 }
-              return () => { delete turn.toolSession }
-            },
-          }, turn.controller.signal)),
-      }
+      const events = registerTurn(request.conversationId, characterId, savedMessageId,
+        (turn) => pendingWrite ? replayWrite(db, pendingWrite) : runFormalTurn(db, eve!, {
+          conversationId: request.conversationId, userMessageId: savedMessageId,
+          commonRules: COMMON_RULES_TEXT, limits: deps.limits,
+          model: MODEL_NAME, provider: PROVIDER_NAME,
+          registerToolSession: (session) => {
+            turn.toolSession = { ...session, executions: 0 }
+            return () => { delete turn.toolSession }
+          },
+        }, turn.controller.signal), deps.wakeMemoryJobs)
+      deps.wakeMemoryJobs?.()
+      return { userMessageId: savedMessageId, events }
     },
 
     startPreviewTurn: (request) => {

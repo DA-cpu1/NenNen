@@ -7,6 +7,8 @@ import { basename, resolve } from 'node:path'
 import { startBackendServer, type BackendOptions, type BackendServer } from './server'
 import { startEve, type EveHandle } from '../agent/eve-process'
 import { pingEve } from '../agent/eve-client'
+import { createCompanionLanguageModel } from '../agent/model'
+import { createMemoryWorker } from '../jobs/memory-worker'
 import { openCompanionDatabase, type CompanionDb } from '../data/db'
 import { runMigrations } from '../data/migrations'
 import { bumpGlobalMemoryEpoch, readGlobalMemoryEpoch } from '../data/epochs'
@@ -56,6 +58,8 @@ function main(): void {
   let server: BackendServer | undefined
   /** 数据库连接；启动时没传 --db 就保持空（此时 /db/ping 返回明确的 503） */
   let database: CompanionDb | undefined
+  let memoryWorker: ReturnType<typeof createMemoryWorker> | undefined
+  let memoryModel: ReturnType<typeof createCompanionLanguageModel> | undefined
 
   /**
    * 后台服务的选项表。特意用「一张可原地更新的表」而不是一次性常量：
@@ -76,6 +80,7 @@ function main(): void {
     getDb: () => database?.db,
     getEve: () => eve,
     limits: { modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS },
+    wakeMemoryJobs: () => memoryWorker?.wake(),
   })
   options.startChatTurn = chatTurns.startTurn
   options.startPreviewTurn = chatTurns.startPreviewTurn
@@ -101,7 +106,8 @@ function main(): void {
     if (closing) return
     closing = true
     // 先禁止新回合并等取消结果写完，HTTP仍在读取流，所以不会把保存收尾截断。
-    await chatTurns.stop()
+    memoryModel = undefined
+    await Promise.all([chatTurns.stop(), memoryWorker?.stop()])
     await server?.stop()
     await eve?.stop()
     // 连接不关的话文件会被一直占用；而且 WAL 模式下没正常关闭，
@@ -111,8 +117,8 @@ function main(): void {
   }
 
   /** 用指定密钥起一个 eve。失败向外抛，由调用方决定善后。 */
-  async function startEveWith(key: string): Promise<void> {
-    eve = await startEve({
+  async function startEveWith(key: string): Promise<EveHandle> {
+    return startEve({
       appDir: APP_DIR,
       modelApiKey: key,
       // 只传公开测试地址；自动检查让请求落到本机假供应商，避免误花钱
@@ -143,6 +149,7 @@ function main(): void {
       // 用户按原请求编号重试；只动进行中的行，绝不补写「成功」。
       // 必须在任何回合开始前执行一次（此刻还没有回合，安全）。
       recoverInterruptedTurns(database.db)
+      memoryWorker = createMemoryWorker(database.db, () => memoryModel)
       options.db = {
         readEpoch,
         bumpEpoch,
@@ -224,12 +231,14 @@ function main(): void {
       await server.stop()
       return
     }
-    if (modelApiKey) await startEveWith(modelApiKey)
+    if (modelApiKey) eve = await startEveWith(modelApiKey)
     if (closing) {
       await eve?.stop()
       return
     }
     options.modelApiKey = modelApiKey || undefined
+    if (modelApiKey) memoryModel = createCompanionLanguageModel(modelApiKey, process.env.COMPANION_MODEL_BASE_URL || undefined)
+    memoryWorker?.wake()
     process.stdout.write(`READY ${server.port}\n`)
   }
 
@@ -244,9 +253,19 @@ function main(): void {
     const previous = eve
     eve = undefined
     options.modelApiKey = undefined
+    memoryModel = undefined
+    memoryWorker?.cancelCurrent()
     await previous?.stop()
-    await startEveWith(newKey)
+    if (closing) return
+    const replacement = await startEveWith(newKey)
+    if (closing) {
+      await replacement.stop()
+      return
+    }
+    eve = replacement
     options.modelApiKey = newKey
+    memoryModel = createCompanionLanguageModel(newKey, process.env.COMPANION_MODEL_BASE_URL || undefined)
+    memoryWorker?.wake()
   }
 
   process.stdin.setEncoding('utf-8')
@@ -265,6 +284,7 @@ function main(): void {
       process.exit(1)
     }
     void start(token, modelApiKey).catch(async () => {
+      await memoryWorker?.stop()
       await server?.stop()
       await eve?.stop()
       // 启动失败同样不能留着数据库连接占用文件

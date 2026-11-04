@@ -14,6 +14,7 @@ import { agentRuns, conversations, memories, memoryJobs, memorySources, messages
 import { beginMemoryAttempt, finishMemoryAttempt, recoverExpiredMemoryJobs } from '../src/jobs/memory-budget'
 import { claimMemoryJob, readMemoryJobWork, registerMemoryJob } from '../src/jobs/memory-jobs'
 import { commitMemoryCandidates } from '../src/jobs/commit-candidates'
+import { createMemoryWorker } from '../src/jobs/memory-worker'
 import { runMemoryAttempt } from '../src/jobs/run-memory-attempt'
 
 const now = 1_740_000_000_000
@@ -176,6 +177,38 @@ describe('整理租约恢复', () => {
     expect(db.select().from(conversations).get()?.lastProcessedSeq).toBe(0)
     expect(beginMemoryAttempt(db, job.id, testModel, deadline + 29_999).status).toBe('unavailable')
     expect(beginMemoryAttempt(db, job.id, testModel, deadline + 30_000).status).toBe(stale ? 'unavailable' : 'ready')
+  })
+})
+
+describe('整理调度', () => {
+  it('空闲到点只执行一次，收到新聊天通知后重新判断空闲时刻', async () => {
+    vi.useFakeTimers({ now })
+    const { db } = companion
+    const model = new MockLanguageModelV4({ doGenerate: async () => ({
+      content: [{ type: 'text', text: '{"candidates":[]}' }], finishReason: { unified: 'stop', raw: undefined },
+      usage: { inputTokens: { total: 10, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 5, text: undefined, reasoning: undefined } }, warnings: [],
+    }) })
+    const worker = createMemoryWorker(db, () => model)
+    try {
+      saveUserMessage(db, { requestId: 'first', conversationId, content: '我喜欢水彩', now })
+      saveUserMessage(db, { requestId: 'second', conversationId, content: '下周想去上课', now })
+      worker.wake()
+      await vi.advanceTimersByTimeAsync(240_000)
+      const last = saveUserMessage(db, { requestId: 'last', conversationId, content: '先买画纸', now: Date.now() }).message
+      worker.wake()
+      worker.wake()
+      await vi.advanceTimersByTimeAsync(299_999)
+      expect(model.doGenerateCalls).toHaveLength(0)
+      await vi.advanceTimersByTimeAsync(2)
+      expect(model.doGenerateCalls).toHaveLength(1)
+      expect(db.select().from(conversations).get()?.lastProcessedSeq).toBe(last.seq)
+      await vi.advanceTimersByTimeAsync(900_000)
+      expect(model.doGenerateCalls).toHaveLength(1)
+    } finally {
+      await worker.stop()
+      vi.useRealTimers()
+    }
   })
 })
 
