@@ -133,6 +133,21 @@ describe('输入预算与历史裁剪（T06⑨b）', () => {
     expect(JSON.stringify(input)).toBe(before)
   })
 
+  it('相关记忆优先于历史和示例，实际请求补裁时最后移除', () => {
+    const input = context()
+    input.relatedMemories = [{ id: 'mem', content: '曾聊到水彩。', scope: 'character',
+      origin: 'conversation_event', validFrom: 1, expiresAt: null, revision: 1 }]
+    input.persona.dialogueExamples = [{ scene: '风格', user: '示例问', character: '示例答' }]
+    input.history = [message('u1', 1, 'user', 'a'.repeat(900))]
+    const complete = prepareBudgetedContext(input, limits)
+    expect(complete.prompt[3].content).toContain('曾聊到水彩。')
+    expect(complete.optionalPromptGroups).toEqual([[2], [4], [3]])
+    const small = prepareBudgetedContext(input, { modelWindowTokens: 1_000 })
+    expect(small.prompt[2].content).toContain('曾聊到水彩。')
+    expect(small.historyMessageIds).toEqual([])
+    expect(small.prompt.at(-1)?.content).toBe('当前问题')
+  })
+
   it('原话、回复与有来源的主动消息整组裁剪，不留下孤立引用', () => {
     const input = context()
     input.history = [

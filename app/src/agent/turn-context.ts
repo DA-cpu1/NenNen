@@ -1,12 +1,14 @@
 /**
- * 从 SQLite 准备本轮人设和可用历史，防止回复中途编辑人设后混用两版设定。
+ * 从 SQLite 准备本轮人设、相关记忆和可用历史，防止回复中途混用新旧资料。
  * 这里只读出独立的数据副本；不调用模型、不写用户资料，预算裁剪由 context-budget 处理。
  * 历史展示允许用户查看已排除的原文，本文件不能复用那个展示接口。
  */
 import { and, asc, eq, lt } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { z } from 'zod'
+import { listCurrentMemories } from '../data/memories'
 import { characters, characterVersions, conversations, messages } from '../data/tables'
+import { selectContextMemories, type MemoryMatch } from '../memory/search'
 import { dialogueExampleSchema, type DialogueExample } from '../shared/character-schema'
 
 /** 内部调用的输入；共同规则来自应用配置，角色归属从会话查，不能由模型指定。 */
@@ -14,6 +16,8 @@ export interface BuildTurnContextInput {
   conversationId: string
   userMessageId: string
   commonRules: string
+  /** 供测试固定时钟，实际聊天按准备时的时间检查到期。 */
+  now?: number
 }
 
 /** 保留消息身份与来源编号；示例不能混成这里的真实聊天记录。 */
@@ -48,6 +52,8 @@ export interface TurnContext {
     userNickname: string | null
     dialogueExamples: DialogueExample[]
   }
+  /** 正式聊天可用的有限记忆资料；试聊不读正式记忆。 */
+  relatedMemories?: MemoryMatch[]
   history: ContextMessage[]
   currentMessage: ContextMessage
 }
@@ -116,7 +122,7 @@ export function usableHistory(previous: Array<typeof messages.$inferSelect>): Co
  * 事务让这些读取看到同一时点的数据库资料；函数返回就结束，不在事务中等待模型。
  * @param db 后台数据库连接
  * @param input 正式会话、已保存用户消息及应用共同规则
- * @returns 固定本轮人设版本、有效历史和当前消息的独立副本
+ * @returns 固定本轮人设版本、相关记忆、有效历史和当前消息的独立副本
  * @throws E_COMMON_RULES_REQUIRED 缺共同规则；E_CONVERSATION_NOT_FOUND 会话不存在；
  * E_PREVIEW_NOT_ALLOWED 试聊尚不能走此正式入口；E_USER_MESSAGE_NOT_ALLOWED 当前消息不可用；
  * E_PERSONA_UNAVAILABLE 缺少有效人设；E_INVALID_DIALOGUE_EXAMPLES 示例资料损坏
@@ -155,6 +161,7 @@ export function buildTurnContext(db: BetterSQLite3Database, input: BuildTurnCont
         initialRelationship: version.initialRelationship, userNickname: version.userNickname,
         dialogueExamples: readExamples(version.dialogueExamplesJson),
       },
+      relatedMemories: selectContextMemories(listCurrentMemories(tx, character.id, input.now ?? Date.now()), current.content),
       history: usableHistory(previous), currentMessage: toContextMessage(current),
     }
   })

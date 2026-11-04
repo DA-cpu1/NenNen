@@ -79,6 +79,24 @@ export function searchMemories(memories: readonly Memory[], query: string, limit
   const queryWords = keywords(query)
   if (!Number.isInteger(limit) || limit < 1) return []
 
+  return takeMatches(rankMemories(memories, query, queryWords), limit)
+}
+
+/**
+ * 正式聊天可固定带入稳定称呼，再用剩余位置补相关记忆。
+ * @param memories 已按当前角色与时效筛过的 SQLite 记录
+ * @param query 当前用户原话
+ * @returns 与工具检索共用条数和大小限制的当轮资料
+ */
+export function selectContextMemories(memories: readonly Memory[], query: string): MemoryMatch[] {
+  const preferredName = memories.find((memory) => memory.memoryKey === 'preferred_name' && memory.scope === 'character')
+    ?? memories.find((memory) => memory.memoryKey === 'preferred_name')
+  const related = rankMemories(memories.filter((memory) => memory.memoryKey !== 'preferred_name'), query, keywords(query))
+  return takeMatches(preferredName ? [preferredName, ...related] : related, resultLimit)
+}
+
+/** 按匹配证据及时间排序，大小限制交给统一的选取步骤。 */
+function rankMemories(memories: readonly Memory[], query: string, queryWords: Set<string>): Memory[] {
   const exactMatches = queryWords.size === 0 ? [] : memories.flatMap((memory) => {
     const words = keywords(memory.content)
     let score = 0
@@ -90,9 +108,13 @@ export function searchMemories(memories: readonly Memory[], query: string, limit
   const matches = exactMatches.length ? exactMatches : matchHan(memories, query)
   matches.sort((a, b) => b.score - a.score || b.memory.validFrom - a.memory.validFrom ||
     a.memory.id.localeCompare(b.memory.id))
+  return matches.map(({ memory }) => memory)
+}
 
+/** 统一限制工具和聊天可携带的记忆条数及大小。 */
+function takeMatches(memories: readonly Memory[], limit: number): MemoryMatch[] {
   const results: MemoryMatch[] = []
-  for (const { memory } of matches) {
+  for (const memory of memories) {
     if (results.length >= Math.min(limit, resultLimit)) break
     const { id, content, scope, origin, validFrom, expiresAt, revision } = memory
     const match = { id, content, scope, origin, validFrom, expiresAt, revision }

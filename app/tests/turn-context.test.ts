@@ -10,7 +10,8 @@ import { initializeFirstCharacter } from '../src/data/character-init'
 import { activateCharacterVersion, saveCharacterVersion } from '../src/data/character-edit'
 import { createAssistantReply, saveUserMessage, updateAssistantReply } from '../src/data/messages'
 import { buildTurnContext } from '../src/agent/turn-context'
-import { characters, characterVersions, companionSettings, conversations, messages } from '../src/data/tables'
+import { saveCharacterMemory } from '../src/data/memories'
+import { characters, characterVersions, companionSettings, conversations, memories, messages } from '../src/data/tables'
 
 let companion: CompanionDb
 let conversationId: string
@@ -46,7 +47,7 @@ function reply(userMessageId: string, content = '可靠回复') {
 
 /** 模拟本轮内部入口，只注入共同规则和当前消息。 */
 function build(userMessageId: string, conversation = conversationId) {
-  return buildTurnContext(companion.db, { conversationId: conversation, userMessageId, commonRules })
+  return buildTurnContext(companion.db, { conversationId: conversation, userMessageId, commonRules, now })
 }
 
 describe('当轮人设固定与可用历史（T06⑧）', () => {
@@ -78,6 +79,33 @@ describe('当轮人设固定与可用历史（T06⑧）', () => {
       initialRelationship: changed.initialRelationship, dialogueExamples: changed.dialogueExamples })
     expect(reverted.persona).toEqual(original.persona)
     expect(reverted.persona.dialogueExamples).not.toBe(original.persona.dialogueExamples)
+  })
+
+  it('把稳定称呼、相关私有记忆和相关共享资料读入快照，保留独立的人设称呼字段', () => {
+    const { db } = companion
+    const source = user('preferences', '以后叫我小陈，我喜欢咖啡。')
+    for (const entry of [
+      { memoryKey: 'preferred_name', content: '用户希望被称为小陈' },
+      { memoryKey: 'coffee', content: '用户喜欢喝美式咖啡' },
+      { memoryKey: 'tea', content: '用户喜欢乌龙茶' },
+    ]) {
+      expect(saveCharacterMemory(db, {
+        ...entry, kind: 'preference', conversationId, sourceMessageIds: [source.id],
+        origin: 'user_explicit', expiresAt: null, now,
+      }).status).toBe('saved')
+    }
+    db.insert(memories).values({
+      id: 'shared', scope: 'global', kind: 'fact', content: '咖啡机在厨房', origin: 'user_edit',
+      validFrom: now, createdAt: now, updatedAt: now,
+    }).run()
+    const context = build(user('current', '咖啡有什么选择？').id)
+    expect(context.persona.userNickname).toBe('阿达')
+    expect(context.relatedMemories?.[0]).toMatchObject({ content: '用户希望被称为小陈' })
+    expect(context.relatedMemories?.slice(1)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ scope: 'character', content: '用户喜欢喝美式咖啡' }),
+      expect.objectContaining({ scope: 'global', content: '咖啡机在厨房' }),
+    ]))
+    expect(context.relatedMemories).toHaveLength(3)
   })
 
   it('初始化重入不会把用户已编辑的人设换回样稿', () => {
