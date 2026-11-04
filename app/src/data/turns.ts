@@ -2,7 +2,7 @@
  * 计算已经完整聊完的轮数：用户一句话有成功回复才算一轮，重试成功也只算一次。
  * 直接查询 SQLite 的消息关系，不另存容易在取消或重试时多加一次的计数器。
  */
-import { and, countDistinct, eq } from 'drizzle-orm'
+import { and, countDistinct, eq, gt } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/sqlite-core'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { conversations, messages } from './tables'
@@ -11,10 +11,11 @@ import { conversations, messages } from './tables'
  * 数出正式会话中已有完整回复的用户消息数；试聊不计入正式整理依据。
  * @param db 后台数据库连接
  * @param conversationId 应用自己的会话编号
+ * @param afterSeq 可选，只数此顺序号之后的未整理用户原话
  * @returns 已完成轮数；没有完整回复或属于试聊时为 0
  * @throws E_CONVERSATION_NOT_FOUND 会话不存在
  */
-export function countCompletedTurns(db: BetterSQLite3Database, conversationId: string): number {
+export function countCompletedTurns(db: BetterSQLite3Database, conversationId: string, afterSeq?: number): number {
   const conversation = db.select().from(conversations)
     .where(eq(conversations.id, conversationId)).get()
   if (!conversation) throw new Error('E_CONVERSATION_NOT_FOUND')
@@ -28,6 +29,8 @@ export function countCompletedTurns(db: BetterSQLite3Database, conversationId: s
     .where(and(
       eq(user.conversationId, conversationId), eq(user.role, 'user'), eq(user.status, 'completed'),
       eq(messages.role, 'assistant'), eq(messages.status, 'completed'),
+      afterSeq === undefined ? undefined : and(gt(user.seq, afterSeq),
+        eq(user.excludedFromContext, 0), eq(messages.excludedFromContext, 0)),
     )).get()
   return result?.total ?? 0
 }
