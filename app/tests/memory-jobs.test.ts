@@ -1,6 +1,7 @@
 /** 用内存库检查任务防重、固定原话范围和三个独立版本的失效。 */
+import { MockLanguageModelV4 } from 'ai/test'
 import { eq } from 'drizzle-orm'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { ensurePreviewConversation } from '../src/data/conversations'
 import { initializeFirstCharacter } from '../src/data/character-init'
@@ -12,6 +13,7 @@ import { agentRuns, conversations, memories, memoryJobs, memorySources, messages
 import { beginMemoryAttempt, finishMemoryAttempt } from '../src/jobs/memory-budget'
 import { claimMemoryJob, readMemoryJobWork, registerMemoryJob } from '../src/jobs/memory-jobs'
 import { commitMemoryCandidates } from '../src/jobs/commit-candidates'
+import { runMemoryAttempt } from '../src/jobs/run-memory-attempt'
 
 const now = 1_740_000_000_000
 const testModel = { name: 'fixed', provider: 'local-test' }
@@ -108,6 +110,48 @@ describe('整理模型预算', () => {
   })
 })
 afterEach(() => companion.close())
+
+describe('整理单次执行', () => {
+  it.each(['退出', '超时'])('%s后不等待忽略取消的模型，也不保存晚到候选', async (reason) => {
+    vi.useFakeTimers({ now })
+    try {
+      const { db } = companion
+      const source = message('source')
+      const job = registerMemoryJob(db, conversationId, now)!
+      const started = beginMemoryAttempt(db, job.id, testModel, now)
+      if (started.status !== 'ready') throw new Error('未领取任务')
+      let markReceived!: () => void
+      let release!: () => void
+      const received = new Promise<void>((resolve) => { markReceived = resolve })
+      const held = new Promise<void>((resolve) => { release = resolve })
+      const model = new MockLanguageModelV4({ doGenerate: async () => {
+        markReceived()
+        await held
+        return { content: [{ type: 'text', text: JSON.stringify({ candidates: [candidate(source.id)] }) }],
+          finishReason: { unified: 'stop', raw: undefined }, usage: {
+            inputTokens: { total: 10, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 5, text: undefined, reasoning: undefined },
+          }, warnings: [] }
+      } })
+      const stop = new AbortController()
+      const running = runMemoryAttempt(db, started.attempt, model, stop.signal)
+      await received
+      if (reason === '退出') stop.abort()
+      else await vi.advanceTimersByTimeAsync(90_000)
+      await running
+      release()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(model.doGenerateCalls).toHaveLength(1)
+      expect(model.doGenerateCalls[0].abortSignal?.aborted).toBe(true)
+      expect(db.select().from(memories).all()).toHaveLength(0)
+      expect(db.select().from(memoryJobs).get()).toMatchObject({ status: 'pending', availableAt: Date.now() + 30_000 })
+      expect(db.select().from(agentRuns).get()).toMatchObject({ usageEstimated: 1,
+        errorCode: reason === '退出' ? 'E_CANCELLED' : 'E_MEMORY_TIMEOUT' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
 
 /** 写超过触发线的虚构消息，用于检查批次登记。 */
 function message(requestId: string, conversation = conversationId) {
