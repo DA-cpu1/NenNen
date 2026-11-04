@@ -6,7 +6,7 @@
  * 再向事件流注入一条合成的失败事件，让消费层按统一路径收尾。
  */
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, ne } from 'drizzle-orm'
 import type { MessageResponse, MessageStreamEvent } from 'eve/client'
 import { messages, agentRuns } from '../data/tables'
 import { createAssistantReply } from '../data/messages'
@@ -293,10 +293,10 @@ export function recoverInterruptedTurns(db: BetterSQLite3Database, now?: number)
     // 只有角色回复会停在 pending/streaming；用户消息生来就是 completed。
     const replies = tx.update(messages).set({ status: 'failed' })
       .where(inArray(messages.status, ['pending', 'streaming'])).returning().all()
-    // 遗留运行的用量无从得知：token 数留空、估算标志置 1，不冒充精确也不记零。
+    // 遗留聊天的用量无从得知。整理任务由自己的租约恢复，一起保留预占和重试状态。
     const runs = tx.update(agentRuns)
       .set({ status: 'failed', errorCode: 'E_INTERRUPTED', usageEstimated: 1, finishedAt: time })
-      .where(eq(agentRuns.status, 'running')).returning().all()
+      .where(and(eq(agentRuns.status, 'running'), ne(agentRuns.triggerType, 'memory'))).returning().all()
     return { replies: replies.length, runs: runs.length }
   })
 }

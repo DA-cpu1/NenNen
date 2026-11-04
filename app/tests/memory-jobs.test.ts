@@ -2,6 +2,7 @@
 import { MockLanguageModelV4 } from 'ai/test'
 import { eq } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { recoverInterruptedTurns } from '../src/agent/turn-runner'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { ensurePreviewConversation } from '../src/data/conversations'
 import { initializeFirstCharacter } from '../src/data/character-init'
@@ -10,7 +11,7 @@ import { saveUserMessage } from '../src/data/messages'
 import { saveCharacterMemory } from '../src/data/memories'
 import { runMigrations } from '../src/data/migrations'
 import { agentRuns, conversations, memories, memoryJobs, memorySources, messages } from '../src/data/tables'
-import { beginMemoryAttempt, finishMemoryAttempt } from '../src/jobs/memory-budget'
+import { beginMemoryAttempt, finishMemoryAttempt, recoverExpiredMemoryJobs } from '../src/jobs/memory-budget'
 import { claimMemoryJob, readMemoryJobWork, registerMemoryJob } from '../src/jobs/memory-jobs'
 import { commitMemoryCandidates } from '../src/jobs/commit-candidates'
 import { runMemoryAttempt } from '../src/jobs/run-memory-attempt'
@@ -150,6 +151,31 @@ describe('整理单次执行', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('整理租约恢复', () => {
+  it.each([false, true])('到期才恢复，失效来源不重试（来源失效 $0）', (stale) => {
+    const { db } = companion
+    // 用单字节长消息触发整理，让预占和重试都能在同一天的预算内验证。
+    saveUserMessage(db, { requestId: 'source', conversationId, content: 'a'.repeat(6_001), now })
+    const job = registerMemoryJob(db, conversationId, now)!
+    const started = beginMemoryAttempt(db, job.id, testModel, now)
+    if (started.status !== 'ready') throw new Error('未领取任务')
+    if (stale) bumpContextEpoch(db, conversationId)
+    const deadline = now + 90_000
+    expect(recoverInterruptedTurns(db, now + 1).runs).toBe(0)
+    expect(recoverExpiredMemoryJobs(db, deadline - 1)).toBe(deadline)
+    expect(db.select().from(memoryJobs).get()?.status).toBe('running')
+    expect(recoverExpiredMemoryJobs(db, deadline)).toBeUndefined()
+    expect(db.select().from(memoryJobs).get()).toMatchObject({ status: stale ? 'stale' : 'pending', attempts: 1, leaseUntil: null })
+    expect(db.select().from(agentRuns).get()).toMatchObject({ status: 'failed', errorCode: 'E_INTERRUPTED',
+      usageEstimated: 1, outputTokens: started.attempt.prepared.outputLimit, finishedAt: deadline })
+    recoverExpiredMemoryJobs(db, deadline + 10)
+    expect(db.select().from(agentRuns).get()?.finishedAt).toBe(deadline)
+    expect(db.select().from(conversations).get()?.lastProcessedSeq).toBe(0)
+    expect(beginMemoryAttempt(db, job.id, testModel, deadline + 29_999).status).toBe('unavailable')
+    expect(beginMemoryAttempt(db, job.id, testModel, deadline + 30_000).status).toBe(stale ? 'unavailable' : 'ready')
   })
 })
 

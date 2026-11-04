@@ -78,6 +78,12 @@ function endFailedJob(db: BetterSQLite3Database, job: MemoryJob, now: number, er
     leaseUntil: null, updatedAt: now, lastErrorCode: errorCode }).where(eq(memoryJobs.id, job.id)).run()
 }
 
+/** 收起来源或版本失效的旧任务，给仍可整理的新批次留位置。 */
+function markStaleJob(db: BetterSQLite3Database, job: MemoryJob, now: number): void {
+  db.update(memoryJobs).set({ status: 'stale', leaseUntil: null, updatedAt: now, lastErrorCode: 'E_MEMORY_STALE' })
+    .where(eq(memoryJobs.id, job.id)).run()
+}
+
 /**
  * 结算一次整理。候选、书签和用量一起落库，重复通知不会再写候选或再记一次用量。
  * @param db 后台数据库连接
@@ -95,8 +101,7 @@ export function finishMemoryAttempt(db: BetterSQLite3Database, attempt: MemoryAt
     let errorCode: string | undefined
     if (!ownsJob || !readMemoryJobWork(tx, job)) {
       errorCode = 'E_MEMORY_STALE'
-      if (ownsJob) tx.update(memoryJobs).set({ status: 'stale', leaseUntil: null, updatedAt: now, lastErrorCode: errorCode })
-        .where(eq(memoryJobs.id, job.id)).run()
+      if (ownsJob) markStaleJob(tx, job, now)
     } else if (job.leaseUntil !== null && job.leaseUntil <= now) {
       errorCode = 'E_MEMORY_TIMEOUT'
     } else if (!result.ok) {
@@ -110,5 +115,34 @@ export function finishMemoryAttempt(db: BetterSQLite3Database, attempt: MemoryAt
     const cancelled = errorCode === 'E_CANCELLED' || errorCode === 'E_MEMORY_STALE'
     finishAgentRun(tx, { runId: run.id, status: cancelled ? 'cancelled' : errorCode ? 'failed' : 'completed',
       usage: result.usage, errorCode, now })
+  })
+}
+
+/**
+ * 回收已过期的整理任务。租约是任务的占用截止时间，未到点仍视为原尝试占用。
+ * @param db 后台数据库连接
+ * @param now 当前毫秒时间戳
+ * @returns 最早尚未到期的租约时间，没有则返回 undefined
+ */
+export function recoverExpiredMemoryJobs(db: BetterSQLite3Database, now: number): number | undefined {
+  return db.transaction((tx) => {
+    let nextLease: number | undefined
+    const running = tx.select().from(memoryJobs).where(eq(memoryJobs.status, 'running')).all()
+    for (const job of running) {
+      if (job.leaseUntil !== null && job.leaseUntil > now) {
+        nextLease = Math.min(nextLease ?? job.leaseUntil, job.leaseUntil)
+        continue
+      }
+      const valid = readMemoryJobWork(tx, job)
+      if (valid) endFailedJob(tx, job, now, 'E_INTERRUPTED')
+      else markStaleJob(tx, job, now)
+      // 上次可能已经发出请求。用量未收到时保留那次预占，不当成免费。
+      const run = tx.select().from(agentRuns).where(eq(agentRuns.id, runIdFor(job))).get()
+      if (run?.status === 'running') {
+        tx.update(agentRuns).set({ status: 'failed', errorCode: 'E_INTERRUPTED', usageEstimated: 1, finishedAt: now })
+          .where(eq(agentRuns.id, run.id)).run()
+      }
+    }
+    return nextLease
   })
 }
