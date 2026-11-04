@@ -21,6 +21,14 @@ import type { PreviewPersonaDraft } from '../shared/chat-turn'
 /** 04 §2：一轮的总用时上限；模型不能自己延长，到点由程序收场。 */
 export const DEFAULT_TURN_TIMEOUT_MS = 90_000
 
+/** 本轮开始发送后才可执行工具，结束、取消或超时后撤掉登记。 */
+export interface ActiveToolSession {
+  sessionId: string
+  replyId: string
+  contextEpoch: number
+  deadlineAt: number
+}
+
 /** 跑一次正式回合所需的资料；人设版本由准备阶段从库中锁定，调用方不能自选。 */
 export interface RunFormalTurnInput extends BuildTurnContextInput {
   /** 已核对过的模型窗口与输出预留（context-budget 的口径）。 */
@@ -30,6 +38,8 @@ export interface RunFormalTurnInput extends BuildTurnContextInput {
   provider: string
   /** 从开始准备到回复结束的总时限；默认 90 秒。 */
   turnTimeoutMs?: number
+  /** 服务用它登记工具的允许范围；返回清理函数，在回合收尾时撤下。 */
+  registerToolSession?: (session: ActiveToolSession) => () => void
 }
 
 /** 跑一次试聊回合所需的资料；草稿人设随请求携带，不经 character_versions。 */
@@ -76,6 +86,7 @@ async function* runTurn(
   })
   const phaseTimer = setTimeout(() => phaseTimeout.abort(), timeoutMs)
   let prepared: PreparedEveTurn | undefined
+  let unregisterTools: (() => void) | undefined
 
   try {
     // 准备（读库+预算+建空会话+登记映射）失败时直接上抛：库里没有本轮痕迹。
@@ -110,6 +121,10 @@ async function* runTurn(
 
     let response: MessageResponse
     try {
+      if ('registerToolSession' in input) unregisterTools = input.registerToolSession?.({
+        sessionId: prepared.session.state.sessionId, replyId: reply.id,
+        contextEpoch: prepared.context.contextEpoch, deadlineAt,
+      })
       const sending = sendPreparedEveTurn(db, prepared, phaseSignal).then((accepted) => {
         // 超时后才收到受理句柄时也要回收，不能留下无人继续读取的模型回合。
         if (phaseSignal.aborted) void accepted.cancel().catch(() => { /* 本地已经收尾。 */ })
@@ -132,6 +147,7 @@ async function* runTurn(
       estimatedInputTokens: prepared.input.inputTokens,
     }, signal)
   } finally {
+    unregisterTools?.()
     clearTimeout(phaseTimer)
     phaseSignal.removeEventListener('abort', onInterrupted!)
     if (prepared) await releasePreparedEveTurn(db, prepared)

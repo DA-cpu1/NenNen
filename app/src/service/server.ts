@@ -23,6 +23,7 @@ import {
   type SaveCharacterVersionBody,
 } from '../shared/character-schema'
 import { personaFromSections, personaSectionsAllEmpty } from '../shared/persona-format'
+import { memoryToolPath, memoryToolRequestSchema, type MemoryToolRequest, type MemoryToolResult } from '../shared/memory-tool'
 import { chatHistoryQuerySchema, type ChatHistoryPage, type ChatHistoryQuery } from '../shared/chat-history'
 import {
   chatTurnCancelSchema, chatTurnRequestSchema, previewTurnRequestSchema,
@@ -77,6 +78,8 @@ export interface BackendOptions {
   }
   /** 请求取消指定会话的活动回合；没有活动回合返回 false。 */
   cancelChatTurn?: (conversationId: string) => boolean
+  /** eve 专用入口使用当前子进程令牌，主进程的令牌不能调用。 */
+  memoryTools?: { getToken: () => string | undefined; execute: (request: MemoryToolRequest) => MemoryToolResult }
   /** 数据库自测读写：由后台入口提供（打开的真库）；测试注入假函数。
    *  为什么做成注入函数而不是直接 import 数据库代码：总机这层只管
    *  「接电话、对暗号、按规则回话」，库文件从哪来、怎么开是入口的事；
@@ -323,6 +326,35 @@ async function handleRequest(
   options: BackendOptions,
   shutdownSignal: AbortSignal,
 ): Promise<void> {
+  if (req.url === memoryToolPath) {
+    const tools = options.memoryTools
+    const toolToken = tools?.getToken()
+    if (!toolToken || !isAuthorized(req, toolToken)) {
+      sendJson(res, 401, { ok: false, code: 'UNAUTHORIZED' })
+      return
+    }
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    const body = await readJsonBody(req).catch(() => null)
+    // 读请求体要等待。若这期间换了 eve 进程，旧令牌已经失效。
+    if (tools?.getToken() !== toolToken) {
+      sendJson(res, 401, { ok: false, code: 'UNAUTHORIZED' })
+      return
+    }
+    const parsed = memoryToolRequestSchema.safeParse(body)
+    if (!parsed.success) {
+      sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' })
+      return
+    }
+    if (shutdownSignal.aborted) {
+      sendJson(res, 503, { ok: false, code: 'BACKEND_STOPPING' })
+      return
+    }
+    sendJson(res, 200, tools.execute(parsed.data))
+    return
+  }
   // 每个请求都要带暗号，因为 HTTP 是"无记忆"的：处理完这通电话就忘了
   // 你是谁，没有"开头自我介绍一次、后面就认识你"。暗号装在请求头里
   // （请求头 = "名字: 值"的清单，HTTP 只管搬运不问含义；

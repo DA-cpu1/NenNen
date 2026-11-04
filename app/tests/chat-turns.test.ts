@@ -7,7 +7,7 @@ import { desc, eq } from 'drizzle-orm'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { runMigrations } from '../src/data/migrations'
 import { initializeFirstCharacter } from '../src/data/character-init'
-import { agentRuns, characters, characterVersions, companionSettings, conversations, messages } from '../src/data/tables'
+import { agentRuns, characters, characterVersions, companionSettings, conversations, memories, messages } from '../src/data/tables'
 import { createChatTurnService } from '../src/service/chat-turns'
 import type { EveHandle } from '../src/agent/eve-process'
 import type { SseTurnEvent } from '../src/shared/chat-turn'
@@ -99,6 +99,47 @@ function addSecondCharacter(): string {
 }
 
 describe('聊天回合服务（T06⑪c1）', () => {
+  it('记忆工具绑定正式活动回合，只查所属角色与共享资料，并受四次额度约束', async () => {
+    const secondId = addSecondCharacter()
+    const { db } = companion
+    const firstCharacter = db.select().from(conversations).where(eq(conversations.id, conversationId)).get()!.characterId
+    const secondCharacter = db.select().from(conversations).where(eq(conversations.id, secondId)).get()!.characterId
+    db.insert(memories).values([
+      { id: 'private', scope: 'character', characterId: firstCharacter, content: '喜欢水彩' },
+      { id: 'shared', scope: 'global', characterId: null, content: '水彩在客厅' },
+      { id: 'other', scope: 'character', characterId: secondCharacter, content: '水彩在卧室' },
+    ].map((row) => ({ ...row, kind: 'fact', origin: 'user_edit', validFrom: 1, createdAt: 1, updatedAt: 1 }))).run()
+    fake.send.mockResolvedValue(fakeResponse([appended('固定半截')], true).response)
+    const turns = service()
+    const request = { sessionId: 'eve-1', tool: 'search_memories', input: { query: '水彩' } } as const
+    const { events } = turns.startTurn({ conversationId, requestId: 'tool-r1', content: '固定问题' })
+    await events.next()
+    expect(turns.executeMemoryTool(request)).toMatchObject({ ok: false, code: 'NOT_FOUND' })
+    await events.next()
+    expect(turns.executeMemoryTool({ ...request, sessionId: 'wrong' })).toMatchObject({ ok: false, code: 'NOT_FOUND' })
+    const result = turns.executeMemoryTool(request)
+    if (!result.ok) throw new Error(result.code)
+    expect(result.memories.map((row) => row.id).sort()).toEqual(['private', 'shared'])
+    for (let index = 0; index < 3; index += 1) expect(turns.executeMemoryTool(request).ok).toBe(true)
+    expect(turns.executeMemoryTool(request)).toMatchObject({ ok: false, code: 'BUDGET_EXCEEDED' })
+    turns.cancelTurn(conversationId)
+    expect(turns.executeMemoryTool(request)).toMatchObject({ ok: false, code: 'CANCELLED' })
+    await collect(events)
+    expect(turns.executeMemoryTool(request)).toMatchObject({ ok: false, code: 'NOT_FOUND' })
+  })
+
+  it('试聊即使有 eve 会话号也不能读取正式记忆', async () => {
+    fake.send.mockResolvedValue(fakeResponse([appended('试聊固定半截')], true).response)
+    const turns = service()
+    const preview = turns.startPreviewTurn({ requestId: 'tool-preview', content: '查记忆',
+      draft: { personaFullText: '草稿', initialRelationship: '恋人' } })
+    await preview.events.next()
+    await preview.events.next()
+    expect(turns.executeMemoryTool({ sessionId: 'eve-1', tool: 'search_memories', input: { query: '水彩' } }))
+      .toMatchObject({ ok: false, code: 'NOT_FOUND' })
+    turns.cancelTurn(preview.conversationId)
+    await collect(preview.events)
+  })
   it('退出等待已开始回合取消落库，停止后拒绝正式和试聊新请求，重复stop复用', async () => {
     const { response } = fakeResponse([appended('退出前的半截')], true)
     fake.send.mockResolvedValue(response)

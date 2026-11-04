@@ -10,11 +10,14 @@ import { conversations, messages } from '../data/tables'
 import { saveUserMessage } from '../data/messages'
 import { getFirstCharacter } from '../data/character-init'
 import { ensurePreviewConversation } from '../data/conversations'
-import { runFormalTurn, runPreviewTurn } from '../agent/turn-runner'
+import { listCurrentMemories } from '../data/memories'
+import { runFormalTurn, runPreviewTurn, type ActiveToolSession } from '../agent/turn-runner'
 import type { ModelInputLimits } from '../agent/context-budget'
 import type { EveHandle } from '../agent/eve-process'
 import { finalizeTurnWrite, type PendingTurnWrite, type TurnEvent, type TurnOutcome } from '../agent/eve-events'
 import { COMMON_FACT_RULES } from '../shared/character-sample'
+import { searchMemories } from '../memory/search'
+import type { MemoryToolRequest, MemoryToolResult } from '../shared/memory-tool'
 import {
   resolvePreviewDraft, type ChatTurnRequest, type PreviewTurnRequest, type SseTurnEvent,
 } from '../shared/chat-turn'
@@ -60,6 +63,8 @@ export interface ChatTurnService {
   cancelTurn: (conversationId: string) => boolean
   /** 当前活动回合数；检查与验收用。 */
   activeCount: () => number
+  /** 只为仍有效的正式回合执行内部记忆工具；角色从会话查出。 */
+  executeMemoryTool: (request: MemoryToolRequest) => MemoryToolResult
   /** 退出前停止受理，取消并等已有回合保存终态；重复调用共用同一次收尾。 */
   stop: () => Promise<void>
 }
@@ -77,6 +82,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     events?: AsyncGenerator<SseTurnEvent>
     completed: Promise<void>
     finish: () => void
+    toolSession?: ActiveToolSession & { executions: number }
   }
   // 会话编号用来定位停止对象，角色编号用来挡下正式/试聊之间的并发。
   // 两份登记一起建立、一起清理；挡下请求时还没有保存新的用户消息。
@@ -119,7 +125,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     conversationId: string,
     characterId: string,
     userMessageId: string,
-    runStart: (signal: AbortSignal) => AsyncGenerator<TurnEvent, TurnOutcome>,
+    runStart: (turn: ActiveTurn) => AsyncGenerator<TurnEvent, TurnOutcome>,
   ): AsyncGenerator<SseTurnEvent> {
     let finish!: () => void
     const turn: ActiveTurn = {
@@ -157,12 +163,12 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     characterId: string,
     userMessageId: string,
     turn: ActiveTurn,
-    runStart: (signal: AbortSignal) => AsyncGenerator<TurnEvent, TurnOutcome>,
+    runStart: (turn: ActiveTurn) => AsyncGenerator<TurnEvent, TurnOutcome>,
   ): AsyncGenerator<SseTurnEvent> {
     return (async function* generate(): AsyncGenerator<SseTurnEvent> {
       try {
         yield { type: 'saved', userMessageId, conversationId }
-        const runner = runStart(turn.controller.signal)
+        const runner = runStart(turn)
         let terminalEvent: TurnEvent | undefined
         for (;;) {
           const step = await runner.next()
@@ -225,6 +231,35 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     activeCount: () => active.size,
     stop,
 
+    executeMemoryTool: (request) => {
+      const notFound = { ok: false, code: 'NOT_FOUND', message: '找不到可用的正式聊天回合。', retryable: false } as const
+      const entry = [...active.entries()].find(([, turn]) => turn.toolSession?.sessionId === request.sessionId)
+      if (!entry) return notFound
+      const [conversationId, turn] = entry
+      const session = turn.toolSession!
+      if (closing || turn.controller.signal.aborted || Date.now() >= session.deadlineAt) {
+        return { ok: false, code: 'CANCELLED', message: '这轮聊天已停止。', retryable: false }
+      }
+      const db = deps.getDb()
+      const unavailable = { ok: false, code: 'STORAGE_UNAVAILABLE', message: '暂时无法读取记忆。', retryable: true } as const
+      if (!db) return unavailable
+      try {
+        const conversation = db.select().from(conversations).where(eq(conversations.id, conversationId)).get()
+        const reply = db.select({ status: messages.status }).from(messages).where(eq(messages.id, session.replyId)).get()
+        if (conversation?.mode !== 'normal' || conversation.runtimeSessionId !== request.sessionId ||
+          conversation.contextEpoch !== session.contextEpoch || (reply?.status !== 'pending' && reply?.status !== 'streaming')) {
+          return notFound
+        }
+        if (session.executions >= 4) {
+          return { ok: false, code: 'BUDGET_EXCEEDED', message: '这轮聊天已达到工具使用上限。', retryable: false }
+        }
+        // 同一后台里同步计数再查库，两条同时到达的请求也要各占一个位置。
+        session.executions += 1
+        const current = listCurrentMemories(db, conversation.characterId, Date.now())
+        return { ok: true, memories: searchMemories(current, request.input.query, request.input.limit) }
+      } catch { return unavailable }
+    },
+
     cancelTurn: (conversationId) => {
       const turn = active.get(conversationId)
       if (!turn) return false
@@ -237,11 +272,15 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
       return {
         userMessageId: savedMessageId,
         events: registerTurn(request.conversationId, characterId, savedMessageId,
-          (signal) => pendingWrite ? replayWrite(db, pendingWrite) : runFormalTurn(db, eve!, {
+          (turn) => pendingWrite ? replayWrite(db, pendingWrite) : runFormalTurn(db, eve!, {
             conversationId: request.conversationId, userMessageId: savedMessageId,
             commonRules: COMMON_RULES_TEXT, limits: deps.limits,
             model: MODEL_NAME, provider: PROVIDER_NAME,
-          }, signal)),
+            registerToolSession: (session) => {
+              turn.toolSession = { ...session, executions: 0 }
+              return () => { delete turn.toolSession }
+            },
+          }, turn.controller.signal)),
       }
     },
 
@@ -266,11 +305,11 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
         userMessageId: savedMessageId,
         conversationId: conversation.id,
         events: registerTurn(conversation.id, characterId, savedMessageId,
-          (signal) => pendingWrite ? replayWrite(db, pendingWrite) : runPreviewTurn(db, eve!, {
+          (turn) => pendingWrite ? replayWrite(db, pendingWrite) : runPreviewTurn(db, eve!, {
             conversationId: conversation.id, userMessageId: savedMessageId,
             commonRules: COMMON_RULES_TEXT, draft, limits: deps.limits,
             model: MODEL_NAME, provider: PROVIDER_NAME,
-          }, signal)),
+          }, turn.controller.signal)),
       }
     },
   }

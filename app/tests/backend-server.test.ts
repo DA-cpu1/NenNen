@@ -5,6 +5,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startBackendServer, type BackendServer } from '../src/service/server'
+import { memoryToolPath } from '../src/shared/memory-tool'
 
 // 测试专用固定令牌，与生产生成的随机令牌无关
 const TOKEN = 'test-fixed-token'
@@ -62,6 +63,27 @@ describe('后台服务监听', () => {
 })
 
 describe('后台服务认证', () => {
+  it('记忆入口只接受当前 eve 令牌，并拒绝模型自选角色', async () => {
+    let toolToken = 'test-eve-token'
+    let calls = 0
+    const fake = await startBackendServer(TOKEN, { memoryTools: {
+      getToken: () => toolToken,
+      execute: () => { calls += 1; return { ok: true, memories: [] } },
+    } })
+    extraServers.push(fake)
+    const post = (token: string, input: object) => fetch(`http://127.0.0.1:${fake.port}${memoryToolPath}`, {
+      method: 'POST', headers: { 'x-session-token': token, 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'fixed-session', tool: 'search_memories', input }),
+    })
+    expect((await post(TOKEN, { query: '水彩' })).status).toBe(401)
+    expect((await post(toolToken, { query: '水彩', characterId: 'other' })).status).toBe(400)
+    expect(await (await post(toolToken, { query: '水彩' })).json()).toEqual({ ok: true, memories: [] })
+    const old = toolToken
+    toolToken = 'replacement-eve-token'
+    expect((await post(old, { query: '水彩' })).status).toBe(401)
+    expect(calls).toBe(1)
+  })
+
   it('携带正确令牌访问 /health 返回 200 与 ok:true', async () => {
     const res = await fetch(`http://127.0.0.1:${server!.port}/health`, {
       headers: { 'x-session-token': TOKEN },

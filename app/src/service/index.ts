@@ -80,6 +80,7 @@ function main(): void {
   options.startChatTurn = chatTurns.startTurn
   options.startPreviewTurn = chatTurns.startPreviewTurn
   options.cancelChatTurn = chatTurns.cancelTurn
+  options.memoryTools = { getToken: () => eve?.token, execute: chatTurns.executeMemoryTool }
 
   /** 读共享记忆版本号。实现统一收在 data/epochs.ts（app_state 缺初始行
    *  时它抛错，绝不默默当 0 把问题盖住）；这里只保留「库还没打开」的守卫 */
