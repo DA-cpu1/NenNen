@@ -7,7 +7,7 @@ import { desc, eq } from 'drizzle-orm'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { runMigrations } from '../src/data/migrations'
 import { initializeFirstCharacter } from '../src/data/character-init'
-import { agentRuns, characters, characterVersions, companionSettings, conversations, memories, messages } from '../src/data/tables'
+import { agentRuns, characters, characterVersions, companionSettings, conversations, memories, messages, toolOperations } from '../src/data/tables'
 import { createChatTurnService } from '../src/service/chat-turns'
 import type { EveHandle } from '../src/agent/eve-process'
 import type { SseTurnEvent } from '../src/shared/chat-turn'
@@ -118,7 +118,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
     await events.next()
     expect(turns.executeMemoryTool({ ...request, sessionId: 'wrong' })).toMatchObject({ ok: false, code: 'NOT_FOUND' })
     const result = turns.executeMemoryTool(request)
-    if (!result.ok) throw new Error(result.code)
+    if (!result.ok || !('memories' in result)) throw new Error('未收到检索结果')
     expect(result.memories.map((row) => row.id).sort()).toEqual(['private', 'shared'])
     for (let index = 0; index < 3; index += 1) expect(turns.executeMemoryTool(request).ok).toBe(true)
     expect(turns.executeMemoryTool(request)).toMatchObject({ ok: false, code: 'BUDGET_EXCEEDED' })
@@ -137,8 +137,44 @@ describe('聊天回合服务（T06⑪c1）', () => {
     await preview.events.next()
     expect(turns.executeMemoryTool({ sessionId: 'eve-1', tool: 'search_memories', input: { query: '水彩' } }))
       .toMatchObject({ ok: false, code: 'NOT_FOUND' })
+    expect(turns.executeMemoryTool({ sessionId: 'eve-1', tool: 'remember_explicit', input: {
+      sourceMessageId: preview.userMessageId, content: '用户希望被称为阿达', kind: 'preference',
+    } })).toMatchObject({ ok: false, code: 'NOT_FOUND' })
+    expect(companion.db.select().from(memories).all()).toEqual([])
     turns.cancelTurn(preview.conversationId)
     await collect(preview.events)
+  })
+
+  it('只保存当前用户原话，回执失败时回滚，之后重试沿用已存结果', async () => {
+    const { db, sqlite } = companion
+    fake.send.mockResolvedValue(fakeResponse([appended('固定半截')], true).response)
+    const turns = service()
+    const formal = turns.startTurn({ conversationId, requestId: 'remember-r1', content: '以后叫我阿达。' })
+    await formal.events.next()
+    await formal.events.next()
+    const input = { sourceMessageId: formal.userMessageId, kind: 'preference', memoryKey: 'preferred_name',
+      content: '用户希望被称为阿达' } as const
+    const request = { sessionId: 'eve-1', tool: 'remember_explicit', input } as const
+    expect(turns.executeMemoryTool({ ...request, input: { ...input, sourceMessageId: 'not-this-turn' } }))
+      .toMatchObject({ ok: false, code: 'SOURCE_NOT_ALLOWED' })
+
+    // 在记忆写入之后让回执落库失败，用户不能收到假成功，数据库也不留半条操作。
+    sqlite.exec("CREATE TRIGGER reject_receipt BEFORE UPDATE ON tool_operations BEGIN SELECT RAISE(ABORT, '拒绝回执'); END")
+    expect(turns.executeMemoryTool(request)).toMatchObject({ ok: false, code: 'STORAGE_UNAVAILABLE' })
+    expect(db.select().from(memories).all()).toEqual([])
+    expect(db.select().from(toolOperations).all()).toEqual([])
+    sqlite.exec('DROP TRIGGER reject_receipt')
+
+    const result = turns.executeMemoryTool(request)
+    expect(result).toMatchObject({ ok: true, status: 'saved', revision: 1 })
+    expect(turns.executeMemoryTool(request)).toEqual({ ...result, status: 'already_saved' })
+    expect(db.select().from(memories).all()).toHaveLength(1)
+    const [receipt] = db.select().from(toolOperations).all()
+    expect(receipt.status).toBe('committed')
+    expect(receipt.resultJson).not.toContain('阿达')
+    turns.cancelTurn(conversationId)
+    await collect(formal.events)
+    expect(db.select().from(memories).all()).toHaveLength(1)
   })
   it('退出等待已开始回合取消落库，停止后拒绝正式和试聊新请求，重复stop复用', async () => {
     const { response } = fakeResponse([appended('退出前的半截')], true)

@@ -2,14 +2,12 @@
 import { randomUUID } from 'node:crypto'
 import { and, desc, eq, gt, inArray, isNull, lte, or } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
+import type { memoryKinds } from '../shared/memory-tool'
 import { bumpCharacterMemoryEpoch } from './epochs'
 import { conversations, memories, memorySources, messages } from './tables'
 
 /** 从数据库读出的记忆，含检索和检查旧版本所需的属性。 */
 export type Memory = typeof memories.$inferSelect
-
-/** 记忆的类别，供工具和整理任务共用。 */
-export const memoryKinds = ['fact', 'preference', 'episode', 'temporary', 'interaction_request'] as const
 
 /** 私有记忆的写入参数。调用方从会话和原话确定归属与来源。 */
 export interface SaveCharacterMemoryInput {

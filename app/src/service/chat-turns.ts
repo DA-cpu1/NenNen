@@ -18,6 +18,7 @@ import { finalizeTurnWrite, type PendingTurnWrite, type TurnEvent, type TurnOutc
 import { COMMON_FACT_RULES } from '../shared/character-sample'
 import { searchMemories } from '../memory/search'
 import type { MemoryToolRequest, MemoryToolResult } from '../shared/memory-tool'
+import { rememberExplicit } from './remember-explicit'
 import {
   resolvePreviewDraft, type ChatTurnRequest, type PreviewTurnRequest, type SseTurnEvent,
 } from '../shared/chat-turn'
@@ -241,13 +242,15 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
         return { ok: false, code: 'CANCELLED', message: '这轮聊天已停止。', retryable: false }
       }
       const db = deps.getDb()
-      const unavailable = { ok: false, code: 'STORAGE_UNAVAILABLE', message: '暂时无法读取记忆。', retryable: true } as const
+      const unavailable = { ok: false, code: 'STORAGE_UNAVAILABLE', message: '暂时无法处理记忆。', retryable: true } as const
       if (!db) return unavailable
       try {
         const conversation = db.select().from(conversations).where(eq(conversations.id, conversationId)).get()
-        const reply = db.select({ status: messages.status }).from(messages).where(eq(messages.id, session.replyId)).get()
+        const reply = db.select({ status: messages.status, replyToId: messages.replyToId }).from(messages)
+          .where(and(eq(messages.id, session.replyId), eq(messages.conversationId, conversationId))).get()
         if (conversation?.mode !== 'normal' || conversation.runtimeSessionId !== request.sessionId ||
-          conversation.contextEpoch !== session.contextEpoch || (reply?.status !== 'pending' && reply?.status !== 'streaming')) {
+          conversation.contextEpoch !== session.contextEpoch || !reply?.replyToId ||
+          (reply.status !== 'pending' && reply.status !== 'streaming')) {
           return notFound
         }
         if (session.executions >= 4) {
@@ -255,6 +258,9 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
         }
         // 同一后台里同步计数再查库，两条同时到达的请求也要各占一个位置。
         session.executions += 1
+        if (request.tool === 'remember_explicit') {
+          return rememberExplicit(db, { conversationId, userMessageId: reply.replyToId }, request.input, Date.now())
+        }
         const current = listCurrentMemories(db, conversation.characterId, Date.now())
         return { ok: true, memories: searchMemories(current, request.input.query, request.input.limit) }
       } catch { return unavailable }
