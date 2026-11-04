@@ -11,6 +11,13 @@ import { MODEL_CONTEXT_WINDOW_TOKENS, MODEL_OUTPUT_RESERVE_TOKENS } from '../../
 type ModelCallOptions = Parameters<NonNullable<LanguageModelMiddleware['transformParams']>>[0]['params']
 type ModelPrompt = ModelCallOptions['prompt']
 
+/** 试聊与固定探针不把正式工具暴露给模型；服务端还会独立核对每次调用。 */
+function removeMemoryTools(params: ModelCallOptions): ModelCallOptions {
+  if (!params.tools?.some((tool) => tool.name === 'search_memories')) return params
+  const tools = params.tools.filter((tool) => tool.name !== 'search_memories')
+  return { ...params, tools: tools.length ? tools : undefined, toolChoice: tools.length ? params.toolChoice : undefined }
+}
+
 /** 只接受纯文字用户消息；图片、文件等尚不在本版输入约定中。 */
 function userText(message: ModelPrompt[number]): string | null {
   if (message.role !== 'user' || message.content.some((part) => part.type !== 'text')) return null
@@ -40,9 +47,10 @@ export function createCompanionContextMiddleware(): LanguageModelMiddleware {
             .map((message) => message.role === 'system'
               ? { role: 'system', content: message.content }
               : { role: message.role, content: [{ type: 'text', text: message.content }] })
-          const transformed = {
+          const prepared = {
             ...params, prompt: [...prompt, ...continuation], maxOutputTokens: envelope.maxOutputTokens,
           }
+          const transformed = envelope.allowMemoryTools ? prepared : removeMemoryTools(prepared)
           // 未设上限时连字段也删除，防止继承框架旧的1,000额度；供应商自行决定输出。
           if (envelope.maxOutputTokens === undefined) delete transformed.maxOutputTokens
           try {
@@ -52,7 +60,7 @@ export function createCompanionContextMiddleware(): LanguageModelMiddleware {
           } catch (error) {
             const group = envelope.optionalPromptGroups[groupIndex]
             if (!(error instanceof Error) || error.message !== 'E_CONTEXT_BUDGET_EXCEEDED' || !group) throw error
-            // 先示例、后旧历史；规则、人设、当前消息和本轮工具续接内容永不在移除清单里。
+            // 先示例、再旧历史、最后记忆；规则、人设、当前消息和本轮工具续接不能移除。
             for (const position of group) removed.add(position)
           }
         }
@@ -62,7 +70,7 @@ export function createCompanionContextMiddleware(): LanguageModelMiddleware {
       if (users.length !== 1 || userText(users[0]) !== '请只回复两个字：收到') {
         throw new Error('E_EVE_CONTEXT_REQUIRED')
       }
-      const transformed = { ...params }
+      const transformed = removeMemoryTools({ ...params })
       delete transformed.maxOutputTokens
       checkModelInputBudget(transformed, {
         modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS,

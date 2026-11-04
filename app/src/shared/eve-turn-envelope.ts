@@ -14,6 +14,8 @@ const envelopeSchema = z.strictObject({
   modelWindowTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   maxOutputTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
   outputReserveTokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  /** 后台只在正式回合登记工具访问后打开这项；旧信封视为未授权。 */
+  allowMemoryTools: z.boolean().optional(),
   optionalPromptGroups: z.array(z.array(z.number().int().min(2)).min(1)).default([]),
 }).refine((value) => {
   const indexes = value.optionalPromptGroups.flat()

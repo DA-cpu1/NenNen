@@ -125,7 +125,7 @@ async function* runTurn(
         sessionId: prepared.session.state.sessionId, replyId: reply.id,
         contextEpoch: prepared.context.contextEpoch, deadlineAt,
       })
-      const sending = sendPreparedEveTurn(db, prepared, phaseSignal).then((accepted) => {
+      const sending = sendPreparedEveTurn(db, prepared, phaseSignal, unregisterTools !== undefined).then((accepted) => {
         // 超时后才收到受理句柄时也要回收，不能留下无人继续读取的模型回合。
         if (phaseSignal.aborted) void accepted.cancel().catch(() => { /* 本地已经收尾。 */ })
         return accepted

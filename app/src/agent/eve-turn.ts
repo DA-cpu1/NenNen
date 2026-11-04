@@ -111,12 +111,13 @@ export async function preparePreviewEveTurn(
  * @param db 后台数据库连接，用于发送前复查会话映射与内容版本
  * @param prepared 本轮固定的人设、预算输入和已登记框架会话
  * @param signal 取消信号；发送结果不明时不自动重复请求
+ * @param allowMemoryTools 是否已有本轮的正式工具访问登记
  * @returns 官方 MessageResponse，由后续事件适配层消费
  * @throws E_CANCELLED 已取消；E_CONTEXT_CHANGED 映射/内容失效；
  * E_STORAGE_UNAVAILABLE 无法读取；E_EVE_TURN_ALREADY_SENT 此准备结果已发送；E_EVE_SEND_FAILED 请求失败
  */
 export async function sendPreparedEveTurn(
-  db: BetterSQLite3Database, prepared: PreparedEveTurn, signal: AbortSignal,
+  db: BetterSQLite3Database, prepared: PreparedEveTurn, signal: AbortSignal, allowMemoryTools = false,
 ): Promise<MessageResponse> {
   if (signal.aborted) throw new Error('E_CANCELLED')
   if (sentTurns.has(prepared)) throw new Error('E_EVE_TURN_ALREADY_SENT')
@@ -132,6 +133,7 @@ export async function sendPreparedEveTurn(
     modelWindowTokens: prepared.input.inputLimit + prepared.input.outputReserveTokens,
     outputReserveTokens: prepared.input.outputReserveTokens,
     maxOutputTokens: prepared.input.maxOutputTokens,
+    allowMemoryTools: prepared.context.conversationMode === 'normal' && allowMemoryTools ? true : undefined,
   })
   sentTurns.add(prepared)
   try {

@@ -117,10 +117,11 @@ function main(): void {
       modelApiKey: key,
       // 只传公开测试地址；自动检查让请求落到本机假供应商，避免误花钱
       modelBaseUrl: process.env.COMPANION_MODEL_BASE_URL || undefined,
+      memoryToolPort: server?.port,
     })
   }
 
-  /** 开机：先开门（数据库），有密钥再起 eve，最后起业务总机、报到端口。
+  /** 开机：先开数据库和本机业务端口，有密钥再起 eve，最后报到端口。
    *  数据库最先开：它对不上账（迁移失败）时按 05 §7 宁可整个启动失败，
    *  也不能带着结构不确定的库继续跑、把坏数据写进去 */
   async function start(token: string, modelApiKey: string): Promise<void> {
@@ -218,18 +219,17 @@ function main(): void {
         return readChatHistory(database.db, query)
       }
     }
+    server = await startBackendServer(token, options)
+    if (closing) {
+      await server.stop()
+      return
+    }
     if (modelApiKey) await startEveWith(modelApiKey)
     if (closing) {
       await eve?.stop()
       return
     }
     options.modelApiKey = modelApiKey || undefined
-    server = await startBackendServer(token, options)
-    if (closing) {
-      await server.stop()
-      await eve?.stop()
-      return
-    }
     process.stdout.write(`READY ${server.port}\n`)
   }
 
@@ -265,6 +265,7 @@ function main(): void {
       process.exit(1)
     }
     void start(token, modelApiKey).catch(async () => {
+      await server?.stop()
       await eve?.stop()
       // 启动失败同样不能留着数据库连接占用文件
       database?.close()

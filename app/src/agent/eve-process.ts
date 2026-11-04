@@ -26,6 +26,8 @@ export interface EveStartOptions {
   modelApiKey?: string
   /** 自动检查可用本机假接口，真实运行省略此项。 */
   modelBaseUrl?: string
+  /** 本机业务服务的公开端口；工具令牌仍经 stdin。 */
+  memoryToolPort?: number
 }
 
 /**
@@ -111,6 +113,7 @@ export async function startEve(options: EveStartOptions): Promise<EveHandle> {
       EVE_LOG_LEVEL: 'error',
       // 不继承外部测试地址，只有显式传入时才切换供应商。
       COMPANION_MODEL_BASE_URL: options.modelBaseUrl ?? '',
+      COMPANION_MEMORY_TOOL_PORT: options.memoryToolPort?.toString() ?? '',
     },
     // stdout/stderr 不落盘也不转发；框架错误对象可能含完整提示词。
     stdio: ['pipe', 'ignore', 'ignore'],
