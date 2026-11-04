@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { listCurrentMemories, saveCharacterMemory, type SaveCharacterMemoryInput } from '../src/data/memories'
 import { listManagedMemories, mutateMemory } from '../src/data/memory-management'
+import { readGlobalMemoryEpoch } from '../src/data/epochs'
 import { saveUserMessage } from '../src/data/messages'
 import { runMigrations } from '../src/data/migrations'
 import { characters, contextExclusions, conversations, memories, memorySources, messages, toolOperations } from '../src/data/tables'
@@ -149,9 +150,26 @@ describe('纠正与忘记', () => {
     expect(result.receipt).toMatchObject({ affectedMemories: 3, removedSources: 0 })
     expect(listManagedMemories(db, 'a', now + 2)).toEqual([])
     expect(listCurrentMemories(db, 'b', now + 2)).toHaveLength(1)
+    expect(db.select().from(conversations).where(eq(conversations.id, 'other')).get()?.contextEpoch).toBe(0)
     expect(db.select().from(contextExclusions).all().map((row) => row.messageId).sort()).toEqual(['new-name', 'original', 'reply'])
     expect(db.select().from(messages).where(eq(messages.id, 'original')).get()).toMatchObject({ excludedFromContext: 1, content: '虚构测试原话' })
     expect(db.select().from(toolOperations).all().every((row) => !row.resultJson?.includes('小陈'))).toBe(true)
+  })
+
+  it('忘记共享资料作废可能使用它的正式上下文，试聊和各角色私有资料保持独立', () => {
+    const { db } = companion
+    saveCharacterMemory(db, initial)
+    saveCharacterMemory(db, { ...initial, conversationId: 'other', sourceMessageIds: ['other-source'] })
+    db.insert(memories).values({ id: 'shared', scope: 'global', kind: 'fact', content: '固定共享内容',
+      origin: 'user_edit', validFrom: now, createdAt: now, updatedAt: now }).run()
+    const change = { action: 'forget', memoryId: 'shared', expectedRevision: 1, deleteSources: false } as const
+    expect(() => mutateMemory(db, { conversationId: 'normal', requestMessageId: 'new-name' }, change, now + 1)).toThrow('NOT_FOUND')
+    const result = mutateMemory(db, { conversationId: 'normal', requestId: 'shared-edit' }, change, now + 1)
+    expect(result.conversationIds.sort()).toEqual(['normal', 'other'])
+    expect(readGlobalMemoryEpoch(db)).toBe(1)
+    expect(db.select().from(conversations).where(eq(conversations.id, 'preview')).get()?.contextEpoch).toBe(0)
+    expect(listCurrentMemories(db, 'a', now + 1)).toMatchObject([{ scope: 'character', characterId: 'a' }])
+    expect(listCurrentMemories(db, 'b', now + 1)).toMatchObject([{ scope: 'character', characterId: 'b' }])
   })
 
   it('试聊、越权角色、伪造来源和聊天要求删除原文均不落库', () => {

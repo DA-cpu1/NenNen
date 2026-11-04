@@ -6,13 +6,14 @@
  * --packaged 改用实际随包 exe 和归档入口，防止开发态能跑、安装后却缺文件。
  * --package-dir 可指定从安装包解出的目录，复查最终交付的文件，而不安装到用户目录。
  * --memory 让正式长消息触发整理，并在第二次启动检查同一来源和记忆是否用于聊天。
+ * --memory-management 检查真实纠正工具、忘记中止旧流及两次重启，仍只使用本机固定供应商。
  */
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { spawn, execFile } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, resolve, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -24,6 +25,7 @@ const packageDirIndex = process.argv.indexOf('--package-dir')
 if (packageDirIndex >= 0 && !process.argv[packageDirIndex + 1]) throw new Error('E_PACKAGE_DIRECTORY_REQUIRED')
 const packaged = process.argv.includes('--packaged') || packageDirIndex >= 0
 const checkMemory = process.argv.includes('--memory')
+const checkManagement = process.argv.includes('--memory-management')
 const packageDir = packageDirIndex >= 0
   ? resolve(process.argv[packageDirIndex + 1]) : join(appDir, 'release/win-unpacked')
 const runtimeDir = packaged ? join(packageDir, 'resources/app.asar.unpacked') : appDir
@@ -55,10 +57,22 @@ let logs = ''
 let memoryCalls = 0
 let restartedChatUsedMemory = false
 const memoryContent = '用户喜欢用水彩画植物。'
+const correctedContent = '用户现在用彩铅画植物。'
+const correctionRequest = '我以前用水彩画植物，现在改成彩铅。'
+const holdingRequest = '我现在用什么画植物？'
+const cleanRequest = '我们聊过哪些画画资料？'
+let correctedWasUsed = false
+let cleanInputChecked = false
+
+/** 输出 OpenAI 兼容的一帧，真实 eve 负责解包文字与工具调用。 */
+function providerFrame(response, payload) {
+  response.write(`data: ${JSON.stringify({ id: 'fixed-test', object: 'chat.completion.chunk', created: 0, model: 'glm-5.3-flash', ...payload })}\n\n`)
+}
 
 // 假供应商：只认当前密钥，返回固定的 OpenAI 兼容文字流
 const provider = createServer(async (request, response) => {
   let body = ''
+  request.setEncoding('utf8')
   for await (const chunk of request) body += chunk
   const parsed = JSON.parse(body)
   const batch = parsed.messages.find(({ role, content }) => role === 'user' &&
@@ -74,7 +88,7 @@ const provider = createServer(async (request, response) => {
   if (batch) {
     const { sources } = JSON.parse(batch.content)
     const source = sources.find(({ content }) => content.startsWith('我喜欢用水彩画植物。'))
-    assert.ok(checkMemory && source && sources.length === 1 && !parsed.stream)
+    assert.ok((checkMemory || checkManagement) && source && sources.length === 1 && !parsed.stream)
     assert.equal(parsed.max_tokens ?? parsed.max_completion_tokens, 2_048)
     const content = JSON.stringify({ candidates: [{ action: 'add', kind: 'preference', memoryKey: null,
       content: memoryContent, sourceMessageIds: [source.id], expiresAt: null, replacesMemoryId: null }] })
@@ -93,6 +107,44 @@ const provider = createServer(async (request, response) => {
   assert.equal(parsed.max_tokens, undefined, '产品请求不应设置应用输出上限')
   assert.equal(parsed.max_completion_tokens, undefined, '产品请求不应设置另一种输出上限字段')
   const offered = parsed.tools ?? []
+  const lastUser = parsed.messages.findLast(({ role }) => role === 'user')?.content
+  if (checkManagement && lastUser === correctionRequest) {
+    assert.ok(offered.some((tool) => tool.function?.name === 'correct_memory'))
+    const toolResult = parsed.messages.find(({ role }) => role === 'tool')
+    const currentId = parsed.messages.find(({ role, content }) => role === 'system' &&
+      content.includes('仅供本轮记忆修改工具使用'))?.content.match(/：([^\s]+)$/u)?.[1]
+    assert.ok(currentId)
+    const found = toolResult && JSON.parse(toolResult.content).memories[0]
+    const operation = found ? { name: 'correct_memory', arguments: JSON.stringify({
+      memoryId: found.id, expectedRevision: found.revision, sourceMessageId: currentId, content: correctedContent,
+    }) } : { name: 'search_memories', arguments: '{"query":"水彩画植物"}' }
+    response.writeHead(200, { 'content-type': 'text/event-stream' })
+    providerFrame(response, { choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [
+      { index: 0, id: `fixed-${operation.name}`, type: 'function', function: operation },
+    ] }, finish_reason: null }] })
+    providerFrame(response, { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+      usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 } })
+    response.end('data: [DONE]\n\n')
+    return
+  }
+  if (checkManagement && lastUser === holdingRequest) {
+    const system = parsed.messages.filter(({ role }) => role === 'system').map(({ content }) => content).join('\n')
+    correctedWasUsed = system.includes(correctedContent) && !system.includes(memoryContent)
+    response.writeHead(200, { 'content-type': 'text/event-stream' })
+    providerFrame(response, { choices: [{ index: 0, delta: { role: 'assistant', content: '已收到半截' }, finish_reason: null }] })
+    // 留出确定的窗口，让管理请求在旧流尚未结束时修改资料。
+    const timer = setTimeout(() => {
+      providerFrame(response, { choices: [{ index: 0, delta: { content: '不应显示的晚到片段' }, finish_reason: 'stop' }] })
+      response.end('data: [DONE]\n\n')
+    }, 8_000)
+    response.once('close', () => clearTimeout(timer))
+    return
+  }
+  if (checkManagement && lastUser === cleanRequest) {
+    const text = JSON.stringify(parsed.messages)
+    cleanInputChecked = ![memoryContent, correctedContent, correctionRequest, '我喜欢用水彩画植物。', '已收到半截']
+      .some((old) => text.includes(old))
+  }
   // 正式回合可使用检索。探针没有要求立即记住任何内容，因此不能带写入工具。
   assert.ok(offered.every((tool) => tool.function?.name === 'search_memories'))
   toolCount += offered.length
@@ -100,7 +152,7 @@ const provider = createServer(async (request, response) => {
   for (const payload of [
     { choices: [{ index: 0, delta: { role: 'assistant', content: '收到' }, finish_reason: null }] },
     { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 } },
-  ]) response.write(`data: ${JSON.stringify({ id: 'fixed-test', object: 'chat.completion.chunk', created: 0, model: 'glm-5.3-flash', ...payload })}\n\n`)
+  ]) providerFrame(response, payload)
   response.end('data: [DONE]\n\n')
 })
 
@@ -198,11 +250,95 @@ async function boot(token, modelKey, providerPort) {
   }
 }
 
+/** 三轮打开真实后台，分别验证纠正、回合中忘记和重新打开后的干净输入。 */
+async function verifyMemoryManagement(providerPort) {
+  const runtime = `${dbPath}.eve`
+  const oldSources = ['package-probe-0', 't08-correct']
+  for (let round = 0; round < 3; round += 1) {
+    const token = tokens[round % tokens.length]
+    const { child, port } = await boot(token, modelKeyA, providerPort)
+    const call = (path, body) => fetch(`http://127.0.0.1:${port}${path}`, {
+      headers: { 'x-session-token': token, 'content-type': 'application/json' }, method: body ? 'POST' : 'GET',
+      body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(30_000),
+    })
+    try {
+      const { conversation } = await (await call('/formal-conversation')).json()
+      const chat = (requestId, content) => call('/chat/turn', { conversationId: conversation.conversationId, requestId, content })
+      const [runDir] = await readdir(runtime)
+      assert.equal((await readdir(runtime)).length, 1)
+      if (round === 0) {
+        const initial = await chat(oldSources[0], '我喜欢用水彩画植物。' + '中'.repeat(6_001))
+        assert.ok((await initial.text()).includes('"type":"done"'))
+        await verifyMemory()
+        const events = await (await chat(oldSources[1], correctionRequest)).text()
+        const frames = [...events.matchAll(/^data: (.*)$/gm)].map(([, json]) => JSON.parse(json))
+        const cleanupErrors = logs.match(/^E_[A-Z_]+$/gm)?.join(',') ?? ''
+        assert.ok(frames.some(({ status }) => status === 'memory-corrected'),
+          `A11 缺少纠正回执（请求数 ${calls}，帧 ${frames.map(({ type, code }) => code ?? type).join(',')}，后台 ${cleanupErrors}）`)
+        assert.ok(events.includes('"type":"cancelled"') && !events.includes('"type":"done"'))
+        assert.equal((await readdir(runtime)).length, 1)
+        assert.ok(!(await readdir(runtime)).includes(runDir), '纠正回执发出前旧 eve 文件已删除')
+        console.log(JSON.stringify({ case: 'A11', nativeTool: true, oldRuntimeRemoved: true }))
+      } else if (round === 1) {
+        const list = await (await call('/memory')).json()
+        const [corrected] = list.memories.filter(({ status }) => status === 'active')
+        assert.equal(corrected.content, correctedContent)
+        assert.deepEqual(list.memories.filter(({ status }) => status === 'superseded').map(({ content }) => content), [memoryContent])
+        const stream = await chat('t08-holding', holdingRequest)
+        const reader = stream.body.getReader()
+        const decoder = new TextDecoder()
+        let events = ''
+        while (!events.includes('已收到半截')) {
+          const item = await reader.read()
+          assert.equal(item.done, false)
+          events += decoder.decode(item.value, { stream: true })
+        }
+        assert.ok(correctedWasUsed)
+        const forgot = await (await call('/memory', { action: 'forget', requestId: randomUUID(), memoryId: corrected.id,
+          expectedRevision: corrected.revision, deleteSources: false })).json()
+        assert.equal(forgot.ok, true)
+        assert.equal(forgot.receipt.affectedMemories, 2)
+        for (let item = await reader.read(); !item.done; item = await reader.read()) events += decoder.decode(item.value, { stream: true })
+        assert.ok(events.includes('"type":"cancelled"') && !events.includes('不应显示的晚到片段'))
+        assert.equal((await readdir(runtime)).length, 1)
+        assert.ok(!(await readdir(runtime)).includes(runDir))
+        // 模拟硬退出留下待清理文件。下一次启动必须只从 SQLite 重建。
+        const residue = await mkdtemp(join(runtime, 'run-'))
+        await writeFile(join(residue, 'fixed-residue.txt'), memoryContent)
+        console.log(JSON.stringify({ case: 'A12', oldReplyStopped: true, correctedValueUsedAfterRestart: true, oldRuntimeRemoved: true }))
+      } else {
+        const { memories } = await (await call('/memory')).json()
+        assert.deepEqual(memories, [])
+        const events = await (await chat('t08-clean', cleanRequest)).text()
+        assert.ok(events.includes('"type":"done"') && cleanInputChecked)
+        const db = new DatabaseSync(dbPath, { readOnly: true })
+        try {
+          const sources = db.prepare('SELECT excluded_from_context FROM messages WHERE client_request_id IN (?,?)').all(...oldSources)
+          assert.equal(sources.length, 2)
+          assert.ok(sources.every(({ excluded_from_context }) => excluded_from_context === 1))
+          assert.equal(db.prepare("SELECT count(*) n FROM memories WHERE content <> ''").get().n, 0)
+          assert.equal(db.prepare("SELECT status FROM messages WHERE reply_to_id = (SELECT id FROM messages WHERE client_request_id = 't08-holding')").get().status, 'cancelled')
+        } finally { db.close() }
+        assert.equal(memoryCalls, 1)
+        console.log(JSON.stringify({ case: 'A12', restartClearedOldRuntime: true, oldHistoryExcluded: 2, noOldContext: true, memoryCalls }))
+      }
+    } finally {
+      const exited = once(child, 'exit')
+      if (round === 1) child.kill()
+      else child.stdin.end()
+      await exited
+      // 硬退出时 eve 用父进程检查退场，确认它已离开才开始下一轮。
+      if (round === 1) await delay(700)
+    }
+  }
+}
+
 provider.listen(0, '127.0.0.1')
 await once(provider, 'listening')
 try {
+  if (checkManagement) await verifyMemoryManagement(provider.address().port)
   let expectedCalls = 0
-  for (let index = 0; index < 2; index += 1) {
+  for (let index = 0; !checkManagement && index < 2; index += 1) {
     // 每轮开机前供应商都回到「只认 A」：第二轮是纯重启测试，
     // 不该被上一轮换钥测试留下的状态影响
     acceptedKey = modelKeyA
@@ -337,8 +473,9 @@ try {
   const leaks = (await Promise.all(runtimeData.map(secretFiles))).reduce((total, count) => total + count, 0)
   assert.equal(leaks, 0)
   assert.equal([modelKeyA, modelKeyB, ...tokens, '请只回复两个字'].some((text) => logs.includes(text)), false)
+  // T08 的五次分别是原话回复、查询工具、纠正工具、被中止的回复、清理后回复。
   assert.equal(authenticatedCalls, 5)
-  assert.equal(memoryCalls, checkMemory ? 1 : 0)
+  assert.equal(memoryCalls, checkMemory || checkManagement ? 1 : 0)
   console.log(JSON.stringify({ packaged, calls, authenticatedCalls, memoryCalls, toolCount, secretFiles: leaks, logsClean: true }))
 } finally {
   await new Promise((done) => provider.close(done))
