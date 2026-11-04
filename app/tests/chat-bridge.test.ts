@@ -23,6 +23,20 @@ beforeEach(() => {
 })
 
 describe('聊天只读桥接（T06⑦a）', () => {
+  it('记忆桥接只授权聊天主页面，并要求明确提交删除原文选项', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"ok":true}'))
+    for (const channel of ['memory:list', 'memory:change', 'memory:cleanup']) {
+      expect(await handlers.get(channel)!(event(42, false))).toEqual({ ok: false, code: 'UNAUTHORIZED' })
+    }
+    const change = { action: 'forget', requestId: '00000000-0000-4000-8000-000000000001', memoryId: 'fixed', expectedRevision: 1 }
+    expect(await handlers.get('memory:change')!(event(), change)).toEqual({ ok: false, code: 'INVALID_INPUT' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(await handlers.get('memory:change')!(event(), { ...change, deleteSources: false })).toMatchObject({ ok: true })
+    expect(fetchSpy).toHaveBeenCalledWith('http://127.0.0.1:12345/memory', expect.objectContaining({
+      method: 'POST', body: expect.stringContaining('"deleteSources":false'),
+    }))
+  })
+
   it('其他窗口和子页面不能读取正式会话或历史', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     for (const name of ['chat:formal-conversation', 'chat:history']) {

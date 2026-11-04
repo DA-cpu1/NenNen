@@ -39,6 +39,20 @@ interface Window {
       data?: { history: import('../shared/chat-history').ChatHistoryPage }
       code?: string
     }>
+    /** 只读当前角色记忆管理资料，由后台选择角色。 */
+    getMemories: () => Promise<{
+      ok: boolean
+      data?: import('../shared/memory-management').MemoryManagementOverview
+      code?: string
+    }>
+    /** 修改一条记忆，只有本地清理完成才返回成功。 */
+    changeMemory: (change: import('../shared/memory-management').MemoryChange) => Promise<{
+      ok: boolean
+      data?: { receipt: import('../shared/memory-management').MemoryChangeReceipt }
+      code?: string
+    }>
+    /** 重试刚才没能完成的本地缓存清理。 */
+    retryMemoryCleanup: () => Promise<{ ok: boolean; code?: string }>
     /** 发起聊天回合；受理立即返回，回复帧经 onChatTurnEvent 推送。 */
     startChatTurn: (conversationId: string, requestId: string, content: string) => Promise<{
       ok: boolean
