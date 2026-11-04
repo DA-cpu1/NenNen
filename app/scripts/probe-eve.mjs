@@ -5,15 +5,17 @@
  * 两轮共用同一个数据库文件：第一轮写入的值，第二轮重启后必须原样读到。
  * --packaged 改用实际随包 exe 和归档入口，防止开发态能跑、安装后却缺文件。
  * --package-dir 可指定从安装包解出的目录，复查最终交付的文件，而不安装到用户目录。
+ * --memory 让正式长消息触发整理，并在第二次启动检查同一来源和记忆是否用于聊天。
  */
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { spawn, execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, resolve, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
@@ -21,6 +23,7 @@ const appDir = resolve(import.meta.dirname, '..')
 const packageDirIndex = process.argv.indexOf('--package-dir')
 if (packageDirIndex >= 0 && !process.argv[packageDirIndex + 1]) throw new Error('E_PACKAGE_DIRECTORY_REQUIRED')
 const packaged = process.argv.includes('--packaged') || packageDirIndex >= 0
+const checkMemory = process.argv.includes('--memory')
 const packageDir = packageDirIndex >= 0
   ? resolve(process.argv[packageDirIndex + 1]) : join(appDir, 'release/win-unpacked')
 const runtimeDir = packaged ? join(packageDir, 'resources/app.asar.unpacked') : appDir
@@ -38,6 +41,7 @@ const imagePaths = {
   desktopImagePath: 'characters/package-probe/desktop-fixed.png',
   portraitImagePath: 'characters/package-probe/portrait-fixed.png',
 }
+const probeStartedAt = Date.now() - 1_000 // 给文件时间戳的取整留一秒。
 // 两把假密钥：A 是开机的，B 是运行期换上的
 const modelKeyA = randomBytes(32).toString('base64url')
 const modelKeyB = randomBytes(32).toString('base64url')
@@ -48,24 +52,50 @@ let calls = 0
 let authenticatedCalls = 0
 let toolCount = 0
 let logs = ''
+let memoryCalls = 0
+let restartedChatUsedMemory = false
+const memoryContent = '用户喜欢用水彩画植物。'
 
 // 假供应商：只认当前密钥，返回固定的 OpenAI 兼容文字流
 const provider = createServer(async (request, response) => {
   let body = ''
   for await (const chunk of request) body += chunk
-  calls += 1
+  const parsed = JSON.parse(body)
+  const batch = parsed.messages.find(({ role, content }) => role === 'user' &&
+    typeof content === 'string' && content.startsWith('{"sources":'))
+  if (batch) memoryCalls += 1
+  else calls += 1
   if (request.headers.authorization !== `Bearer ${acceptedKey}`) {
     // 模拟真实供应商的 401 口吻；不含任何密钥内容
     response.writeHead(401, { 'content-type': 'application/json' })
     response.end(JSON.stringify({ error: { code: '1001', message: '无效的API密钥' } }))
     return
   }
+  if (batch) {
+    const { sources } = JSON.parse(batch.content)
+    const source = sources.find(({ content }) => content.startsWith('我喜欢用水彩画植物。'))
+    assert.ok(checkMemory && source && sources.length === 1 && !parsed.stream)
+    assert.equal(parsed.max_tokens ?? parsed.max_completion_tokens, 2_048)
+    const content = JSON.stringify({ candidates: [{ action: 'add', kind: 'preference', memoryKey: null,
+      content: memoryContent, sourceMessageIds: [source.id], expiresAt: null, replacesMemoryId: null }] })
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ id: 'fixed-memory', object: 'chat.completion', created: 0, model: 'glm-5.3-flash',
+      choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 18, completion_tokens: 6, total_tokens: 24 } }))
+    return
+  }
   authenticatedCalls += 1
-  const parsed = JSON.parse(body)
+  if (parsed.messages.some(({ role, content }) => role === 'system' &&
+      typeof content === 'string' && content.startsWith('以下是用户资料') && content.includes(memoryContent))) {
+    restartedChatUsedMemory = parsed.tools?.some((tool) => tool.function?.name === 'search_memories') === true
+  }
   // 检查实际eve发出的HTTP请求，避免只改后台而仍被框架塞回旧的输出额度。
   assert.equal(parsed.max_tokens, undefined, '产品请求不应设置应用输出上限')
   assert.equal(parsed.max_completion_tokens, undefined, '产品请求不应设置另一种输出上限字段')
-  toolCount += (parsed.tools ?? []).length
+  const offered = parsed.tools ?? []
+  // 正式回合可使用检索。探针没有要求立即记住任何内容，因此不能带写入工具。
+  assert.ok(offered.every((tool) => tool.function?.name === 'search_memories'))
+  toolCount += offered.length
   response.writeHead(200, { 'content-type': 'text/event-stream' })
   for (const payload of [
     { choices: [{ index: 0, delta: { role: 'assistant', content: '收到' }, finish_reason: null }] },
@@ -73,6 +103,31 @@ const provider = createServer(async (request, response) => {
   ]) response.write(`data: ${JSON.stringify({ id: 'fixed-test', object: 'chat.completion.chunk', created: 0, model: 'glm-5.3-flash', ...payload })}\n\n`)
   response.end('data: [DONE]\n\n')
 })
+
+/** 只读临时库，确认来源、整理书签和用量都已经写入，避免只测到模型返回。 */
+async function verifyMemory() {
+  const db = new DatabaseSync(dbPath, { readOnly: true })
+  try {
+    const query = db.prepare(`SELECT m.content, msg.client_request_id, c.last_processed_seq, msg.seq,
+      r.input_tokens, r.output_tokens, r.usage_estimated
+      FROM memories m JOIN memory_sources s ON s.memory_id = m.id JOIN messages msg ON msg.id = s.message_id
+      JOIN conversations c ON c.id = msg.conversation_id
+      JOIN agent_runs r ON r.conversation_id = c.id AND r.trigger_type = 'memory' AND r.status = 'completed'`)
+    let rows = query.all()
+    for (let attempt = 0; attempt < 100 && rows.length === 0; attempt += 1) {
+      await delay(50)
+      rows = query.all()
+    }
+    assert.equal(rows.length, 1)
+    const row = rows[0]
+    assert.ok(row.content === memoryContent && row.client_request_id === 'package-probe-0')
+    assert.equal(row.last_processed_seq, row.seq)
+    assert.deepEqual([row.input_tokens, row.output_tokens, row.usage_estimated], [18, 6, 0])
+    assert.equal(memoryCalls, 1)
+  } finally {
+    db.close()
+  }
+}
 
 /** 查找后台的直接子进程编号；本项目的目标平台是 Windows。 */
 async function childPids(parentPid) {
@@ -95,6 +150,9 @@ async function secretFiles(directory) {
     const path = join(directory, entry.name)
     if (entry.isDirectory()) matches += await secretFiles(path)
     else if (entry.isFile()) {
+      // 这两把随机假密钥刚生成，旧文件不可能含它们；只读本次新建或更新的文件。
+      const info = await stat(path)
+      if (info.mtimeMs < probeStartedAt) continue
       const content = await readFile(path)
       if ([modelKeyA, modelKeyB, ...tokens].some((secret) => content.includes(secret))) matches += 1
     }
@@ -207,11 +265,14 @@ try {
       assert.equal(conversationResponse.status, 200)
       const { conversation } = await conversationResponse.json()
       // 还要跑正式聊天，而不只跑固定连通探针；固定输入与回复都不打印到日志。
+      // 第一轮仍覆盖超过旧输入额度。普通探针的第二轮用短句，以免碰到累计整理条件。
+      const content = checkMemory
+        ? (index === 0 ? '我喜欢用水彩画植物。' + '中'.repeat(6_001) : '我平常用哪种水彩画植物？')
+        : (index === 0 ? '中'.repeat(5_000) : '收到')
       const chatResponse = await fetch(`${url}/chat/turn`, {
         method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
         body: JSON.stringify({ conversationId: conversation.conversationId,
-          // 5,000个汉字在8,000字符输入限制内，但超过旧12,000字节估算额度。
-          requestId: `package-probe-${index}`, content: '中'.repeat(5_000) }),
+          requestId: `package-probe-${index}`, content }),
         signal: AbortSignal.timeout(35_000),
       })
       assert.equal(chatResponse.status, 200)
@@ -222,6 +283,12 @@ try {
       assert.equal(calls, expectedCalls)
       console.log(JSON.stringify({ run: index + 1, characterReadable: true,
         imagesPersisted: index === 1, formalChatCompleted: true }))
+      if (checkMemory) {
+        await verifyMemory()
+        if (index === 1) assert.equal(restartedChatUsedMemory, true)
+        console.log(JSON.stringify({ run: index + 1, memoryCalls, memorySourceMatches: true,
+          inputTokens: 18, outputTokens: 6, restartedChatUsedMemory }))
+      }
 
       // ── 运行期换密钥（只测第一轮）：供应商作废旧密钥 → 送新密钥进后台 ──
       if (index === 0) {
@@ -264,13 +331,15 @@ try {
       console.log(JSON.stringify({ run: index + 1, shutdown: index === 0 ? 'normal' : 'forced', eveExited: true }))
     }
   }
-  // 除回合目录外，框架还会留下执行锁文件；整个运行目录都要查，避免漏掉机密。
-  const leaks = await secretFiles(join(runtimeDir, '.eve')) + await secretFiles(join(runtimeDir, '.output'))
+  // 检查框架实际写入的工作区和锁目录，跳过旧安装包和构建产物。
+  const runtimeData = ['smoke', 'locks', '.workflow-data'].map((name) => join(runtimeDir, '.eve', name))
+  runtimeData.push(join(runtimeDir, '.output', '.eve'))
+  const leaks = (await Promise.all(runtimeData.map(secretFiles))).reduce((total, count) => total + count, 0)
   assert.equal(leaks, 0)
   assert.equal([modelKeyA, modelKeyB, ...tokens, '请只回复两个字'].some((text) => logs.includes(text)), false)
   assert.equal(authenticatedCalls, 5)
-  assert.equal(toolCount, 0)
-  console.log(JSON.stringify({ packaged, calls, authenticatedCalls, toolCount, secretFiles: leaks, logsClean: true }))
+  assert.equal(memoryCalls, checkMemory ? 1 : 0)
+  console.log(JSON.stringify({ packaged, calls, authenticatedCalls, memoryCalls, toolCount, secretFiles: leaks, logsClean: true }))
 } finally {
   await new Promise((done) => provider.close(done))
   // 临时数据库目录整体清理；库文件内容不含机密，删除即止

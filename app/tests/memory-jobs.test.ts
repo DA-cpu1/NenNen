@@ -251,18 +251,30 @@ describe('整理任务登记与领取', () => {
     expect(registerMemoryJob(db, conversationId, now)?.id).not.toBe(job.id)
   })
 
-  it('试聊无法登记，即使手工伪造待执行行也不能领取', () => {
+  it('试聊无法登记，伪造任务也不能领取或直接提交候选', () => {
     const { db } = companion
     message('formal')
     const valid = registerMemoryJob(db, conversationId, now)!
     const preview = ensurePreviewConversation(db, characterId)
-    message('preview', preview.id)
+    const source = message('preview', preview.id)
     expect(registerMemoryJob(db, preview.id, now)).toBeNull()
     const forged = { ...valid, id: 'forged', conversationId: preview.id }
     db.insert(memoryJobs).values(forged).run()
     expect(readMemoryJobWork(db, forged)).toBeNull()
     expect(claimMemoryJob(db, forged.id, now)).toBeNull()
     expect(db.select().from(memoryJobs).where(eq(memoryJobs.id, forged.id)).get()?.status).toBe('stale')
+
+    // 绕过领取，直接在临时库造一条执行中记录，确认提交入口也会核对会话模式。
+    const execution = { status: 'running', attempts: 1, leaseUntil: now + 90_000 }
+    db.update(memoryJobs).set(execution).where(eq(memoryJobs.id, forged.id)).run()
+    const position = { seq: source.seq, offset: 0 }
+    const batch = { start: position, end: position,
+      sources: [{ id: source.id, seq: source.seq, content: source.content, createdAt: source.createdAt }] }
+    const work = { job: { ...forged, ...execution }, characterId, batch }
+    expect(commitMemoryCandidates(db, work, [candidate(source.id)], new Map(), now + 1))
+      .toEqual({ status: 'stale' })
+    expect(db.select().from(memories).all()).toHaveLength(0)
+    expect(db.select().from(conversations).where(eq(conversations.id, preview.id)).get()?.lastProcessedSeq).toBe(0)
   })
 
   it('已排除的唯一来源使批次失效，分段书签仍可立即整理余下原话', () => {
