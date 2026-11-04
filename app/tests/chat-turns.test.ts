@@ -9,6 +9,7 @@ import { runMigrations } from '../src/data/migrations'
 import { initializeFirstCharacter } from '../src/data/character-init'
 import { agentRuns, characters, characterVersions, companionSettings, conversations, memories, messages, toolOperations } from '../src/data/tables'
 import { createChatTurnService } from '../src/service/chat-turns'
+import { mutateMemory } from '../src/data/memory-management'
 import type { EveHandle } from '../src/agent/eve-process'
 import type { SseTurnEvent } from '../src/shared/chat-turn'
 import type { MessageResponse } from 'eve/client'
@@ -99,6 +100,44 @@ function addSecondCharacter(): string {
 }
 
 describe('聊天回合服务（T06⑪c1）', () => {
+  it('A12 忘记后拒收旧流和完成事件，保留可见半截，另一角色继续回复', async () => {
+    const otherConversation = addSecondCharacter()
+    const { db } = companion
+    const character = db.select().from(conversations).where(eq(conversations.id, conversationId)).get()!.characterId
+    db.insert(memories).values({ id: 'forget-target', scope: 'character', characterId: character,
+      kind: 'fact', content: '旧资料', origin: 'user_edit', validFrom: 1, createdAt: 1, updatedAt: 1 }).run()
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const oldResponse = {
+      cancel: vi.fn(async () => { throw new Error('故意拒绝取消') }),
+      async *[Symbol.asyncIterator]() {
+        yield appended('已看到的半截')
+        await held
+        yield appended('不许显示的晚到文字')
+        yield turnCompleted()
+      },
+    }
+    fake.send.mockResolvedValueOnce(oldResponse).mockResolvedValueOnce(fakeResponse([appended('另一角色的回复'), turnCompleted(), sessionCompleted()]).response)
+    const turns = service()
+    const original = turns.startTurn({ conversationId, requestId: 'old', content: '聊聊旧资料' })
+    await original.events.next()
+    expect((await original.events.next()).value).toEqual({ type: 'text', delta: '已看到的半截' })
+    const other = turns.startTurn({ conversationId: otherConversation, requestId: 'other', content: '另一个话题' })
+    await other.events.next()
+    const originalTail = collect(original.events)
+    const change = mutateMemory(db, { conversationId, requestId: 'forget' }, {
+      action: 'forget', memoryId: 'forget-target', expectedRevision: 1, deleteSources: false,
+    }, Date.now())
+    turns.invalidateContexts(change.conversationIds)
+    release()
+    expect(await originalTail).toEqual([{ type: 'cancelled' }])
+    expect((await collect(other.events)).map((frame) => frame.type)).toEqual(['text', 'done'])
+    expect(oldResponse.cancel).toHaveBeenCalledTimes(1)
+    expect(db.select().from(messages).where(eq(messages.replyToId, original.userMessageId)).get()).toMatchObject({
+      status: 'cancelled', content: '已看到的半截', excludedFromContext: 1,
+    })
+  })
+
   it('记忆工具绑定正式活动回合，只查所属角色与共享资料，并受四次额度约束', async () => {
     const secondId = addSecondCharacter()
     const { db } = companion

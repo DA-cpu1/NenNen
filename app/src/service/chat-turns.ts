@@ -42,6 +42,8 @@ export interface ChatTurnServiceDeps {
   limits: ModelInputLimits
   /** 正式聊天保存原话或结束回复后，请后台重查整理触发条件。 */
   wakeMemoryJobs?: () => void
+  /** 旧缓存还在清理时，受影响会话暂停发送。其他会话仍可使用自己的资料。 */
+  isContextBlocked?: (conversationId: string) => boolean
 }
 
 /** 回合服务的对外能力。 */
@@ -66,6 +68,10 @@ export interface ChatTurnService {
   cancelTurn: (conversationId: string) => boolean
   /** 当前活动回合数；检查与验收用。 */
   activeCount: () => number
+  /** 中止受影响回复，并让待补写的旧结果也只能以未完成状态保存。 */
+  invalidateContexts: (conversationIds: readonly string[]) => void
+  /** 回收某个 eve 进程前，等待仍使用它的回合结束。 */
+  waitForRuntime: (eve: EveHandle) => Promise<void>
   /** 只为仍有效的正式回合执行内部记忆工具；角色从会话查出。 */
   executeMemoryTool: (request: MemoryToolRequest) => MemoryToolResult
   /** 退出前停止受理，取消并等已有回合保存终态；重复调用共用同一次收尾。 */
@@ -82,6 +88,10 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
   /** 完成信号让退出流程等到取消落库，不能只发出取消就关闭数据库。 */
   interface ActiveTurn {
     controller: AbortController
+    eve?: EveHandle
+    invalidated?: boolean
+    runtimeDone: Promise<void>
+    finishRuntime: () => void
     events?: AsyncGenerator<SseTurnEvent>
     completed: Promise<void>
     finish: () => void
@@ -94,7 +104,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
   const active = new Map<string, ActiveTurn>()
   const activeCharacters = new Set<string>()
   // 只临时保留尚未写成的结果，不写日志；同一请求重试时先补写，不能再花一次模型钱。
-  const pendingWrites = new Map<string, PendingTurnWrite>()
+  const pendingWrites = new Map<string, { conversationId: string; write: PendingTurnWrite }>()
   let closing = false
   let stopping: Promise<void> | undefined
 
@@ -118,7 +128,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     stopping = Promise.all(turns.map((turn) => turn.completed)).then(() => {
       const db = deps.getDb()
       if (!db) return
-      for (const [userMessageId, write] of pendingWrites) {
+      for (const [userMessageId, { write }] of pendingWrites) {
         if (!finalizeTurnWrite(db, write).outcome.pendingWrite) pendingWrites.delete(userMessageId)
       }
     })
@@ -130,12 +140,15 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     conversationId: string,
     characterId: string,
     userMessageId: string,
+    eve: EveHandle | undefined,
     runStart: (turn: ActiveTurn) => AsyncGenerator<TurnEvent, TurnOutcome>,
     onSettled?: () => void,
   ): AsyncGenerator<SseTurnEvent> {
     let finish!: () => void
+    let finishRuntime!: () => void
     const turn: ActiveTurn = {
-      controller: new AbortController(),
+      controller: new AbortController(), eve,
+      runtimeDone: new Promise<void>((resolve) => { finishRuntime = resolve }), finishRuntime,
       completed: new Promise<void>((resolve) => { finish = resolve }), finish: () => {
         finish()
         onSettled?.()
@@ -180,6 +193,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
         const runner = runStart(turn)
         let terminalEvent: TurnEvent | undefined
         let announcedMemoryStatus: ActiveTurn['memoryStatus']
+        let shownText = ''
         for (;;) {
           const step = await runner.next()
           // 即使工具后的模型调用失败，也在终态前发出已落库的真实回执。
@@ -188,20 +202,34 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
             yield { type: 'tool-status', status: announcedMemoryStatus }
           }
           if (step.done) {
-            if (step.value.pendingWrite) pendingWrites.set(userMessageId, step.value.pendingWrite)
+            turn.finishRuntime()
+            const write = step.value.pendingWrite
+            if (write) pendingWrites.set(userMessageId, { conversationId, write: turn.invalidated
+              ? { ...write, status: 'cancelled', finalText: shownText } : write })
             else pendingWrites.delete(userMessageId)
             // 先接住待补写资料，再把保存失败交给界面；断线不会丢掉这次结果。
-            if (terminalEvent) yield terminalEvent as SseTurnEvent
+            if (turn.invalidated && terminalEvent?.type === 'done') {
+              // 保存可能刚完成，界面还没收到终点。让重开历史也看到这条旧回复为未完成。
+              const db = deps.getDb()
+              db?.update(messages).set({ status: 'cancelled', content: shownText })
+                .where(eq(messages.id, terminalEvent.replyId)).run()
+            }
+            if (turn.invalidated && !write) yield { type: 'cancelled' }
+            else if (terminalEvent) yield terminalEvent as SseTurnEvent
             break
           }
           // Agent 层的 TurnEvent 与线上帧形状一致，这里原样转发。
-          if (step.value.type === 'text') yield step.value as SseTurnEvent
-          else terminalEvent = step.value
+          if (step.value.type === 'text') {
+            if (turn.invalidated) continue
+            shownText += step.value.delta
+            yield step.value as SseTurnEvent
+          } else terminalEvent = step.value
         }
       } catch (error) {
         const code = error instanceof Error && /^E_[A-Z0-9_]+$/.test(error.message) ? error.message : 'E_TURN_FAILED'
         yield { type: 'failed', code }
       } finally {
+        turn.finishRuntime()
         active.delete(conversationId)
         activeCharacters.delete(characterId)
         turn.finish()
@@ -224,11 +252,13 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     if (conversation.mode !== expectedMode) {
       throw new Error(expectedMode === 'normal' ? 'E_PREVIEW_NOT_ALLOWED' : 'E_PREVIEW_REQUIRED')
     }
+    if (deps.isContextBlocked?.(conversation.id)) throw new Error('E_MEMORY_CLEANUP_PENDING')
     if (activeCharacters.has(conversation.characterId)) throw new Error('E_TURN_IN_PROGRESS')
     const existing = db.select().from(messages).where(and(
       eq(messages.conversationId, conversationId), eq(messages.clientRequestId, requestId),
     )).get()
-    const pendingWrite = existing && pendingWrites.get(existing.id)
+    if (existing?.excludedFromContext === 1) throw new Error('E_USER_MESSAGE_NOT_ALLOWED')
+    const pendingWrite = existing && pendingWrites.get(existing.id)?.write
     if (existing && pendingWrite) {
       if (existing.role !== 'user' || existing.content !== content) throw new Error('E_REQUEST_CONFLICT')
       // 补写不依赖 eve 仍在运行；即使模型后台已退出，也能把已收到的答案存好。
@@ -245,6 +275,23 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
   return {
     activeCount: () => active.size,
     stop,
+    invalidateContexts: (conversationIds) => {
+      for (const id of conversationIds) {
+        const turn = active.get(id)
+        if (turn) {
+          turn.invalidated = true
+          turn.controller.abort()
+        }
+      }
+      for (const pending of pendingWrites.values()) {
+        if (!conversationIds.includes(pending.conversationId)) continue
+        // 模型结果未能保存时没有可靠的显示边界，只留用量；旧结果不得补写成完整回复。
+        pending.write = { ...pending.write, status: 'cancelled', finalText: '' }
+      }
+    },
+    waitForRuntime: async (eve) => {
+      await Promise.all([...active.values()].filter((turn) => turn.eve === eve).map((turn) => turn.runtimeDone))
+    },
 
     executeMemoryTool: (request) => {
       const notFound = { ok: false, code: 'NOT_FOUND', message: '找不到可用的正式聊天回合。', retryable: false } as const
@@ -296,7 +343,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
 
     startTurn: (request) => {
       const { db, eve, savedMessageId, characterId, pendingWrite } = beginTurn(request.conversationId, request.requestId, request.content, 'normal')
-      const events = registerTurn(request.conversationId, characterId, savedMessageId,
+      const events = registerTurn(request.conversationId, characterId, savedMessageId, eve,
         (turn) => pendingWrite ? replayWrite(db, pendingWrite) : runFormalTurn(db, eve!, {
           conversationId: request.conversationId, userMessageId: savedMessageId,
           commonRules: COMMON_RULES_TEXT, limits: deps.limits,
@@ -330,7 +377,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
       return {
         userMessageId: savedMessageId,
         conversationId: conversation.id,
-        events: registerTurn(conversation.id, characterId, savedMessageId,
+        events: registerTurn(conversation.id, characterId, savedMessageId, eve,
           (turn) => pendingWrite ? replayWrite(db, pendingWrite) : runPreviewTurn(db, eve!, {
             conversationId: conversation.id, userMessageId: savedMessageId,
             commonRules: COMMON_RULES_TEXT, draft, limits: deps.limits,
