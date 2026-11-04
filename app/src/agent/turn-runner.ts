@@ -17,6 +17,7 @@ import type { EveHandle } from './eve-process'
 import type { ModelInputLimits } from './context-budget'
 import type { BuildTurnContextInput } from './turn-context'
 import type { PreviewPersonaDraft } from '../shared/chat-turn'
+import { mayRequestImmediateMemory } from '../shared/memory-tool'
 
 /** 04 §2：一轮的总用时上限；模型不能自己延长，到点由程序收场。 */
 export const DEFAULT_TURN_TIMEOUT_MS = 90_000
@@ -27,6 +28,7 @@ export interface ActiveToolSession {
   replyId: string
   contextEpoch: number
   deadlineAt: number
+  rememberAllowed: boolean
 }
 
 /** 跑一次正式回合所需的资料；人设版本由准备阶段从库中锁定，调用方不能自选。 */
@@ -119,11 +121,13 @@ async function* runTurn(
       })
     }
 
+    const rememberAllowed = prepared.context.conversationMode === 'normal' &&
+      mayRequestImmediateMemory(prepared.context.currentMessage.content)
     let response: MessageResponse
     try {
       if ('registerToolSession' in input) unregisterTools = input.registerToolSession?.({
         sessionId: prepared.session.state.sessionId, replyId: reply.id,
-        contextEpoch: prepared.context.contextEpoch, deadlineAt,
+        contextEpoch: prepared.context.contextEpoch, deadlineAt, rememberAllowed,
       })
       const sending = sendPreparedEveTurn(db, prepared, phaseSignal, unregisterTools !== undefined).then((accepted) => {
         // 超时后才收到受理句柄时也要回收，不能留下无人继续读取的模型回合。
@@ -145,6 +149,7 @@ async function* runTurn(
     return yield* consumeEveTurn(db, {
       response: wrapped, replyId: reply.id, runId: run.id,
       estimatedInputTokens: prepared.input.inputTokens,
+      waitForToolDecision: unregisterTools !== undefined && rememberAllowed,
     }, signal)
   } finally {
     unregisterTools?.()

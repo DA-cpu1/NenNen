@@ -11,10 +11,12 @@ import { MODEL_CONTEXT_WINDOW_TOKENS, MODEL_OUTPUT_RESERVE_TOKENS } from '../../
 type ModelCallOptions = Parameters<NonNullable<LanguageModelMiddleware['transformParams']>>[0]['params']
 type ModelPrompt = ModelCallOptions['prompt']
 
-/** 试聊与固定探针不把正式工具暴露给模型；服务端还会独立核对每次调用。 */
-function removeMemoryTools(params: ModelCallOptions): ModelCallOptions {
-  if (!params.tools?.some((tool) => tool.name === 'search_memories')) return params
-  const tools = params.tools.filter((tool) => tool.name !== 'search_memories')
+/** 只保留后台给本轮授权的记忆工具；服务端还会独立核对每次调用。 */
+function filterMemoryTools(params: ModelCallOptions, allowSearch = false, allowRemember = false): ModelCallOptions {
+  if (!params.tools) return params
+  const tools = params.tools.filter((tool) => (tool.name !== 'search_memories' || allowSearch) &&
+    (tool.name !== 'remember_explicit' || allowRemember))
+  if (tools.length === params.tools.length) return params
   return { ...params, tools: tools.length ? tools : undefined, toolChoice: tools.length ? params.toolChoice : undefined }
 }
 
@@ -47,10 +49,15 @@ export function createCompanionContextMiddleware(): LanguageModelMiddleware {
             .map((message) => message.role === 'system'
               ? { role: 'system', content: message.content }
               : { role: message.role, content: [{ type: 'text', text: message.content }] })
+          if (envelope.rememberSourceMessageId) {
+            // 放在应用规则段，编号只给工具定位，用户原话仍单独在最后一条消息。
+            prompt[0] = { role: 'system', content: envelope.prompt[0].content +
+              '\n当前用户消息编号（仅供立即记忆工具使用）：' + envelope.rememberSourceMessageId }
+          }
           const prepared = {
             ...params, prompt: [...prompt, ...continuation], maxOutputTokens: envelope.maxOutputTokens,
           }
-          const transformed = envelope.allowMemoryTools ? prepared : removeMemoryTools(prepared)
+          const transformed = filterMemoryTools(prepared, envelope.allowMemoryTools, !!envelope.rememberSourceMessageId)
           // 未设上限时连字段也删除，防止继承框架旧的1,000额度；供应商自行决定输出。
           if (envelope.maxOutputTokens === undefined) delete transformed.maxOutputTokens
           try {
@@ -70,7 +77,7 @@ export function createCompanionContextMiddleware(): LanguageModelMiddleware {
       if (users.length !== 1 || userText(users[0]) !== '请只回复两个字：收到') {
         throw new Error('E_EVE_CONTEXT_REQUIRED')
       }
-      const transformed = removeMemoryTools({ ...params })
+      const transformed = filterMemoryTools({ ...params })
       delete transformed.maxOutputTokens
       checkModelInputBudget(transformed, {
         modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS,

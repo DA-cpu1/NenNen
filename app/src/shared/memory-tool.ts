@@ -43,3 +43,12 @@ export type MemoryToolResult =
   | ({ ok: true } & RememberReceipt)
   | { ok: false; code: 'NOT_FOUND' | 'CANCELLED' | 'BUDGET_EXCEEDED' | 'STORAGE_UNAVAILABLE' |
       'INVALID_INPUT' | 'SOURCE_NOT_ALLOWED' | 'STALE_REVISION'; message: string; retryable: boolean }
+
+/**
+ * 标出可能要求长期记住的消息，只让这类回合考虑立即写入。
+ * @param content 当前用户原话，不能由模型提供
+ * @returns 是否要提供立即保存能力；引用和假设仍由模型按共同规则判断
+ */
+export function mayRequestImmediateMemory(content: string): boolean {
+  return /记住|记下|记一下|记一记|记好了|帮我记|请记|保存|存下来|存一下|别忘了|牢记|叫我|称呼我|以后|今后|从今|往后|从现在开始/u.test(content)
+}

@@ -147,11 +147,14 @@ describe('聊天回合服务（T06⑪c1）', () => {
 
   it('只保存当前用户原话，回执失败时回滚，之后重试沿用已存结果', async () => {
     const { db, sqlite } = companion
-    fake.send.mockResolvedValue(fakeResponse([appended('固定半截')], true).response)
+    let begin!: () => void
+    const sending = new Promise<void>((resolve) => { begin = resolve })
+    fake.send.mockImplementation(async () => { begin(); return fakeResponse([], true).response })
     const turns = service()
     const formal = turns.startTurn({ conversationId, requestId: 'remember-r1', content: '以后叫我阿达。' })
     await formal.events.next()
-    await formal.events.next()
+    const reading = formal.events.next()
+    await sending
     const input = { sourceMessageId: formal.userMessageId, kind: 'preference', memoryKey: 'preferred_name',
       content: '用户希望被称为阿达' } as const
     const request = { sessionId: 'eve-1', tool: 'remember_explicit', input } as const
@@ -173,6 +176,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
     expect(receipt.status).toBe('committed')
     expect(receipt.resultJson).not.toContain('阿达')
     turns.cancelTurn(conversationId)
+    await reading
     await collect(formal.events)
     expect(db.select().from(memories).all()).toHaveLength(1)
   })

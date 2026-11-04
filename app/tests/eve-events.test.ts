@@ -104,6 +104,19 @@ function runRow() {
 }
 
 describe('eve 回合事件消费（T06⑪a）', () => {
+  it('立即记忆回合丢弃工具前的成功旁白，只展示确认步骤的最终文字', async () => {
+    const { response } = fakeResponse([
+      stepStarted(0), appended('我已经记住了。'),
+      { type: 'message.completed', data: { message: '我已经记住了。', finishReason: 'tool-calls' } },
+      stepStarted(1), appended('暂时'), appended('没有保存。'), messageDone('暂时没有保存。'), turnCompleted(),
+    ])
+    const { events } = await drive(consumeEveTurn(companion.db, {
+      response, replyId, runId, estimatedInputTokens: 1_000, waitForToolDecision: true,
+    }))
+    expect(events).toEqual([{ type: 'text', delta: '暂时没有保存。' }, { type: 'done', replyId }])
+    expect(replyRow().content).toBe('暂时没有保存。')
+  })
+
   it('流式增量逐步入库，完成时按步骤用量精确记账', async () => {
     const { response } = fakeResponse([
       stepStarted(0), appended('你'), appended('好'), messageDone('你好'),

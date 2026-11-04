@@ -1,5 +1,6 @@
 /** 真正启动 eve 与业务 HTTP 服务，用本机固定供应商验证工具来回和试聊隔离。 */
 import assert from 'node:assert/strict'
+import { eq } from 'drizzle-orm'
 import { createServer } from 'node:http'
 import { resolve } from 'node:path'
 import { startEve, type EveHandle } from '../src/agent/eve-process'
@@ -8,6 +9,7 @@ import { openCompanionDatabase } from '../src/data/db'
 import { saveCharacterMemory } from '../src/data/memories'
 import { saveUserMessage } from '../src/data/messages'
 import { runMigrations } from '../src/data/migrations'
+import { memories } from '../src/data/tables'
 import { createChatTurnService } from '../src/service/chat-turns'
 import { startBackendServer, type BackendServer } from '../src/service/server'
 
@@ -23,11 +25,17 @@ async function main(): Promise<void> {
     let body = ''
     request.setEncoding('utf8')
     for await (const chunk of request) body += chunk
-    received.push(JSON.parse(body) as FixedRequest)
-    const invoke = received.length === 1
-    const delta = invoke ? { role: 'assistant', tool_calls: [{
+    const input = JSON.parse(body) as FixedRequest
+    received.push(input)
+    const remember = received.length === 4
+    const invoke = received.length === 1 || remember
+    const sourceId = input.messages.flatMap(({ content }) => typeof content === 'string'
+      ? [content.match(/当前用户消息编号（仅供立即记忆工具使用）：(\S+)/u)?.[1]] : []).find(Boolean)
+    const delta = invoke ? { role: 'assistant', ...(remember ? { content: '提前声称已经保存。' } : {}), tool_calls: [{
       index: 0, id: 'fixed-search', type: 'function',
-      function: { name: 'search_memories', arguments: '{"query":"水彩"}' },
+      function: remember ? { name: 'remember_explicit', arguments: JSON.stringify({
+        content: '用户希望被称为阿达', kind: 'preference', memoryKey: 'preferred_name', sourceMessageId: sourceId,
+      }) } : { name: 'search_memories', arguments: '{"query":"水彩"}' },
     }] } : { role: 'assistant', content: '固定回复' }
     response.writeHead(200, { 'content-type': 'text/event-stream' })
     for (const payload of [
@@ -82,8 +90,25 @@ async function main(): Promise<void> {
     assert.equal(previewEnd, 'done')
     assert.equal(received.length, 3)
     assert(!received[2].tools?.some((tool) => tool.function?.name === 'search_memories'))
+    assert(!received[2].tools?.some((tool) => tool.function?.name === 'remember_explicit'))
     assert(!JSON.stringify(received[2].messages).includes('用户喜欢用水彩画动物。'))
-    process.stdout.write(JSON.stringify({ formalRequests: 2, toolResults: 1, previewRequests: 1, previewMemoryTools: 0 }) + '\n')
+
+    const write = turns.startTurn({ conversationId, requestId: 'remember', content: '以后叫我阿达。' })
+    let visible = ''
+    let writeEnd = ''
+    for await (const frame of write.events) {
+      if (frame.type === 'text') visible += frame.delta
+      writeEnd = frame.type
+    }
+    assert.equal(writeEnd, 'done')
+    assert.equal(received.length, 5)
+    assert(received[3].tools?.some((tool) => tool.function?.name === 'remember_explicit'))
+    const writeOutput = received[4].messages.find((message) => message.role === 'tool')
+    assert(writeOutput && JSON.stringify(writeOutput.content).includes('saved'))
+    assert.equal(db.select().from(memories).where(eq(memories.memoryKey, 'preferred_name')).all().length, 1)
+    assert.equal(visible, '固定回复')
+    process.stdout.write(JSON.stringify({ formalRequests: 4, toolResults: 2, previewRequests: 1,
+      previewMemoryTools: 0, memoriesSaved: 1, interimTextDisplayed: 0 }) + '\n')
   } finally {
     try { await eve?.stop() } finally { await server?.stop() }
     companion.close()

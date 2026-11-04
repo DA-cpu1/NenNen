@@ -84,6 +84,8 @@ export interface ConsumeEveTurnInput {
   runId: string
   /** 准备阶段按字节口径估算的输入 token；供应商不给用量时兜底记账。 */
   estimatedInputTokens: number
+  /** 可能立即保存的回合等步骤明确结束后才展示文字，以免抢先说成功。 */
+  waitForToolDecision?: boolean
 }
 
 /** 只接受「大写字母开头的固定错误码」；eve 或供应商的原始报错正文不能入库。 */
@@ -153,14 +155,20 @@ export async function* consumeEveTurn(
         switch (event.type) {
           case 'message.appended':
             streamingText += event.data.messageDelta
-            persistStreaming()
-            yield { type: 'text', delta: event.data.messageDelta }
+            if (!input.waitForToolDecision) {
+              persistStreaming()
+              yield { type: 'text', delta: event.data.messageDelta }
+            }
             break
-          case 'message.completed':
-            settledText += event.data.message
+          case 'message.completed': {
             streamingText = ''
+            // eve 的结束原因区分「接下来调工具」与最终角色回复。前者没有可靠保存结果。
+            if (input.waitForToolDecision && event.data.finishReason === 'tool-calls') break
+            settledText += event.data.message
             persistStreaming()
+            if (input.waitForToolDecision && event.data.message) yield { type: 'text', delta: event.data.message }
             break
+          }
           case 'step.started':
             modelCalls += 1
             if (modelCalls > MAX_MODEL_CALLS_PER_TURN) {
@@ -216,6 +224,9 @@ export async function* consumeEveTurn(
       }
     }
   }
+
+  // 工具回合若中途断流，尚未确认用途的文字可能是抢先报成功的旁白，不能显示或落库。
+  if (input.waitForToolDecision) streamingText = ''
 
   // 完成但没有可读文字：按约定不能把空白标成成功（③ 的规则），改记失败。
   if (terminal === 'completed' && currentText().trim() === '') {

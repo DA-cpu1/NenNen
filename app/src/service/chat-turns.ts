@@ -259,6 +259,9 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
         // 同一后台里同步计数再查库，两条同时到达的请求也要各占一个位置。
         session.executions += 1
         if (request.tool === 'remember_explicit') {
+          if (!session.rememberAllowed) {
+            return { ok: false, code: 'SOURCE_NOT_ALLOWED', message: '这轮没有立即记忆请求。', retryable: false }
+          }
           return rememberExplicit(db, { conversationId, userMessageId: reply.replyToId }, request.input, Date.now())
         }
         const current = listCurrentMemories(db, conversation.characterId, Date.now())
