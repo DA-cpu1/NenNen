@@ -1,6 +1,6 @@
 /**
  * 最小旧库升级样例（T04 步骤⑧创建，05 §7；T05① 扩展到 v6，T07① 扩展到
- * v8）：证明「老用户升级新版」这条路真的能走通。做法是演一遍历史——
+ * v8，⑧扩展到 v9）：证明「老用户升级新版」这条路真的能走通。做法是演一遍历史——
  * 第一幕用「只含第一张装修单」的清单造出 v1 旧库（这正是当年 v1 版
  * 程序留下的库的样子），塞一行老数据、关库（旧程序退出）；
  * 第二幕重新打开（新版程序启动），用完整清单升级，检查：
@@ -21,6 +21,7 @@ import {
   characterVersions,
   conversations,
   memories,
+  memoryJobs,
   memorySources,
   messages,
 } from '../src/data/tables'
@@ -59,22 +60,22 @@ describe('最小旧库升级样例（T04 步骤⑧）', () => {
     ).toEqual({ n: 0 })
     old.close() // 旧版程序退出，数据落盘
 
-    // ── 第二幕：新版程序启动，翻记录本补做 v2～v8 ──
+    // ── 第二幕：新版程序启动，翻记录本补做 v2～v9 ──
     const upgraded = openCompanionDatabase(dbPath)
     runMigrations(upgraded.sqlite)
 
-    // 记录本登记齐当前全部 8 张单
+    // 记录本登记齐当前全部 9 张单
     const records = upgraded.sqlite
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as Array<{ version: number }>
-    expect(records.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+    expect(records.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
 
     // 旧数据一行不丢：老用户的版本号还是 3，没有被初始化逻辑重置成 0
     const state = upgraded.db.select().from(appState).where(eq(appState.id, 1)).get()
     expect(state?.globalMemoryEpoch).toBe(3)
 
-    // 新表全部就位：抽查 v2～v5、v7、v8 各一张代表表
-    for (const table of ['app_settings', 'characters', 'conversations', 'tool_operations', 'agent_runs', 'memories']) {
+    // 新表全部就位：抽查 v2～v5、v7、v8、v9 各一张代表表
+    for (const table of ['app_settings', 'characters', 'conversations', 'tool_operations', 'agent_runs', 'memories', 'memory_jobs']) {
       const row = upgraded.sqlite
         .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name=?")
         .get(table) as { n: number }
@@ -242,6 +243,31 @@ describe('最小旧库升级样例（T04 步骤⑧）', () => {
     upgraded.close()
   })
 
+  it('v8 正式会话升级后保留原书签，v9 用偏移区分分段并只允许一个活跃任务', () => {
+    const dbPath = join(dir, 'old-v8.db')
+    const old = openCompanionDatabase(dbPath)
+    runMigrations(old.sqlite, MIGRATIONS.slice(0, 8))
+    // 旧版没有偏移列，用当时的列清单写样本，再关库模拟旧程序退出。
+    old.sqlite.exec(`INSERT INTO characters (id, name, created_at, updated_at) VALUES ('char-v8', '旧角色', 1, 1);
+      INSERT INTO conversations (id, character_id, last_processed_seq, created_at, last_message_at)
+        VALUES ('chat-v8', 'char-v8', 5, 1, 2);`)
+    old.close()
+    const upgraded = openCompanionDatabase(dbPath)
+    try {
+      runMigrations(upgraded.sqlite)
+      expect(upgraded.db.select().from(conversations).get()).toMatchObject({ lastProcessedSeq: 5, lastProcessedOffset: 0 })
+      const job = { conversationId: 'chat-v8', startSeq: 6, endSeq: 6, endOffset: 20, characterEpoch: 0,
+        globalEpoch: 0, contextEpoch: 0, extractorVersion: 'test', availableAt: 2, createdAt: 2, updatedAt: 2 }
+      upgraded.db.insert(memoryJobs).values({ ...job, id: 'first' }).run()
+      expect(() => upgraded.db.insert(memoryJobs).values({ ...job, id: 'competing', endOffset: 21 }).run()).toThrow()
+      upgraded.db.update(memoryJobs).set({ status: 'completed' }).run()
+      expect(() => upgraded.db.insert(memoryJobs).values({ ...job, id: 'replayed' }).run()).toThrow()
+      upgraded.db.insert(memoryJobs).values({ ...job, id: 'second', startOffset: 20, endOffset: 0 }).run()
+      expect(upgraded.db.select().from(memoryJobs).where(eq(memoryJobs.id, 'second')).get())
+        .toMatchObject({ startOffset: 20, endOffset: 0, status: 'pending' })
+    } finally { upgraded.close() }
+  })
+
   it('坏单子中途炸：整体回滚，库停在旧版本，正确清单可恢复（05 §7.4）', () => {
     const dbPath = join(dir, 'broken-upgrade.db')
 
@@ -291,13 +317,13 @@ INSERT INTO no_such_table VALUES (1);
     const state = db.db.select().from(appState).where(eq(appState.id, 1)).get()
     expect(state?.globalMemoryEpoch).toBe(5)
 
-    // 4) 恢复：换回正确清单重跑，v2～v8 正常补齐——坏单子
+    // 4) 恢复：换回正确清单重跑，v2～v9 正常补齐——坏单子
     //    没有把升级路堵死
     runMigrations(db.sqlite)
     const fixed = db.sqlite
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as Array<{ version: number }>
-    expect(fixed.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+    expect(fixed.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
 
     db.close()
   })

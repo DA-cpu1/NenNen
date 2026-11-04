@@ -222,6 +222,37 @@ CREATE TABLE memory_sources (
 CREATE INDEX sources_by_message ON memory_sources(message_id);
 `,
   },
+  {
+    version: 9,
+    summary: '整理任务与分段书签：固定范围、版本、重试和租约（T07 步骤⑧）',
+    sql: `
+ALTER TABLE conversations ADD COLUMN last_processed_offset INTEGER NOT NULL DEFAULT 0 CHECK (last_processed_offset >= 0);
+
+CREATE TABLE memory_jobs (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  start_seq INTEGER NOT NULL CHECK (start_seq > 0),
+  start_offset INTEGER NOT NULL DEFAULT 0 CHECK (start_offset >= 0),
+  end_seq INTEGER NOT NULL CHECK (end_seq >= start_seq),
+  end_offset INTEGER NOT NULL DEFAULT 0 CHECK (end_offset >= 0),
+  character_epoch INTEGER NOT NULL,
+  global_epoch INTEGER NOT NULL,
+  context_epoch INTEGER NOT NULL,
+  extractor_version TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','completed','failed','stale','cancelled')),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  available_at INTEGER NOT NULL,
+  lease_until INTEGER,
+  last_error_code TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK (start_seq < end_seq OR end_offset = 0 OR end_offset > start_offset),
+  UNIQUE (conversation_id, start_seq, start_offset, end_seq, end_offset, character_epoch, global_epoch, context_epoch, extractor_version)
+);
+CREATE INDEX jobs_ready ON memory_jobs(status, available_at);
+CREATE UNIQUE INDEX one_active_memory_job ON memory_jobs(conversation_id) WHERE status IN ('pending','running');
+`,
+  },
 ]
 
 /** 给一份 SQL 算"指纹"（sha256）：同样的内容永远得到同一串字符，

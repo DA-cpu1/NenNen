@@ -118,8 +118,10 @@ export const conversations = sqliteTable('conversations', {
   /** 该会话「可用内容」的版本号：忘记、排除来源时 +1，依赖旧内容的
    *  后台整理任务看到数字变了就作废（05 §4） */
   contextEpoch: integer('context_epoch').notNull().default(0),
-  /** 已整理到第几条消息：后台记忆整理的「进度书签」，T07 使用 */
+  /** 整理书签所在的消息顺序号，偏移为 0 时已越过该条消息。 */
   lastProcessedSeq: integer('last_processed_seq').notNull().default(0),
+  /** 批次切在消息中间时，记录已读的码点数，让下一批从那里继续。 */
+  lastProcessedOffset: integer('last_processed_offset').notNull().default(0),
   /** 会话创建时间（UTC 毫秒数字） */
   createdAt: integer('created_at').notNull(),
   /** 最后一条消息的时间：按「最近聊过」排序会话时用 */
@@ -354,3 +356,25 @@ export const memorySources = sqliteTable(
   // 记忆），但两列的组合全表唯一——第二次插完全相同的一对当场报错
   (t) => [primaryKey({ columns: [t.memoryId, t.messageId] })],
 )
+
+/** 整理任务只存原话范围和三个版本。正文仍从 messages 读，避免多存一份。 */
+export const memoryJobs = sqliteTable('memory_jobs', {
+  id: text('id').primaryKey(),
+  conversationId: text('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
+  startSeq: integer('start_seq').notNull(),
+  startOffset: integer('start_offset').notNull().default(0),
+  endSeq: integer('end_seq').notNull(),
+  endOffset: integer('end_offset').notNull().default(0),
+  characterEpoch: integer('character_epoch').notNull(),
+  globalEpoch: integer('global_epoch').notNull(),
+  contextEpoch: integer('context_epoch').notNull(),
+  extractorVersion: text('extractor_version').notNull(),
+  status: text('status').notNull().default('pending'),
+  attempts: integer('attempts').notNull().default(0),
+  availableAt: integer('available_at').notNull(),
+  /** 租约是「这份任务暂时归正在执行的人」的截止时间，进程中断后可以回收。 */
+  leaseUntil: integer('lease_until'),
+  lastErrorCode: text('last_error_code'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+})

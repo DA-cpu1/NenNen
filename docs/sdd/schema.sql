@@ -50,6 +50,7 @@ CREATE TABLE conversations (
   runtime_session_id TEXT,
   context_epoch INTEGER NOT NULL DEFAULT 0,
   last_processed_seq INTEGER NOT NULL DEFAULT 0,
+  last_processed_offset INTEGER NOT NULL DEFAULT 0 CHECK (last_processed_offset >= 0),
   created_at INTEGER NOT NULL,
   last_message_at INTEGER NOT NULL
 );
@@ -116,7 +117,9 @@ CREATE TABLE memory_jobs (
   id TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   start_seq INTEGER NOT NULL CHECK (start_seq > 0),
+  start_offset INTEGER NOT NULL DEFAULT 0 CHECK (start_offset >= 0),
   end_seq INTEGER NOT NULL CHECK (end_seq >= start_seq),
+  end_offset INTEGER NOT NULL DEFAULT 0 CHECK (end_offset >= 0),
   character_epoch INTEGER NOT NULL,
   global_epoch INTEGER NOT NULL,
   context_epoch INTEGER NOT NULL,
@@ -128,9 +131,11 @@ CREATE TABLE memory_jobs (
   last_error_code TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  UNIQUE (conversation_id, start_seq, end_seq, character_epoch, global_epoch, context_epoch, extractor_version)
+  CHECK (start_seq < end_seq OR end_offset = 0 OR end_offset > start_offset),
+  UNIQUE (conversation_id, start_seq, start_offset, end_seq, end_offset, character_epoch, global_epoch, context_epoch, extractor_version)
 );
 CREATE INDEX jobs_ready ON memory_jobs(status, available_at);
+CREATE UNIQUE INDEX one_active_memory_job ON memory_jobs(conversation_id) WHERE status IN ('pending','running');
 
 CREATE TABLE conversation_summaries (
   id TEXT PRIMARY KEY,
