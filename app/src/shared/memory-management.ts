@@ -1,6 +1,6 @@
 /** 管理页和聊天工具共用的记忆操作格式，后台会再检查目标的归属。 */
 import { z } from 'zod'
-import { memoryKinds } from './memory-tool'
+import type { memoryKinds } from './memory-tool'
 
 /** 对象编号和修订号必须一起提交，防止旧页面覆盖刚更新的记忆。 */
 export const memoryTargetSchema = z.strictObject({

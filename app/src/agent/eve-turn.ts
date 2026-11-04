@@ -14,7 +14,7 @@ import {
 import { prepareBudgetedContext, type BudgetedTurnContext, type ModelInputLimits } from './context-budget'
 import type { EveHandle } from './eve-process'
 import { encodeEveTurnEnvelope } from '../shared/eve-turn-envelope'
-import { mayRequestImmediateMemory } from '../shared/memory-tool'
+import { mayRequestImmediateMemory, requestedMemoryChange } from '../shared/memory-tool'
 
 /** 尚未启动模型的回合资料；后续发送入口继续使用这里固定的人设和预算输入。 */
 export interface PreparedEveTurn {
@@ -129,6 +129,8 @@ export async function sendPreparedEveTurn(
       current.contextEpoch !== prepared.context.contextEpoch ||
       current.runtimeSessionId !== prepared.session.state.sessionId) throw new Error('E_CONTEXT_CHANGED')
   const toolsAllowed = prepared.context.conversationMode === 'normal' && allowMemoryTools
+  const currentMessage = prepared.context.currentMessage
+  const change = toolsAllowed ? requestedMemoryChange(currentMessage.content) : undefined
   const message = encodeEveTurnEnvelope({
     prompt: prepared.input.prompt, optionalPromptGroups: prepared.input.optionalPromptGroups,
     // 把回复空位一起交付，实际请求加上工具说明后也必须给回复留下相同空间。
@@ -136,8 +138,8 @@ export async function sendPreparedEveTurn(
     outputReserveTokens: prepared.input.outputReserveTokens,
     maxOutputTokens: prepared.input.maxOutputTokens,
     allowMemoryTools: toolsAllowed ? true : undefined,
-    rememberSourceMessageId: toolsAllowed && mayRequestImmediateMemory(prepared.context.currentMessage.content)
-      ? prepared.context.currentMessage.id : undefined,
+    rememberSourceMessageId: toolsAllowed && !change && mayRequestImmediateMemory(currentMessage.content) ? currentMessage.id : undefined,
+    memoryChange: change ? { action: change, messageId: currentMessage.id } : undefined,
   })
   sentTurns.add(prepared)
   try {

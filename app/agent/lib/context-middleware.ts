@@ -12,10 +12,12 @@ type ModelCallOptions = Parameters<NonNullable<LanguageModelMiddleware['transfor
 type ModelPrompt = ModelCallOptions['prompt']
 
 /** 只保留后台给本轮授权的记忆工具；服务端还会独立核对每次调用。 */
-function filterMemoryTools(params: ModelCallOptions, allowSearch = false, allowRemember = false): ModelCallOptions {
+function filterMemoryTools(params: ModelCallOptions, allowSearch = false, allowRemember = false,
+  change?: 'correct' | 'forget'): ModelCallOptions {
   if (!params.tools) return params
   const tools = params.tools.filter((tool) => (tool.name !== 'search_memories' || allowSearch) &&
-    (tool.name !== 'remember_explicit' || allowRemember))
+    (tool.name !== 'remember_explicit' || allowRemember) &&
+    (tool.name !== 'correct_memory' || change === 'correct') && (tool.name !== 'forget_memory' || change === 'forget'))
   if (tools.length === params.tools.length) return params
   return { ...params, tools: tools.length ? tools : undefined, toolChoice: tools.length ? params.toolChoice : undefined }
 }
@@ -54,10 +56,15 @@ export function createCompanionContextMiddleware(): LanguageModelMiddleware {
             prompt[0] = { role: 'system', content: envelope.prompt[0].content +
               '\n当前用户消息编号（仅供立即记忆工具使用）：' + envelope.rememberSourceMessageId }
           }
+          if (envelope.memoryChange) {
+            prompt[0] = { role: 'system', content: envelope.prompt[0].content +
+              '\n当前用户消息编号（仅供本轮记忆修改工具使用）：' + envelope.memoryChange.messageId }
+          }
           const prepared = {
             ...params, prompt: [...prompt, ...continuation], maxOutputTokens: envelope.maxOutputTokens,
           }
-          const transformed = filterMemoryTools(prepared, envelope.allowMemoryTools, !!envelope.rememberSourceMessageId)
+          const transformed = filterMemoryTools(prepared, envelope.allowMemoryTools, !!envelope.rememberSourceMessageId,
+            envelope.memoryChange?.action)
           // 未设上限时连字段也删除，防止继承框架旧的1,000额度；供应商自行决定输出。
           if (envelope.maxOutputTokens === undefined) delete transformed.maxOutputTokens
           try {

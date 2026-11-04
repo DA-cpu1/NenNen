@@ -17,12 +17,14 @@ const envelopeSchema = z.strictObject({
   /** 后台只在正式回合登记工具访问后打开这项；旧信封视为未授权。 */
   allowMemoryTools: z.boolean().optional(),
   rememberSourceMessageId: z.string().min(1).max(200).optional(),
+  memoryChange: z.strictObject({ action: z.enum(['correct', 'forget']), messageId: z.string().min(1).max(200) }).optional(),
   optionalPromptGroups: z.array(z.array(z.number().int().min(2)).min(1)).default([]),
 }).refine((value) => {
   const indexes = value.optionalPromptGroups.flat()
   return value.prompt[0].role === 'system' && value.prompt[1].role === 'system' &&
     value.prompt.at(-1)?.role === 'user' && indexes.every((index) => index < value.prompt.length - 1) &&
-    new Set(indexes).size === indexes.length && (!value.rememberSourceMessageId || value.allowMemoryTools === true)
+    new Set(indexes).size === indexes.length &&
+    (!(value.rememberSourceMessageId || value.memoryChange) || value.allowMemoryTools === true)
 })
 
 /** 信封里的字段都由后台准备；容量值不是模型或用户对话中声称的数字。 */

@@ -96,6 +96,10 @@ function main(): void {
     limits: { modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS },
     wakeMemoryJobs: () => memoryWorker?.wake(),
     isContextBlocked: (conversationId) => memoryManagement?.isBlocked(conversationId) ?? false,
+    changeMemory: (conversationId, messageId, change) => {
+      if (!memoryManagement) throw new Error('STORAGE_UNAVAILABLE')
+      return memoryManagement.changeFromChat(conversationId, messageId, change)
+    },
   })
   options.startChatTurn = chatTurns.startTurn
   options.startPreviewTurn = chatTurns.startPreviewTurn

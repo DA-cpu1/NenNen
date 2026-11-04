@@ -36,6 +36,9 @@ const failureHints: Record<string, string> = {
   STREAM_ENDED: '回复连接已断开，已收到的文字仍保留，可以重试。',
   BACKEND_UNREACHABLE: '后台暂时无法连接，请稍后重试。',
   E_EVE_SEND_FAILED: '消息未能交给模型，请重试。',
+  MEMORY_CLEANUP_PENDING: '本地记忆正在清理。请稍等，或去记忆页查看进度。',
+  MEMORY_CLEANUP_FAILED: '记忆已经更新，但本地清理未完成。请到记忆页重试清理。',
+  USER_MESSAGE_EXCLUDED: '这条原话已停止作为聊天背景。你可以发送新的消息。',
 }
 interface RetryPayload {
   requestId: string
@@ -102,7 +105,8 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
     setStreamText(stillUnsaved ? pendingSave.current!.text : code === 'STREAM_ENDED' ? replyText.current : '')
     setWaitingHint(false)
     setErrorCode(code)
-    setRetry(status === 'failed' || stillUnsaved ? payload : null)
+    const canRetry = code !== 'MEMORY_CLEANUP_FAILED' && code !== 'USER_MESSAGE_EXCLUDED'
+    setRetry((status === 'failed' && canRetry) || stillUnsaved ? payload : null)
     // 试聊未保存时也要保护面板，不能收起后把唯一可见副本丢掉。
     callbacks.current.onBusyChange?.(stillUnsaved)
     callbacks.current.onAttemptSettled?.({ requestId: payload.requestId, content: payload.content, text: replyText.current, status })
@@ -143,9 +147,14 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
         // 先按停止再收到首帧时，等拿到真实会话编号再请求取消。
         if (phaseRef.current === 'stopping') void cancelKnownTurn()
       } else if (frame.type === 'tool-status') {
-        // 这是后台确认的数据库回执，失败或停止的角色回复不能撤销它。
-        setMemoryReceipt({ requestId: message.requestId,
-          text: frame.status === 'memory-saved' ? '记忆已保存' : '这条记忆已保存过' })
+        // 保存和清理均由后台确认；角色回复是否完成是另一回事。
+        const notices = {
+          'memory-saved': '记忆已保存', 'memory-already-saved': '这条记忆已保存过',
+          'memory-corrected': '记忆已纠正', 'memory-forgotten': '已忘记这条信息，聊天原文仍保留',
+        }
+        const personaHint = 'personaContainsContent' in frame && frame.personaContainsContent
+          ? '。角色设定里还有相同文字，可以在角色设置里修改' : ''
+        setMemoryReceipt({ requestId: message.requestId, text: notices[frame.status] + personaHint })
       } else if (frame.type === 'done') settleTurn('completed', null, true)
       else if (frame.type === 'cancelled') settleTurn('cancelled', null, true)
       else settleTurn('failed', frame.code, true)

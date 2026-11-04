@@ -19,6 +19,7 @@ import { COMMON_FACT_RULES } from '../shared/character-sample'
 import { searchMemories } from '../memory/search'
 import type { MemoryToolRequest, MemoryToolResult } from '../shared/memory-tool'
 import { rememberExplicit } from './remember-explicit'
+import type { AppliedMemoryChange, ChatMemoryChange } from './memory-management'
 import {
   resolvePreviewDraft, type ChatTurnRequest, type PreviewTurnRequest, type SseTurnEvent,
 } from '../shared/chat-turn'
@@ -44,6 +45,8 @@ export interface ChatTurnServiceDeps {
   wakeMemoryJobs?: () => void
   /** 旧缓存还在清理时，受影响会话暂停发送。其他会话仍可使用自己的资料。 */
   isContextBlocked?: (conversationId: string) => boolean
+  /** 使用回合真实身份执行修改，完成后由事件流独立确认。 */
+  changeMemory?: (conversationId: string, userMessageId: string, change: ChatMemoryChange) => AppliedMemoryChange
 }
 
 /** 回合服务的对外能力。 */
@@ -95,9 +98,10 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     events?: AsyncGenerator<SseTurnEvent>
     completed: Promise<void>
     finish: () => void
-    toolSession?: ActiveToolSession & { executions: number }
+    toolSession?: ActiveToolSession & { executions: number; seenMemories: Map<string, number> }
     /** 已落库的操作回执，与角色回复是否完成分开。 */
     memoryStatus?: 'memory-saved' | 'memory-already-saved'
+    memoryChange?: AppliedMemoryChange
   }
   // 会话编号用来定位停止对象，角色编号用来挡下正式/试聊之间的并发。
   // 两份登记一起建立、一起清理；挡下请求时还没有保存新的用户消息。
@@ -214,6 +218,13 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
               db?.update(messages).set({ status: 'cancelled', content: shownText })
                 .where(eq(messages.id, terminalEvent.replyId)).run()
             }
+            if (turn.memoryChange) {
+              try { await turn.memoryChange.cleaned }
+              catch { yield { type: 'failed', code: 'MEMORY_CLEANUP_FAILED' }; break }
+              const receipt = turn.memoryChange.receipt
+              yield { type: 'tool-status', status: receipt.action === 'correct' ? 'memory-corrected' : 'memory-forgotten',
+                personaContainsContent: receipt.personaContainsContent }
+            }
             if (turn.invalidated && !write) yield { type: 'cancelled' }
             else if (terminalEvent) yield terminalEvent as SseTurnEvent
             break
@@ -227,7 +238,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
         }
       } catch (error) {
         const code = error instanceof Error && /^E_[A-Z0-9_]+$/.test(error.message) ? error.message : 'E_TURN_FAILED'
-        yield { type: 'failed', code }
+        yield turn.invalidated ? { type: 'cancelled' } : { type: 'failed', code }
       } finally {
         turn.finishRuntime()
         active.delete(conversationId)
@@ -329,8 +340,52 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
           }
           return result
         }
+        if (request.tool === 'correct_memory' || request.tool === 'forget_memory') {
+          const forget = request.tool === 'forget_memory'
+          const source = request.tool === 'forget_memory' ? request.input.requestMessageId : request.input.sourceMessageId
+          if (session.memoryChange !== (forget ? 'forget' : 'correct') || source !== reply.replyToId) {
+            return { ok: false, code: 'SOURCE_NOT_ALLOWED', message: '只能根据本轮明确请求修改记忆。', retryable: false }
+          }
+          if (forget && session.bareForgetReference) {
+            return { ok: false, code: 'AMBIGUOUS', message: '请先问清楚用户想忘记哪条记忆。', retryable: false }
+          }
+          if (session.seenMemories.get(request.input.memoryId) !== request.input.expectedRevision) {
+            return { ok: false, code: 'STALE_REVISION', message: '请先查询本轮要修改的记忆及其修订号。', retryable: true }
+          }
+          if (!deps.changeMemory) return unavailable
+          const { memoryId, expectedRevision } = request.input
+          try {
+            turn.memoryChange = deps.changeMemory(conversationId, source, request.tool === 'forget_memory'
+              ? { action: 'forget', memoryId, expectedRevision }
+              : { action: 'correct', memoryId, expectedRevision, content: request.input.content })
+          } catch (error) {
+            if (error instanceof Error && error.message === 'STALE_REVISION') {
+              return { ok: false, code: 'STALE_REVISION', message: '这条记忆已经变化，请重新查询。', retryable: true }
+            }
+            if (error instanceof Error && error.message === 'NOT_FOUND') return notFound
+            if (error instanceof Error && error.message === 'MEMORY_CLEANUP_PENDING') {
+              return { ok: false, code: 'MEMORY_CLEANUP_PENDING', message: '上一项清理正在进行，请稍后再试。', retryable: true }
+            }
+            return unavailable
+          }
+          // 连同本轮一起停止。工具不预报成功，只有服务流在清理完毕后才发回执。
+          void turn.memoryChange.cleaned.catch(() => {})
+          turn.invalidated = true
+          turn.controller.abort()
+          return { ok: false, code: 'MEMORY_CLEANUP_PENDING', message: '应用正在重建本地上下文，将单独确认结果。', retryable: false }
+        }
         const current = listCurrentMemories(db, conversation.characterId, Date.now())
-        return { ok: true, memories: searchMemories(current, request.input.query, request.input.limit) }
+        const matches = searchMemories(current, request.input.query, session.memoryChange ? undefined : request.input.limit)
+        if (session.memoryChange) {
+          session.seenMemories.clear()
+          const privateMatches = matches.filter((memory) => memory.scope === 'character')
+          // 写入工具只接最后一次查询的唯一候选。limit=1 不能用来掩盖有多个候选。
+          if (privateMatches.length === 1) {
+            const [memory] = privateMatches
+            session.seenMemories.set(memory.id, memory.revision)
+          }
+        }
+        return { ok: true, memories: matches }
       } catch { return unavailable }
     },
 
@@ -349,7 +404,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
           commonRules: COMMON_RULES_TEXT, limits: deps.limits,
           model: MODEL_NAME, provider: PROVIDER_NAME,
           registerToolSession: (session) => {
-            turn.toolSession = { ...session, executions: 0 }
+            turn.toolSession = { ...session, executions: 0, seenMemories: new Map() }
             return () => { delete turn.toolSession }
           },
         }, turn.controller.signal), deps.wakeMemoryJobs)

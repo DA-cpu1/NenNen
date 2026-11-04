@@ -25,6 +25,7 @@ export type SseTurnEvent =
   | { type: 'saved'; userMessageId: string; conversationId: string }
   | { type: 'text'; delta: string }
   | { type: 'tool-status'; status: 'memory-saved' | 'memory-already-saved' }
+  | { type: 'tool-status'; status: 'memory-corrected' | 'memory-forgotten'; personaContainsContent: boolean }
   | { type: 'done'; replyId: string }
   | { type: 'cancelled' }
   | { type: 'failed'; code: string }

@@ -10,6 +10,7 @@ import { initializeFirstCharacter } from '../src/data/character-init'
 import { agentRuns, characters, characterVersions, companionSettings, conversations, memories, messages, toolOperations } from '../src/data/tables'
 import { createChatTurnService } from '../src/service/chat-turns'
 import { mutateMemory } from '../src/data/memory-management'
+import { createMemoryManagement } from '../src/service/memory-management'
 import type { EveHandle } from '../src/agent/eve-process'
 import type { SseTurnEvent } from '../src/shared/chat-turn'
 import type { MessageResponse } from 'eve/client'
@@ -100,6 +101,60 @@ function addSecondCharacter(): string {
 }
 
 describe('聊天回合服务（T06⑪c1）', () => {
+  it.each(['correct', 'forget'] as const)('聊天工具 %s 只修改刚查到的本轮目标，等清理才向界面确认', async (action) => {
+    const { db } = companion
+    const character = db.select().from(conversations).where(eq(conversations.id, conversationId)).get()!.characterId
+    db.insert(memories).values({ id: 'coffee', scope: 'character', characterId: character,
+      kind: 'preference', content: '用户喜欢咖啡', origin: 'user_edit', validFrom: 1, createdAt: 1, updatedAt: 1 }).run()
+    let clean!: () => void
+    const held = new Promise<void>((resolve) => { clean = resolve })
+    const management = createMemoryManagement(db, (ids) => turns.invalidateContexts(ids), () => held)
+    const turns = createChatTurnService({ getDb: () => db, getEve: () => handle, limits: { modelWindowTokens: 32_000 },
+      changeMemory: management.changeFromChat, isContextBlocked: management.isBlocked })
+    fake.send.mockResolvedValue(fakeResponse([], true).response)
+    const { events, userMessageId } = turns.startTurn({ conversationId, requestId: 'memory-change',
+      content: action === 'correct' ? '我以前喝咖啡，现在不喝了' : '请忘掉我喜欢咖啡的记忆' })
+    await events.next()
+    let announced = false
+    const tail = collect(events).then((frames) => { announced = true; return frames })
+    await vi.waitFor(() => expect(fake.send).toHaveBeenCalled())
+    const sessionId = 'eve-1'
+    const target = { memoryId: 'coffee', expectedRevision: 1 }
+    const request = action === 'correct'
+      ? { sessionId, tool: 'correct_memory', input: { ...target, sourceMessageId: userMessageId, content: '用户现在不喝咖啡' } } as const
+      : { sessionId, tool: 'forget_memory', input: { ...target, requestMessageId: userMessageId } } as const
+    expect(turns.executeMemoryTool(request)).toMatchObject({ ok: false, code: 'STALE_REVISION' })
+    expect(turns.executeMemoryTool({ sessionId, tool: 'search_memories', input: { query: '咖啡' } })).toMatchObject({
+      ok: true, memories: [{ id: 'coffee', revision: 1 }],
+    })
+    expect(turns.executeMemoryTool(request)).toMatchObject({ ok: false, code: 'MEMORY_CLEANUP_PENDING' })
+    await turns.waitForRuntime(handle)
+    expect(announced).toBe(false)
+    expect(management.isBlocked(conversationId)).toBe(true)
+    clean()
+    expect(await tail).toEqual([{ type: 'tool-status', status: action === 'correct' ? 'memory-corrected' : 'memory-forgotten',
+      personaContainsContent: false }, { type: 'cancelled' }])
+    expect(db.select().from(memories).where(eq(memories.id, 'coffee')).get()?.status).toBe(action === 'correct' ? 'superseded' : 'deleted')
+  })
+
+  it('聊天里没有明确对象时不接受模型代选，即使它已经查到一条记忆', async () => {
+    const { db } = companion
+    const changeMemory = vi.fn()
+    const turns = createChatTurnService({ getDb: () => db, getEve: () => handle,
+      limits: { modelWindowTokens: 32_000 }, changeMemory })
+    fake.send.mockResolvedValue(fakeResponse([], true).response)
+    const { events, userMessageId } = turns.startTurn({ conversationId, requestId: 'ambiguous', content: '帮我忘掉那件事。' })
+    await events.next()
+    const tail = collect(events)
+    await vi.waitFor(() => expect(fake.send).toHaveBeenCalled())
+    expect(turns.executeMemoryTool({ sessionId: 'eve-1', tool: 'forget_memory', input: {
+      requestMessageId: userMessageId, memoryId: 'guessed', expectedRevision: 1,
+    } })).toMatchObject({ ok: false, code: 'AMBIGUOUS' })
+    expect(changeMemory).not.toHaveBeenCalled()
+    turns.cancelTurn(conversationId)
+    expect(await tail).toEqual([{ type: 'cancelled' }])
+  })
+
   it('A12 忘记后拒收旧流和完成事件，保留可见半截，另一角色继续回复', async () => {
     const otherConversation = addSecondCharacter()
     const { db } = companion
