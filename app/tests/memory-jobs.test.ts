@@ -8,11 +8,13 @@ import { bumpCharacterMemoryEpoch, bumpContextEpoch, bumpGlobalMemoryEpoch } fro
 import { saveUserMessage } from '../src/data/messages'
 import { saveCharacterMemory } from '../src/data/memories'
 import { runMigrations } from '../src/data/migrations'
-import { conversations, memories, memoryJobs, memorySources, messages } from '../src/data/tables'
+import { agentRuns, conversations, memories, memoryJobs, memorySources, messages } from '../src/data/tables'
+import { beginMemoryAttempt } from '../src/jobs/memory-budget'
 import { claimMemoryJob, readMemoryJobWork, registerMemoryJob } from '../src/jobs/memory-jobs'
 import { commitMemoryCandidates } from '../src/jobs/commit-candidates'
 
 const now = 1_740_000_000_000
+const testModel = { name: 'fixed', provider: 'local-test' }
 let companion: CompanionDb
 let conversationId: string
 let characterId: string
@@ -25,6 +27,38 @@ beforeEach(() => {
   })
   conversationId = initial.conversationId
   characterId = initial.characterId
+})
+
+describe('整理模型预算', () => {
+  it('先预占本次估算输入和输出，再允许调用；聊天消耗不计入整理额度', () => {
+    const { db } = companion
+    db.insert(agentRuns).values({ id: 'ordinary-chat', characterId, triggerType: 'chat', model: testModel.name, provider: testModel.provider,
+      status: 'completed', inputTokens: 50_000, outputTokens: 10_000, startedAt: now }).run()
+    message('source')
+    const job = registerMemoryJob(db, conversationId, now)!
+    const result = beginMemoryAttempt(db, job.id, testModel, now)
+    if (result.status !== 'ready') throw new Error('未取得预算')
+    expect(db.select().from(agentRuns).where(eq(agentRuns.id, result.attempt.runId)).get()).toMatchObject({
+      triggerType: 'memory', status: 'running', usageEstimated: 1,
+      inputTokens: result.attempt.prepared.estimatedInputTokens, outputTokens: result.attempt.prepared.outputLimit,
+    })
+    expect(beginMemoryAttempt(db, job.id, testModel, now)).toEqual({ status: 'unavailable' })
+  })
+
+  it.each([{ requests: 20, tokens: 1 }, { requests: 1, tokens: 39_000 }])('任一额度不足就延到本地次日 $requests/$tokens', ({ requests, tokens }) => {
+    const { db } = companion
+    for (let index = 0; index < requests; index += 1) {
+      db.insert(agentRuns).values({ id: `used-${index}`, characterId, triggerType: 'memory', model: testModel.name,
+        provider: testModel.provider, status: 'completed', inputTokens: tokens, outputTokens: 0, startedAt: now }).run()
+    }
+    message('source')
+    const job = registerMemoryJob(db, conversationId, now)!
+    const tomorrow = new Date(now).setHours(24, 0, 0, 0)
+    expect(beginMemoryAttempt(db, job.id, testModel, now)).toEqual({ status: 'delayed', retryAt: tomorrow })
+    expect(db.select().from(memoryJobs).get()).toMatchObject({ status: 'pending', attempts: 0, availableAt: tomorrow })
+    expect(db.select().from(agentRuns).all()).toHaveLength(requests)
+    expect(beginMemoryAttempt(db, job.id, testModel, tomorrow).status).toBe('ready')
+  })
 })
 afterEach(() => companion.close())
 
