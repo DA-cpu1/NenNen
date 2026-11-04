@@ -1,16 +1,23 @@
-/** 在模型调用前按本地日历预占整理次数与 token，和实际调用使用同一份账本。 */
-import { randomUUID } from 'node:crypto'
+/** 按本地日历预占整理额度，并把用量结算与候选或退避状态一起写入 SQLite。 */
 import { and, count, eq, gte, lt, sql } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { z } from 'zod'
+import { finishAgentRun } from '../data/agent-runs'
 import { listCurrentMemories } from '../data/memories'
 import { readSetting } from '../data/settings'
 import { agentRuns, memoryJobs } from '../data/tables'
-import { prepareMemoryExtraction, type PreparedMemoryExtraction } from './extract-candidates'
-import { claimMemoryJob, readMemoryJobWork, type MemoryJobWork } from './memory-jobs'
+import { commitMemoryCandidates } from './commit-candidates'
+import { prepareMemoryExtraction, type ExtractionResult, type PreparedMemoryExtraction } from './extract-candidates'
+import { claimMemoryJob, readMemoryJobWork, type MemoryJob, type MemoryJobWork } from './memory-jobs'
 
 const defaults = { requests: 20, tokens: 40_000 }
 const limitsSchema = z.strictObject({ requests: z.number().int().positive(), tokens: z.number().int().positive() })
+const retryDelays = [30_000, 120_000, 600_000]
+
+/** 用任务号和尝试次数找到同一笔用量，进程重启后也能找到。 */
+function runIdFor(job: MemoryJob): string {
+  return `run-${job.id}-${job.attempts}`
+}
 
 /** 已准备并预占额度的模型尝试；runId 用于结束时结算同一笔账。 */
 export interface MemoryAttempt { work: MemoryJobWork; prepared: PreparedMemoryExtraction; runId: string }
@@ -53,12 +60,55 @@ export function beginMemoryAttempt(
     }
     const work = claimMemoryJob(tx, jobId, now)
     if (!work) return { status: 'unavailable' }
-    const runId = `run-${randomUUID()}`
+    const runId = runIdFor(work.job)
     tx.insert(agentRuns).values({
       id: runId, conversationId: work.job.conversationId, characterId: work.characterId, characterVersionId: null,
       triggerType: 'memory', model: model.name, provider: model.provider, status: 'running',
       inputTokens: prepared.estimatedInputTokens, outputTokens: prepared.outputLimit, usageEstimated: 1, startedAt: now,
     }).run()
     return { status: 'ready', attempt: { work, prepared, runId } }
+  })
+}
+
+/** 当前批次还有效时，给下一次尝试留出等待时间。耗尽重试后保留失败记录和原书签。 */
+function endFailedJob(db: BetterSQLite3Database, job: MemoryJob, now: number, errorCode: string): void {
+  const retryDelay = retryDelays[job.attempts - 1]
+  db.update(memoryJobs).set({ status: retryDelay === undefined ? 'failed' : 'pending',
+    availableAt: retryDelay === undefined ? job.availableAt : now + retryDelay,
+    leaseUntil: null, updatedAt: now, lastErrorCode: errorCode }).where(eq(memoryJobs.id, job.id)).run()
+}
+
+/**
+ * 结算一次整理。候选、书签和用量一起落库，重复通知不会再写候选或再记一次用量。
+ * @param db 后台数据库连接
+ * @param attempt 调用前领取的任务和运行号
+ * @param result 模型结果或固定错误码及用量
+ * @param now 结束时的毫秒时间戳
+ * @returns 无返回值，结果记录在 SQLite
+ */
+export function finishMemoryAttempt(db: BetterSQLite3Database, attempt: MemoryAttempt, result: ExtractionResult, now: number): void {
+  db.transaction((tx) => {
+    const run = tx.select().from(agentRuns).where(eq(agentRuns.id, attempt.runId)).get()
+    if (run?.status !== 'running') return
+    const job = tx.select().from(memoryJobs).where(eq(memoryJobs.id, attempt.work.job.id)).get()
+    const ownsJob = job?.status === 'running' && job.attempts === attempt.work.job.attempts
+    let errorCode: string | undefined
+    if (!ownsJob || !readMemoryJobWork(tx, job)) {
+      errorCode = 'E_MEMORY_STALE'
+      if (ownsJob) tx.update(memoryJobs).set({ status: 'stale', leaseUntil: null, updatedAt: now, lastErrorCode: errorCode })
+        .where(eq(memoryJobs.id, job.id)).run()
+    } else if (job.leaseUntil !== null && job.leaseUntil <= now) {
+      errorCode = 'E_MEMORY_TIMEOUT'
+    } else if (!result.ok) {
+      errorCode = result.code
+    } else {
+      const committed = commitMemoryCandidates(tx, attempt.work, result.candidates, attempt.prepared.previousRevisions, now)
+      if (committed.status === 'invalid_candidates') errorCode = 'E_INVALID_CANDIDATES'
+      if (committed.status === 'stale') errorCode = 'E_MEMORY_STALE'
+    }
+    if (ownsJob && errorCode && errorCode !== 'E_MEMORY_STALE') endFailedJob(tx, job, now, errorCode)
+    const cancelled = errorCode === 'E_CANCELLED' || errorCode === 'E_MEMORY_STALE'
+    finishAgentRun(tx, { runId: run.id, status: cancelled ? 'cancelled' : errorCode ? 'failed' : 'completed',
+      usage: result.usage, errorCode, now })
   })
 }

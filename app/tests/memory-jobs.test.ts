@@ -9,7 +9,7 @@ import { saveUserMessage } from '../src/data/messages'
 import { saveCharacterMemory } from '../src/data/memories'
 import { runMigrations } from '../src/data/migrations'
 import { agentRuns, conversations, memories, memoryJobs, memorySources, messages } from '../src/data/tables'
-import { beginMemoryAttempt } from '../src/jobs/memory-budget'
+import { beginMemoryAttempt, finishMemoryAttempt } from '../src/jobs/memory-budget'
 import { claimMemoryJob, readMemoryJobWork, registerMemoryJob } from '../src/jobs/memory-jobs'
 import { commitMemoryCandidates } from '../src/jobs/commit-candidates'
 
@@ -58,6 +58,53 @@ describe('整理模型预算', () => {
     expect(db.select().from(memoryJobs).get()).toMatchObject({ status: 'pending', attempts: 0, availableAt: tomorrow })
     expect(db.select().from(agentRuns).all()).toHaveLength(requests)
     expect(beginMemoryAttempt(db, job.id, testModel, tomorrow).status).toBe('ready')
+  })
+
+  it('候选与实际用量一起提交，重复通知不重复写入', () => {
+    const { db, sqlite } = companion
+    const source = message('source')
+    const job = registerMemoryJob(db, conversationId, now)!
+    const started = beginMemoryAttempt(db, job.id, testModel, now)
+    if (started.status !== 'ready') throw new Error('未领取任务')
+    const result = { ok: true as const, candidates: [{ ...candidate(source.id), action: 'add' as const, kind: 'fact' as const }],
+      usage: { inputTokens: 20, outputTokens: 5, estimated: false } }
+    // 模拟账本写失败，之前写入的记忆、来源和书签也应撤回。
+    sqlite.exec(`CREATE TEMP TRIGGER refuse_run_update BEFORE UPDATE ON agent_runs
+      BEGIN SELECT RAISE(ABORT, 'test only'); END`)
+    expect(() => finishMemoryAttempt(db, started.attempt, result, now + 1)).toThrow()
+    expect(db.select().from(memories).all()).toHaveLength(0)
+    expect(db.select().from(conversations).get()?.lastProcessedSeq).toBe(0)
+    expect(db.select().from(memoryJobs).get()?.status).toBe('running')
+    sqlite.exec('DROP TRIGGER refuse_run_update')
+    finishMemoryAttempt(db, started.attempt, result, now + 2)
+    finishMemoryAttempt(db, started.attempt, result, now + 3)
+    expect(db.select().from(agentRuns).all()).toMatchObject([{
+      status: 'completed', inputTokens: 20, outputTokens: 5, usageEstimated: 0, finishedAt: now + 2,
+    }])
+    expect(db.select().from(memorySources).all()).toMatchObject([{ messageId: source.id }])
+  })
+
+  it('三次退避均保留未知用量的估算，耗尽重试后同一批停止', () => {
+    const { db } = companion
+    saveUserMessage(db, { requestId: 'first', conversationId, content: '我在学 TypeScript', now })
+    saveUserMessage(db, { requestId: 'second', conversationId, content: '每晚练习半小时', now })
+    // 用两条短消息触发空闲整理，避免长批次先用完预算而遮住第三次退避。
+    let time = now + 300_000
+    const job = registerMemoryJob(db, conversationId, time)!
+    for (const delay of [30_000, 120_000, 600_000, 0]) {
+      const started = beginMemoryAttempt(db, job.id, testModel, time)
+      if (started.status !== 'ready') throw new Error('未领取任务')
+      const { attempt } = started
+      finishMemoryAttempt(db, attempt, { ok: false, code: 'E_MEMORY_MODEL_FAILED', usage: {
+        inputTokens: attempt.prepared.estimatedInputTokens, outputTokens: attempt.prepared.outputLimit, estimated: true,
+      } }, time)
+      expect(beginMemoryAttempt(db, job.id, testModel, time + delay - 1)).toEqual({ status: 'unavailable' })
+      time += delay
+    }
+    expect(db.select().from(agentRuns).all()).toHaveLength(4)
+    expect(db.select().from(agentRuns).all().every((run) => run.usageEstimated === 1 && run.outputTokens === 2_048)).toBe(true)
+    expect(db.select().from(memoryJobs).get()).toMatchObject({ status: 'failed', attempts: 4, leaseUntil: null })
+    expect(registerMemoryJob(db, conversationId, time + 1)).toBeNull()
   })
 })
 afterEach(() => companion.close())
