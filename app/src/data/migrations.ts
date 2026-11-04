@@ -253,6 +253,19 @@ CREATE INDEX jobs_ready ON memory_jobs(status, available_at);
 CREATE UNIQUE INDEX one_active_memory_job ON memory_jobs(conversation_id) WHERE status IN ('pending','running');
 `,
   },
+  {
+    version: 10,
+    summary: '记录原话为什么不再供模型使用（T08）',
+    sql: `
+CREATE TABLE context_exclusions (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  reason TEXT NOT NULL CHECK (reason IN ('forgotten','source_removed','user_excluded')),
+  created_at INTEGER NOT NULL,
+  UNIQUE (message_id, reason)
+);
+`,
+  },
 ]
 
 /** 给一份 SQL 算"指纹"（sha256）：同样的内容永远得到同一串字符，

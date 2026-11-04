@@ -338,7 +338,7 @@ export const memories = sqliteTable('memories', {
 /** 「记忆来源」表：一条记忆和它依据的原始消息的对照——只存两个 ID，
  *  不复制原文片段（原文永远以 messages 为准，一处修改全局生效）。
  *  忘记某条记忆时，靠这张表反查「哪些消息是它的依据」并排除出模型
- *  上下文（05 §6，具体排除动作是 T08 的活）。(memory_id, message_id)
+ *  上下文（05 §6）。(memory_id, message_id)
  *  是复合主键：两列合起来当主键，同一依据不重复登记 */
 export const memorySources = sqliteTable(
   'memory_sources',
@@ -356,6 +356,14 @@ export const memorySources = sqliteTable(
   // 记忆），但两列的组合全表唯一——第二次插完全相同的一对当场报错
   (t) => [primaryKey({ columns: [t.memoryId, t.messageId] })],
 )
+
+/** 原话在聊天列表仍可见时，这张表只记录停用原因，不再存一份原文。 */
+export const contextExclusions = sqliteTable('context_exclusions', {
+  id: text('id').primaryKey(),
+  messageId: text('message_id').notNull().references(() => messages.id, { onDelete: 'cascade' }),
+  reason: text('reason', { enum: ['forgotten', 'source_removed', 'user_excluded'] }).notNull(),
+  createdAt: integer('created_at').notNull(),
+})
 
 /** 整理任务只存原话范围和三个版本。正文仍从 messages 读，避免多存一份。 */
 export const memoryJobs = sqliteTable('memory_jobs', {

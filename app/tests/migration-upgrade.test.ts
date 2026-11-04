@@ -1,6 +1,6 @@
 /**
  * 最小旧库升级样例（T04 步骤⑧创建，05 §7；T05① 扩展到 v6，T07① 扩展到
- * v8，⑧扩展到 v9）：证明「老用户升级新版」这条路真的能走通。做法是演一遍历史——
+ * v8，⑧扩展到 v9，T08 扩展到 v10）：证明「老用户升级新版」这条路真的能走通。做法是演一遍历史——
  * 第一幕用「只含第一张装修单」的清单造出 v1 旧库（这正是当年 v1 版
  * 程序留下的库的样子），塞一行老数据、关库（旧程序退出）；
  * 第二幕重新打开（新版程序启动），用完整清单升级，检查：
@@ -60,15 +60,15 @@ describe('最小旧库升级样例（T04 步骤⑧）', () => {
     ).toEqual({ n: 0 })
     old.close() // 旧版程序退出，数据落盘
 
-    // ── 第二幕：新版程序启动，翻记录本补做 v2～v9 ──
+    // ── 第二幕：新版程序启动，翻记录本补做 v2～v10 ──
     const upgraded = openCompanionDatabase(dbPath)
     runMigrations(upgraded.sqlite)
 
-    // 记录本登记齐当前全部 9 张单
+    // 记录本登记齐当前全部 10 张单
     const records = upgraded.sqlite
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as Array<{ version: number }>
-    expect(records.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    expect(records.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
 
     // 旧数据一行不丢：老用户的版本号还是 3，没有被初始化逻辑重置成 0
     const state = upgraded.db.select().from(appState).where(eq(appState.id, 1)).get()
@@ -317,13 +317,13 @@ INSERT INTO no_such_table VALUES (1);
     const state = db.db.select().from(appState).where(eq(appState.id, 1)).get()
     expect(state?.globalMemoryEpoch).toBe(5)
 
-    // 4) 恢复：换回正确清单重跑，v2～v9 正常补齐——坏单子
+    // 4) 恢复：换回正确清单重跑，v2～v10 正常补齐——坏单子
     //    没有把升级路堵死
     runMigrations(db.sqlite)
     const fixed = db.sqlite
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as Array<{ version: number }>
-    expect(fixed.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    expect(fixed.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
 
     db.close()
   })
