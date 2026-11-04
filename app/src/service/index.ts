@@ -3,7 +3,8 @@
  * 机密只通过 stdin 在内存间交付；stdout 只报 READY 端口，stderr 只报固定错误码。
  * 数据库不是机密（只是一个文件位置）：路径经命令行参数 --db 传入，在这里打开。
  */
-import { basename, resolve } from 'node:path'
+import { realpath } from 'node:fs/promises'
+import { basename, dirname, join, resolve } from 'node:path'
 import { startBackendServer, type BackendOptions, type BackendServer } from './server'
 import { startEve, type EveHandle } from '../agent/eve-process'
 import { cleanupEveRuntimeRoot } from '../agent/eve-runtime'
@@ -158,7 +159,10 @@ function main(): void {
     const dbPath = dbPathFromArgs(process.argv.slice(2))
     if (dbPath) {
       // 每个数据库有自己的运行文件。启动锁保证没有另一套后台正在使用这个目录。
-      runtimeRoot = `${resolve(dbPath)}.eve`
+      // Windows 临时路径可能用短名。先展开数据库父目录的真实路径，再拼运行根目录；
+      // 不能直接展开运行根目录，否则别人换成链接时会绕开删除前的保护。
+      const absoluteDbPath = resolve(dbPath)
+      runtimeRoot = join(await realpath(dirname(absoluteDbPath)), `${basename(absoluteDbPath)}.eve`)
       await cleanupEveRuntimeRoot(runtimeRoot)
       database = openCompanionDatabase(dbPath)
       // 迁移抛错不在这里接：让它顺着 start 的 catch 统一走 E_START 退出
@@ -182,7 +186,13 @@ function main(): void {
       memoryManagement = createMemoryManagement(database.db, (ids) => {
         chatTurns.invalidateContexts(ids)
         memoryWorker?.invalidate(ids)
-      }, () => queueRuntimeWork(rebuildRuntimeContext))
+      }, () => queueRuntimeWork(rebuildRuntimeContext).catch((error: unknown) => {
+        const code = error instanceof Error ? error.message : ''
+        const allowed = new Set(['E_EVE_RUNTIME_PATH', 'E_EVE_RUNTIME_CLEANUP_FAILED', 'E_DB_CHECKPOINT_FAILED',
+          'E_EVE_BUILD_MISSING', 'E_EVE_PORT', 'E_EVE_EXIT', 'E_EVE_START_TIMEOUT'])
+        process.stderr.write(`${allowed.has(code) ? code : 'E_MEMORY_CLEANUP_FAILED'}\n`)
+        throw error
+      }))
       options.memoryManagement = memoryManagement
       options.db = {
         readEpoch,
