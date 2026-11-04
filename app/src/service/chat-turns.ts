@@ -84,6 +84,8 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     completed: Promise<void>
     finish: () => void
     toolSession?: ActiveToolSession & { executions: number }
+    /** 已落库的操作回执，与角色回复是否完成分开。 */
+    memoryStatus?: 'memory-saved' | 'memory-already-saved'
   }
   // 会话编号用来定位停止对象，角色编号用来挡下正式/试聊之间的并发。
   // 两份登记一起建立、一起清理；挡下请求时还没有保存新的用户消息。
@@ -171,8 +173,14 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
         yield { type: 'saved', userMessageId, conversationId }
         const runner = runStart(turn)
         let terminalEvent: TurnEvent | undefined
+        let announcedMemoryStatus: ActiveTurn['memoryStatus']
         for (;;) {
           const step = await runner.next()
+          // 即使工具后的模型调用失败，也在终态前发出已落库的真实回执。
+          if (turn.memoryStatus && turn.memoryStatus !== announcedMemoryStatus) {
+            announcedMemoryStatus = turn.memoryStatus
+            yield { type: 'tool-status', status: announcedMemoryStatus }
+          }
           if (step.done) {
             if (step.value.pendingWrite) pendingWrites.set(userMessageId, step.value.pendingWrite)
             else pendingWrites.delete(userMessageId)
@@ -262,7 +270,11 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
           if (!session.rememberAllowed) {
             return { ok: false, code: 'SOURCE_NOT_ALLOWED', message: '这轮没有立即记忆请求。', retryable: false }
           }
-          return rememberExplicit(db, { conversationId, userMessageId: reply.replyToId }, request.input, Date.now())
+          const result = rememberExplicit(db, { conversationId, userMessageId: reply.replyToId }, request.input, Date.now())
+          if (result.ok && 'status' in result && turn.memoryStatus !== 'memory-saved') {
+            turn.memoryStatus = result.status === 'saved' ? 'memory-saved' : 'memory-already-saved'
+          }
+          return result
         }
         const current = listCurrentMemories(db, conversation.characterId, Date.now())
         return { ok: true, memories: searchMemories(current, request.input.query, request.input.limit) }

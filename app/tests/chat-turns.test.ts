@@ -176,8 +176,8 @@ describe('聊天回合服务（T06⑪c1）', () => {
     expect(receipt.status).toBe('committed')
     expect(receipt.resultJson).not.toContain('阿达')
     turns.cancelTurn(conversationId)
-    await reading
-    await collect(formal.events)
+    expect((await reading).value).toEqual({ type: 'tool-status', status: 'memory-saved' })
+    expect(await collect(formal.events)).toEqual([{ type: 'cancelled' }])
     expect(db.select().from(memories).all()).toHaveLength(1)
   })
   it('退出等待已开始回合取消落库，停止后拒绝正式和试聊新请求，重复stop复用', async () => {

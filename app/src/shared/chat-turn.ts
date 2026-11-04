@@ -24,6 +24,7 @@ export type ChatTurnRequest = z.infer<typeof chatTurnRequestSchema>
 export type SseTurnEvent =
   | { type: 'saved'; userMessageId: string; conversationId: string }
   | { type: 'text'; delta: string }
+  | { type: 'tool-status'; status: 'memory-saved' | 'memory-already-saved' }
   | { type: 'done'; replyId: string }
   | { type: 'cancelled' }
   | { type: 'failed'; code: string }

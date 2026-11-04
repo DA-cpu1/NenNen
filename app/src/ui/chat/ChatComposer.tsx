@@ -55,6 +55,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
   const [errorCode, setErrorCode] = useState<string | null>(null)
   const [waitingHint, setWaitingHint] = useState(false)
   const [retry, setRetry] = useState<RetryPayload | null>(null)
+  const [memoryReceipt, setMemoryReceipt] = useState<{ requestId: string; text: string } | null>(null)
   const active = useRef<RetryPayload | null>(null)
   const conversationId = useRef<string | null>(null)
   const phaseRef = useRef<TurnPhase>('idle')
@@ -141,6 +142,10 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
         callbacks.current.onTurnSettled()
         // 先按停止再收到首帧时，等拿到真实会话编号再请求取消。
         if (phaseRef.current === 'stopping') void cancelKnownTurn()
+      } else if (frame.type === 'tool-status') {
+        // 这是后台确认的数据库回执，失败或停止的角色回复不能撤销它。
+        setMemoryReceipt({ requestId: message.requestId,
+          text: frame.status === 'memory-saved' ? '记忆已保存' : '这条记忆已保存过' })
       } else if (frame.type === 'done') settleTurn('completed', null, true)
       else if (frame.type === 'cancelled') settleTurn('cancelled', null, true)
       else settleTurn('failed', frame.code, true)
@@ -177,6 +182,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
     setStreamText(retainedText)
     setErrorCode(null)
     setRetry(null)
+    setMemoryReceipt((receipt) => receipt?.requestId === payload.requestId ? receipt : null)
     setWaitingHint(false)
     clearHintTimer()
     hintTimer.current = window.setTimeout(() => setWaitingHint(true), 30_000)
@@ -227,6 +233,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
       {streamText ? <p className={styles.liveText}>{streamText}</p>
         : <p className={styles.hint}>{phase === 'stopping' ? '正在停止…' : waitingHint ? '对方还在思考，稍等一下…' : '正在输入…'}</p>}
     </div>}
+    {memoryReceipt ? <p className={styles.hint} role="status">{memoryReceipt.text}</p> : null}
     {(errorCode || retry) && <div className={styles.notice}>
       {errorCode && <span role="alert" className={styles.error}>
         {errorCode === 'CANCEL_FAILED' ? '停止请求未确认，可再次停止' :

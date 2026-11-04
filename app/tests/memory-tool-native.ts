@@ -96,8 +96,10 @@ async function main(): Promise<void> {
     const write = turns.startTurn({ conversationId, requestId: 'remember', content: '以后叫我阿达。' })
     let visible = ''
     let writeEnd = ''
+    let toolStatus = ''
     for await (const frame of write.events) {
       if (frame.type === 'text') visible += frame.delta
+      if (frame.type === 'tool-status') toolStatus = frame.status
       writeEnd = frame.type
     }
     assert.equal(writeEnd, 'done')
@@ -107,6 +109,7 @@ async function main(): Promise<void> {
     assert(writeOutput && JSON.stringify(writeOutput.content).includes('saved'))
     assert.equal(db.select().from(memories).where(eq(memories.memoryKey, 'preferred_name')).all().length, 1)
     assert.equal(visible, '固定回复')
+    assert.equal(toolStatus, 'memory-saved')
     process.stdout.write(JSON.stringify({ formalRequests: 4, toolResults: 2, previewRequests: 1,
       previewMemoryTools: 0, memoriesSaved: 1, interimTextDisplayed: 0 }) + '\n')
   } finally {
