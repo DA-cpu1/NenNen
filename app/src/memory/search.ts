@@ -5,13 +5,16 @@ import type { Memory } from '../data/memories'
 const segmenter = new Intl.Segmenter('zh', { granularity: 'word' })
 const commonWords = new Set([
   '什么', '怎么', '如何', '哪个', '哪些', '有没有', '是否', '之前', '以前', '最近', '现在',
-  '目前', '时候', '记得', '知道', '那个', '这个', '我们', '你们', '他们', '用户', '希望',
+  '目前', '时候', '记得', '知道', '那个', '这个', '我们', '你们', '他们', '用户', '希望', '打算',
 ])
+const commonHan = new Set('的一是了我你他她它们个这那有在着也就都吗呢吧很还最不没会可想说能要为来去给时用从和于对得地过后前什么怎样哪里多好叫')
 const resultLimit = 8
 const estimatedTokenLimit = 1_500
 
 /** 检索结果只带回答所需内容和来源属性，原话和数据库内部状态留在本地。 */
 export type MemoryMatch = Pick<Memory, 'id' | 'content' | 'scope' | 'origin' | 'validFrom' | 'expiresAt' | 'revision'>
+
+interface RankedMemory { memory: Memory; score: number }
 
 /** 中文原文常没有空格。让系统词典切词，统一全角和大小写，再丢掉常见问法。 */
 function keywords(text: string): Set<string> {
@@ -23,8 +26,50 @@ function keywords(text: string): Set<string> {
   return words
 }
 
+/** 记录连续汉字中的相邻字对和单字，保留标点隔开的边界。 */
+function hanEvidence(text: string): { characters: Set<string>; pairs: Set<string> } {
+  const characters = new Set<string>()
+  const pairs = new Set<string>()
+  for (const [run] of text.normalize('NFKC').matchAll(/\p{Script=Han}+/gu)) {
+    let previous = ''
+    for (const character of run) {
+      if (commonHan.has(character)) {
+        previous = ''
+        continue
+      }
+      characters.add(character)
+      if (previous) pairs.add(previous + character)
+      previous = character
+    }
+  }
+  return { characters, pairs }
+}
+
 /**
- * 只比较分词后完全相同的关键词；命中多的优先，同分时优先当前有效时间较新的记忆。
+ * 分词全无命中时比较原字，补回「咖啡」与「咖啡店」这类边界差异。
+ * 一个散落的字很容易撞上无关记忆，只有两个不同的字都只出现在同一条记忆里时才计分。
+ */
+function matchHan(memories: readonly Memory[], query: string): RankedMemory[] {
+  const queryEvidence = hanEvidence(query)
+  const occurrences = new Map<string, number>()
+  const rows = memories.map((memory) => {
+    const evidence = hanEvidence(memory.content)
+    for (const character of evidence.characters) {
+      occurrences.set(character, (occurrences.get(character) ?? 0) + 1)
+    }
+    return { memory, ...evidence }
+  })
+  return rows.flatMap(({ memory, characters, pairs }) => {
+    const pairHits = [...queryEvidence.pairs].filter((pair) => pairs.has(pair)).length
+    const rareHits = [...queryEvidence.characters].filter((character) =>
+      characters.has(character) && occurrences.get(character) === 1).length
+    const score = pairHits * 2 + (rareHits >= 2 ? rareHits : 0)
+    return score > 0 ? [{ memory, score }] : []
+  })
+}
+
+/**
+ * 优先比较精确词，完全没命中再比原字；同分时优先当前有效时间较新的记忆。
  * @param memories 由 SQLite 先按当前角色、共享范围和时效过滤后的记忆
  * @param query 用户提问或工具给出的搜索词
  * @param limit 最多返回几条，不能超过产品上限 8
@@ -32,9 +77,9 @@ function keywords(text: string): Set<string> {
  */
 export function searchMemories(memories: readonly Memory[], query: string, limit = resultLimit): MemoryMatch[] {
   const queryWords = keywords(query)
-  if (queryWords.size === 0 || !Number.isInteger(limit) || limit < 1) return []
+  if (!Number.isInteger(limit) || limit < 1) return []
 
-  const matches = memories.flatMap((memory) => {
+  const exactMatches = queryWords.size === 0 ? [] : memories.flatMap((memory) => {
     const words = keywords(memory.content)
     let score = 0
     for (const word of queryWords) {
@@ -42,6 +87,7 @@ export function searchMemories(memories: readonly Memory[], query: string, limit
     }
     return score === 0 ? [] : [{ memory, score }]
   })
+  const matches = exactMatches.length ? exactMatches : matchHan(memories, query)
   matches.sort((a, b) => b.score - a.score || b.memory.validFrom - a.memory.validFrom ||
     a.memory.id.localeCompare(b.memory.id))
 
