@@ -11,8 +11,8 @@ import styles from './ChatPage.module.css'
 import ChatHistory from './ChatHistory'
 import ChatComposer from './ChatComposer'
 
-/** 聊天页组件：展示角色名、立绘和历史，输入区负责发送与实时回复。 */
-export default function ChatPage({ character, loadError, reload }: CharacterProps) {
+/** 聊天页展示立绘与历史；记忆页修改原话后也要重读，输入区的草稿仍留在原处。 */
+export default function ChatPage({ character, loadError, reload, historyVersion }: CharacterProps & { historyVersion: number }) {
   // 立绘路径 → app-asset URL；没设图片时为 null，显示占位块
   const portraitUrl = assetUrl(character?.portraitImagePath)
   const displayName = character?.name ?? ''
@@ -39,7 +39,7 @@ export default function ChatPage({ character, loadError, reload }: CharacterProp
           <p>角色资料读取失败（{loadError}）</p>
           <button type="button" onClick={() => void reload()}>重试读取角色</button>
         </div> : <ChatHistory key={character?.characterId ?? 'loading'} characterId={character?.characterId}
-          displayName={displayName} refreshKey={historyRefresh} />}
+          displayName={displayName} refreshKey={historyRefresh + historyVersion} />}
         <ChatComposer enabled={!!character && !loadError}
           onTurnSettled={() => setHistoryRefresh((value) => value + 1)} />
       </section>

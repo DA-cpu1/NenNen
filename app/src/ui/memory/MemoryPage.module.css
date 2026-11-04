@@ -1,0 +1,44 @@
+/* 手记页延续聊天窗的暖白底和淡紫主题。独立滚动区让标题和筛选在窄窗口也留在上方。 */
+.page { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.header { padding: 25px clamp(20px, 4vw, 38px) 21px; border-bottom: 1px solid var(--border); background: var(--accent-soft-weak); }
+.eyebrow { color: #60528a; font-size: 12px; letter-spacing: .12em; }
+.header h1 { margin: 6px 0 7px; font-size: 25px; }
+.header p, .empty p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.filters { display: flex; align-items: center; gap: 14px; padding: 0 clamp(20px, 4vw, 38px); border-bottom: 1px solid var(--border); }
+.filters button { padding: 11px 2px 10px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
+.filters button[aria-pressed='true'] { color: var(--ink); border-bottom-color: #7560b1; font-weight: 600; }
+.filters span { margin-left: 4px; font-variant-numeric: tabular-nums; }
+.filters .refresh { margin-left: auto; }
+.scroll { min-height: 0; flex: 1; overflow: auto; padding: 18px clamp(20px, 4vw, 38px) 28px; }
+.list { margin: 0; padding: 0; list-style: none; }
+.card { padding: 15px 18px; margin-bottom: 10px; border: 1px solid var(--border); border-left: 3px solid #b9a9dc; border-radius: 10px; background: var(--panel); }
+.meta, .cardFooter, .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.meta { color: var(--muted); font-size: 12px; }
+.meta time { margin-left: auto; }
+.kind { padding: 3px 8px; background: var(--accent-soft); color: var(--ink); border-radius: 5px; font-weight: 600; }
+.content { margin: 12px 0; font-size: 15px; line-height: 1.7; }
+.content, .target, .sources p { overflow-wrap: anywhere; white-space: pre-wrap; }
+.date { color: var(--muted); font-size: 12px; }
+.cardFooter { align-items: flex-start; justify-content: space-between; }
+.sources { flex: 1 1 250px; min-width: 0; color: var(--muted); font-size: 12px; }
+.sources summary { padding: 6px 0; cursor: pointer; }
+.sources blockquote { margin: 6px 0; padding: 8px 10px; border-left: 2px solid var(--border); background: var(--bg); }
+.sources p { margin: 0 0 5px; color: var(--ink); line-height: 1.6; }
+.button, .primary, .danger { border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px; background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+.primary { background: #7560b1; border-color: #7560b1; color: white; }
+.danger { background: #fff2ed; border-color: #f0c7bc; color: #8b382e; }
+.button:hover:not(:disabled) { background: var(--accent-soft-weak); }
+.primary:hover:not(:disabled), .danger:hover:not(:disabled) { filter: brightness(.92); }
+.button:disabled, .primary:disabled, .danger:disabled, .filters button:disabled { opacity: .5; cursor: default; }
+.notice, .error, .cleanup { margin: 0 0 12px; padding: 10px 13px; border-radius: 7px; background: var(--accent-soft); font-size: 13px; line-height: 1.6; }
+.error { background: #fff2ed; color: #8b382e; }
+.cleanup { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.cleanup p { margin: 0; }
+.empty { margin: 16px 0; border: 1px dashed var(--border); border-radius: 10px; padding: 24px; color: var(--muted); }
+.empty h2 { margin: 0 0 7px; color: var(--ink); font-size: 15px; }
+.target { padding: 9px 12px; border-left: 2px solid #b9a9dc; background: var(--accent-soft-weak); }
+.edit { display: grid; gap: 8px; font-size: 13px; }
+.edit textarea { resize: vertical; border: 1px solid var(--border); border-radius: 7px; padding: 9px; color: var(--ink); line-height: 1.6; }
+.filters button:focus-visible, .sources summary:focus-visible, .button:focus-visible, .primary:focus-visible, .danger:focus-visible {
+  outline: 2px solid #7560b1; outline-offset: 2px;
+}

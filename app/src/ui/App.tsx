@@ -1,19 +1,20 @@
 /**
- * 聊天窗的「壳」：左边一条窄导航（聊天 / 角色设置，设计稿 full-ui-v1），
+ * 聊天窗的「壳」：左边一条窄导航（聊天 / 记忆 / 角色设置），
  * 右边是当前页。聊天页切到设置后仍保留，避免丢掉未保存文字和重试编号。
  *
- * 角色概览（名字、图片路径、人设版本）在这里统一取一次、传给两页：
+ * 角色概览（名字、图片路径、人设版本）在这里统一取一次、传给各页：
  * 设置页保存后调 reload() 刷新，聊天页跟着换新名字/新立绘——
  * 数据一份来源，两页不会各拿各的旧账。
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { CharacterOverview } from '../shared/data-types'
 import ChatPage from './chat/ChatPage'
+import MemoryPage from './memory/MemoryPage'
 import SettingsPage from './settings/SettingsPage'
 import styles from './App.module.css'
 
-/** 页面标识：聊天页 / 角色设置页 */
-export type PageId = 'chat' | 'settings'
+/** 页面标识：聊天页 / 记忆页 / 角色设置页 */
+export type PageId = 'chat' | 'memory' | 'settings'
 
 /** 传给两页的角色概览与刷新函数（设置页保存成功后会调它） */
 export interface CharacterProps {
@@ -30,6 +31,7 @@ export default function App() {
   const [leaveTarget, setLeaveTarget] = useState<PageId | null>(null)
   const [character, setCharacter] = useState<CharacterOverview | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [historyVersion, setHistoryVersion] = useState(0)
 
   /** 取角色概览（经 preload 的 appApi 通道，主进程代查后台） */
   const reload = useCallback(async () => {
@@ -87,10 +89,11 @@ export default function App() {
 
   return (
     <div className={styles.shell}>
-      <nav className={styles.rail}>
+      <nav className={styles.rail} aria-label="应用页面">
         <button
           type="button"
           className={page === 'chat' ? styles.railItemActive : styles.railItem}
+          aria-current={page === 'chat' ? 'page' : undefined}
           onClick={() => navigate('chat')}
         >
           {/* 简笔图标：一个聊天气泡 */}
@@ -99,9 +102,17 @@ export default function App() {
           </svg>
           <span>聊天</span>
         </button>
+        <button type="button" className={page === 'memory' ? styles.railItemActive : styles.railItem}
+          aria-current={page === 'memory' ? 'page' : undefined} onClick={() => navigate('memory')}>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 3h13v18H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm1 2v14h10V5zm2 3h6v2H9zm0 4h6v2H9z" />
+          </svg>
+          <span>记忆</span>
+        </button>
         <button
           type="button"
           className={page === 'settings' ? styles.railItemActive : styles.railItem}
+          aria-current={page === 'settings' ? 'page' : undefined}
           onClick={() => navigate('settings')}
         >
           {/* 简笔图标：一个齿轮（简化为圆+齿） */}
@@ -113,7 +124,9 @@ export default function App() {
       </nav>
       <main className={styles.body}>
         {/* 隐藏只改变可见性，不卸载输入区；返回聊天时仍能重试保存原结果。 */}
-        <div className={styles.pageSlot} hidden={page !== 'chat'}><ChatPage {...shared} /></div>
+        <div className={styles.pageSlot} hidden={page !== 'chat'}><ChatPage {...shared} historyVersion={historyVersion} /></div>
+        {page === 'memory' ? <MemoryPage characterId={character?.characterId} characterName={character?.name}
+          onHistoryChanged={() => setHistoryVersion((version) => version + 1)} /> : null}
         {page === 'settings' && <SettingsPage {...shared}
           leaving={leaveTarget !== null} onLeave={completeLeave} onStay={cancelLeave} />}
       </main>

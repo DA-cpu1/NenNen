@@ -117,6 +117,7 @@ export default function ChatHistory({ characterId, displayName, refreshKey }: Ch
           </div>
           <p className={styles.text}>{message.content ||
             (message.status === 'pending' || message.status === 'streaming' ? '等待回复…' : '未收到回复文字')}</p>
+          {message.excludedFromContext && <p className={styles.incomplete}>已停止用作聊天背景</p>}
           {message.status !== 'completed' && <p className={styles.incomplete}>
             未完成 · {message.status === 'failed' ? '回复失败' : message.status === 'cancelled' ? '已取消' : '等待或生成中'}
           </p>}
