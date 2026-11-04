@@ -32,6 +32,9 @@ export interface ManagedMemory {
   sources: Array<{ id: string; content: string; createdAt: number; excluded: boolean }>
 }
 
+/** 管理页重开时仍能发现清理失败，并重试本地收尾。 */
+export interface MemoryManagementOverview { memories: ManagedMemory[]; cleanupPending: boolean }
+
 /** 只用编号和计数记录回执，重放操作时不会从回执读回已忘记正文。 */
 export const memoryChangeReceiptSchema = z.strictObject({
   action: z.enum(['correct', 'forget']), memoryId: z.string(), revision: z.number().int().positive(),

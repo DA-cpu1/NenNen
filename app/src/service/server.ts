@@ -24,6 +24,7 @@ import {
 } from '../shared/character-schema'
 import { personaFromSections, personaSectionsAllEmpty } from '../shared/persona-format'
 import { memoryToolPath, memoryToolRequestSchema, type MemoryToolRequest, type MemoryToolResult } from '../shared/memory-tool'
+import { memoryChangeSchema, type MemoryChange, type MemoryChangeReceipt, type MemoryManagementOverview } from '../shared/memory-management'
 import { chatHistoryQuerySchema, type ChatHistoryPage, type ChatHistoryQuery } from '../shared/chat-history'
 import {
   chatTurnCancelSchema, chatTurnRequestSchema, previewTurnRequestSchema,
@@ -78,8 +79,14 @@ export interface BackendOptions {
   }
   /** 请求取消指定会话的活动回合；没有活动回合返回 false。 */
   cancelChatTurn?: (conversationId: string) => boolean
-  /** eve 专用入口使用当前子进程令牌，主进程的令牌不能调用。 */
-  memoryTools?: { getToken: () => string | undefined; execute: (request: MemoryToolRequest) => MemoryToolResult }
+  /** eve 专用入口，允许仍在正常收尾的旧进程完成无关角色的回合。 */
+  memoryTools?: { getTokens: () => readonly string[]; execute: (request: MemoryToolRequest) => MemoryToolResult }
+  /** 正式角色的记忆管理，只能由通过主进程令牌检查的请求访问。 */
+  memoryManagement?: {
+    list: () => MemoryManagementOverview
+    change: (change: MemoryChange) => Promise<MemoryChangeReceipt>
+    retryCleanup: () => Promise<void>
+  }
   /** 数据库自测读写：由后台入口提供（打开的真库）；测试注入假函数。
    *  为什么做成注入函数而不是直接 import 数据库代码：总机这层只管
    *  「接电话、对暗号、按规则回话」，库文件从哪来、怎么开是入口的事；
@@ -187,6 +194,17 @@ const TURN_ERROR_MAPPING: Record<string, [number, string]> = {
 function sendTurnError(res: ServerResponse, code: string): void {
   const [status, wireCode] = TURN_ERROR_MAPPING[code] ?? [500, 'INTERNAL']
   sendJson(res, status, { ok: false, code: wireCode })
+}
+
+/** 记忆管理响应只给约定的错误码，SQLite 或文件错误的原文留在后台。 */
+function sendMemoryError(res: ServerResponse, error: unknown): void {
+  const statusByCode = new Map([
+    ['NOT_FOUND', 404], ['STALE_REVISION', 409], ['INVALID_INPUT', 400], ['SOURCE_NOT_ALLOWED', 403],
+    ['MEMORY_CLEANUP_PENDING', 409], ['MEMORY_CLEANUP_FAILED', 503],
+  ])
+  const code = error instanceof Error ? error.message : ''
+  const status = statusByCode.get(code)
+  sendJson(res, status ?? 503, { ok: false, code: status ? code : 'STORAGE_UNAVAILABLE' })
 }
 
 /**
@@ -330,8 +348,7 @@ async function handleRequest(
 ): Promise<void> {
   if (req.url === memoryToolPath) {
     const tools = options.memoryTools
-    const toolToken = tools?.getToken()
-    if (!toolToken || !isAuthorized(req, toolToken)) {
+    if (!tools || !tools.getTokens().some((toolToken) => isAuthorized(req, toolToken))) {
       sendJson(res, 401, { ok: false, code: 'UNAUTHORIZED' })
       return
     }
@@ -340,8 +357,8 @@ async function handleRequest(
       return
     }
     const body = await readJsonBody(req).catch(() => null)
-    // 读请求体要等待。若这期间换了 eve 进程，旧令牌已经失效。
-    if (tools?.getToken() !== toolToken) {
+    // 读请求体要等待。若这期间旧 eve 已退场，其令牌也不能再使用。
+    if (!tools.getTokens().some((toolToken) => isAuthorized(req, toolToken))) {
       sendJson(res, 401, { ok: false, code: 'UNAUTHORIZED' })
       return
     }
@@ -368,6 +385,24 @@ async function handleRequest(
   }
   if (shutdownSignal.aborted) {
     sendJson(res, 503, { ok: false, code: 'BACKEND_STOPPING' })
+    return
+  }
+  if (req.url === '/memory' || req.url === '/memory/cleanup') {
+    const management = options.memoryManagement
+    if (!management) { sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' }); return }
+    try {
+      if (req.method === 'GET' && req.url === '/memory') {
+        sendJson(res, 200, { ok: true, ...management.list() })
+      } else if (req.method === 'POST' && req.url === '/memory') {
+        const parsed = memoryChangeSchema.safeParse(await readJsonBody(req).catch(() => null))
+        if (!parsed.success) throw new Error('INVALID_INPUT')
+        if (shutdownSignal.aborted) { sendJson(res, 503, { ok: false, code: 'BACKEND_STOPPING' }); return }
+        sendJson(res, 200, { ok: true, receipt: await management.change(parsed.data) })
+      } else if (req.method === 'POST' && req.url === '/memory/cleanup') {
+        await management.retryCleanup()
+        sendJson(res, 200, { ok: true })
+      } else sendJson(res, 405, { ok: false, code: 'INVALID_INPUT' })
+    } catch (error) { sendMemoryError(res, error) }
     return
   }
   // 基础健康检查：主进程开机后拿它自测通道

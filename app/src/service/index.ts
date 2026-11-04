@@ -24,6 +24,7 @@ import {
 import { getFormalConversation } from '../data/conversations'
 import { readChatHistory } from '../data/chat-history'
 import { createChatTurnService } from './chat-turns'
+import { createMemoryManagement } from './memory-management'
 import { MODEL_CONTEXT_WINDOW_TOKENS, MODEL_OUTPUT_RESERVE_TOKENS } from '../shared/model-limits'
 import { recoverInterruptedTurns } from '../agent/turn-runner'
 import { RIKKA_SAMPLE } from '../shared/character-sample'
@@ -63,6 +64,16 @@ function main(): void {
   let memoryWorker: ReturnType<typeof createMemoryWorker> | undefined
   let memoryModel: ReturnType<typeof createCompanionLanguageModel> | undefined
   let runtimeRoot: string | undefined
+  let memoryManagement: ReturnType<typeof createMemoryManagement> | undefined
+  const retiringEve = new Set<EveHandle>()
+  let runtimeWork = Promise.resolve()
+
+  /** 换密钥和清缓存不能同时替换进程。某次失败后，下一个请求仍能重试。 */
+  function queueRuntimeWork(action: () => Promise<void>): Promise<void> {
+    const result = runtimeWork.then(action)
+    runtimeWork = result.catch(() => {})
+    return result
+  }
 
   /**
    * 后台服务的选项表。特意用「一张可原地更新的表」而不是一次性常量：
@@ -74,7 +85,7 @@ function main(): void {
       if (!eve) return Promise.reject(new Error('E_EVE_NOT_RUNNING'))
       return pingEve(eve, signal)
     },
-    rotateModelKey: (newKey) => rotateModelKey(newKey),
+    rotateModelKey: (newKey) => queueRuntimeWork(() => rotateModelKey(newKey)),
   }
 
   // 聊天回合服务：登记簿挡并发、事件流受护；句柄用取值函数是让
@@ -84,11 +95,15 @@ function main(): void {
     getEve: () => eve,
     limits: { modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS },
     wakeMemoryJobs: () => memoryWorker?.wake(),
+    isContextBlocked: (conversationId) => memoryManagement?.isBlocked(conversationId) ?? false,
   })
   options.startChatTurn = chatTurns.startTurn
   options.startPreviewTurn = chatTurns.startPreviewTurn
   options.cancelChatTurn = chatTurns.cancelTurn
-  options.memoryTools = { getToken: () => eve?.token, execute: chatTurns.executeMemoryTool }
+  options.memoryTools = {
+    getTokens: () => [...(eve ? [eve] : []), ...retiringEve].map((handle) => handle.token),
+    execute: chatTurns.executeMemoryTool,
+  }
 
   /** 读共享记忆版本号。实现统一收在 data/epochs.ts（app_state 缺初始行
    *  时它抛错，绝不默默当 0 把问题盖住）；这里只保留「库还没打开」的守卫 */
@@ -112,7 +127,8 @@ function main(): void {
     memoryModel = undefined
     await Promise.all([chatTurns.stop(), memoryWorker?.stop()])
     await server?.stop()
-    await eve?.stop()
+    await runtimeWork
+    await Promise.allSettled([...(eve ? [eve] : []), ...retiringEve].map((handle) => handle.stop()))
     // 连接不关的话文件会被一直占用；而且 WAL 模式下没正常关闭，
     // 下次打开要多做一段恢复，虽然数据不丢，但没必要冒这个险
     database?.close()
@@ -159,6 +175,11 @@ function main(): void {
       database.db.update(conversations).set({ runtimeSessionId: null }).run()
       database.checkpoint()
       memoryWorker = createMemoryWorker(database.db, () => memoryModel)
+      memoryManagement = createMemoryManagement(database.db, (ids) => {
+        chatTurns.invalidateContexts(ids)
+        memoryWorker?.invalidate(ids)
+      }, () => queueRuntimeWork(rebuildRuntimeContext))
+      options.memoryManagement = memoryManagement
       options.db = {
         readEpoch,
         bumpEpoch,
@@ -251,6 +272,27 @@ function main(): void {
     process.stdout.write(`READY ${server.port}\n`)
   }
 
+  /** 先换到干净进程，再等无关回合自然结束；只有它退出后才能删除旧执行文件。 */
+  async function rebuildRuntimeContext(): Promise<void> {
+    const previous = eve
+    const key = options.modelApiKey
+    if (previous && key && !closing) {
+      const replacement = await startEveWith(key)
+      if (closing) await replacement.stop()
+      else {
+        retiringEve.add(previous)
+        eve = replacement
+      }
+    }
+    if (closing && eve) { retiringEve.add(eve); eve = undefined }
+    for (const old of retiringEve) {
+      await chatTurns.waitForRuntime(old)
+      await old.stop()
+      retiringEve.delete(old)
+    }
+    database?.checkpoint()
+  }
+
   /**
    * 运行期换密钥（03 §3「重新配置」通道）：先停旧 eve、再用新密钥起全新的。
    * 为什么整体换进程而不是原地改：密钥在 eve 里只存在于进程内存和管道里，
@@ -259,6 +301,7 @@ function main(): void {
    * 新进程起失败则保持「无 eve」，绝不回退用旧密钥。
    */
   async function rotateModelKey(newKey: string): Promise<void> {
+    if (closing) return
     const previous = eve
     eve = undefined
     options.modelApiKey = undefined

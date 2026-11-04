@@ -16,7 +16,8 @@ export type MemoryMutation = { memoryId: string; expectedRevision: number } & (
   | { action: 'forget'; deleteSources: boolean }
 )
 
-type MutationContext = { conversationId: string } & (
+/** 管理页与聊天工具都要说明是谁触发的操作，方便复用同一份回执。 */
+export type MemoryMutationContext = { conversationId: string } & (
   | { requestId: string; requestMessageId?: never }
   | { requestMessageId: string; requestId?: never }
 )
@@ -110,7 +111,7 @@ function excludeMessages(db: BetterSQLite3Database, ids: Set<string>, reason: 'f
  * @throws NOT_FOUND 目标不可见；STALE_REVISION 记录已变化；SOURCE_NOT_ALLOWED 来源不是本轮正式原话；INVALID_INPUT 参数无效
  */
 export function mutateMemory(
-  db: BetterSQLite3Database, context: MutationContext, change: MemoryMutation, now: number,
+  db: BetterSQLite3Database, context: MemoryMutationContext, change: MemoryMutation, now: number,
 ): MemoryMutationResult {
   return db.transaction((tx) => {
     const conversation = tx.select().from(conversations).where(eq(conversations.id, context.conversationId)).get()

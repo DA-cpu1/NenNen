@@ -68,7 +68,7 @@ async function main(): Promise<void> {
       getDb: () => db, getEve: () => eve, limits: { modelWindowTokens: 32_000 },
     })
     server = await startBackendServer('fixed-backend-test-token', {
-      memoryTools: { getToken: () => eve?.token, execute: turns.executeMemoryTool },
+      memoryTools: { getTokens: () => eve ? [eve.token] : [], execute: turns.executeMemoryTool },
     })
     eve = await startEve({
       appDir: resolve(process.cwd()), modelApiKey: 'fixed-native-test-key',

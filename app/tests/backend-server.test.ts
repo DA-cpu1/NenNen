@@ -6,6 +6,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startBackendServer, type BackendServer } from '../src/service/server'
 import { memoryToolPath } from '../src/shared/memory-tool'
+import { createMemoryManagement } from '../src/service/memory-management'
+import { openCompanionDatabase } from '../src/data/db'
+import { initializeFirstCharacter } from '../src/data/character-init'
+import { runMigrations } from '../src/data/migrations'
+import { memories } from '../src/data/tables'
 
 // 测试专用固定令牌，与生产生成的随机令牌无关
 const TOKEN = 'test-fixed-token'
@@ -63,11 +68,60 @@ describe('后台服务监听', () => {
 })
 
 describe('后台服务认证', () => {
+  it('记忆管理等实际清理完成才回成功，失败保留暂停状态且可以重试', async () => {
+    const db = openCompanionDatabase(':memory:')
+    runMigrations(db.sqlite)
+    const { characterId, conversationId } = initializeFirstCharacter(db.db, {
+      name: '固定角色', personaText: '固定设定', initialRelationship: '朋友', timezone: 'Asia/Hong_Kong',
+    })
+    db.db.insert(memories).values({ id: 'fixed-memory', scope: 'character', characterId, kind: 'fact',
+      content: '待忘记测试资料', origin: 'user_edit', validFrom: 1, createdAt: 1, updatedAt: 1 }).run()
+    let begin!: () => void
+    let fail!: (error: Error) => void
+    const entered = new Promise<void>((resolve) => { begin = resolve })
+    const held = new Promise<void>((_resolve, reject) => { fail = reject })
+    let cleaningCalls = 0
+    const invalidated: string[][] = []
+    const management = createMemoryManagement(db.db, (ids) => invalidated.push([...ids]), () => {
+      cleaningCalls += 1
+      begin()
+      return cleaningCalls === 1 ? held : Promise.resolve()
+    })
+    const backend = await startBackendServer(TOKEN, { memoryManagement: management })
+    try {
+      const path = `http://127.0.0.1:${backend.port}/memory`
+      const headers = { 'x-session-token': TOKEN, 'content-type': 'application/json' }
+      expect((await fetch(path)).status).toBe(401)
+      expect(await (await fetch(path, { headers })).json()).toMatchObject({ cleanupPending: false, memories: [{ id: 'fixed-memory' }] })
+      const change = { action: 'forget', requestId: '00000000-0000-4000-8000-000000000001',
+        memoryId: 'fixed-memory', expectedRevision: 1, deleteSources: false }
+      const post = (body: object) => fetch(path, { method: 'POST', headers, body: JSON.stringify(body) })
+      expect((await post({ ...change, conversationId: '伪造会话' })).status).toBe(400)
+      let replied = false
+      const response = post(change).then((result) => { replied = true; return result })
+      await entered
+      expect(replied).toBe(false)
+      expect(management.isBlocked(conversationId)).toBe(true)
+      expect(management.isBlocked('other')).toBe(false)
+      expect(management.list()).toEqual({ memories: [], cleanupPending: true })
+      fail(new Error('故障注入，后台不能转发这段原文'))
+      expect(await (await response).json()).toEqual({ ok: false, code: 'MEMORY_CLEANUP_FAILED' })
+      expect(management.isBlocked(conversationId)).toBe(true)
+      expect(await (await fetch(`${path}/cleanup`, { method: 'POST', headers })).json()).toEqual({ ok: true })
+      expect(await (await post(change)).json()).toMatchObject({ ok: true, receipt: { action: 'forget', revision: 2 } })
+      expect(management.isBlocked(conversationId)).toBe(false)
+      expect(invalidated).toEqual([[conversationId]])
+    } finally {
+      await backend.stop()
+      db.close()
+    }
+  })
+
   it('记忆入口只接受当前 eve 令牌，并拒绝模型自选角色', async () => {
     let toolToken = 'test-eve-token'
     let calls = 0
     const fake = await startBackendServer(TOKEN, { memoryTools: {
-      getToken: () => toolToken,
+      getTokens: () => [toolToken],
       execute: () => { calls += 1; return { ok: true, memories: [] } },
     } })
     extraServers.push(fake)
