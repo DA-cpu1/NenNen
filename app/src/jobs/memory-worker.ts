@@ -19,6 +19,7 @@ const storageRetryMs = 30_000
 export function createMemoryWorker(db: BetterSQLite3Database, getModel: () => Exclude<LanguageModel, string> | undefined) {
   let timer: ReturnType<typeof setTimeout> | undefined
   let running: Promise<void> | undefined
+  let runningConversationId: string | undefined
   let controller: AbortController | undefined
   let stopped = false
 
@@ -66,12 +67,15 @@ export function createMemoryWorker(db: BetterSQLite3Database, getModel: () => Ex
         return
       }
       controller = new AbortController()
+      runningConversationId = result.attempt.work.job.conversationId
       running = runMemoryAttempt(db, result.attempt, model, controller.signal).then(() => {
         running = undefined
+        runningConversationId = undefined
         controller = undefined
         schedule(0)
       }, () => {
         running = undefined
+        runningConversationId = undefined
         controller = undefined
         retryStorage()
       })
@@ -83,6 +87,11 @@ export function createMemoryWorker(db: BetterSQLite3Database, getModel: () => Ex
   return {
     /** 有新消息、回复终态或可用模型时，请后台重新检查。 */
     wake: () => { if (!running) schedule(0) },
+    /** 只有旧输入依赖本次变更时才取消；其他会话继续用自己的批次。 */
+    invalidate: (conversationIds: readonly string[]) => {
+      if (runningConversationId && conversationIds.includes(runningConversationId)) controller?.abort()
+      if (!running) schedule(0)
+    },
     /** 更换密钥时停止当前调用。新的密钥可用后再唤醒。 */
     cancelCurrent: () => controller?.abort(),
     /** 禁止新任务并等待当前取消写入 SQLite。 */

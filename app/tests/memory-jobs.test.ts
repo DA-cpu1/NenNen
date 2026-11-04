@@ -9,6 +9,7 @@ import { initializeFirstCharacter } from '../src/data/character-init'
 import { bumpCharacterMemoryEpoch, bumpContextEpoch, bumpGlobalMemoryEpoch } from '../src/data/epochs'
 import { saveUserMessage } from '../src/data/messages'
 import { saveCharacterMemory } from '../src/data/memories'
+import { mutateMemory } from '../src/data/memory-management'
 import { runMigrations } from '../src/data/migrations'
 import { agentRuns, conversations, memories, memoryJobs, memorySources, messages } from '../src/data/tables'
 import { beginMemoryAttempt, finishMemoryAttempt, recoverExpiredMemoryJobs } from '../src/jobs/memory-budget'
@@ -114,6 +115,39 @@ describe('整理模型预算', () => {
 afterEach(() => companion.close())
 
 describe('整理单次执行', () => {
+  it.each(['排队', '调用前', '提交时'])('A13 在%s忘记来源，旧批次不能写回', async (phase) => {
+    const { db } = companion
+    const source = message('old-source')
+    const target = saveCharacterMemory(db, { conversationId, kind: 'fact', memoryKey: 'project', content: '旧项目',
+      origin: 'user_explicit', sourceMessageIds: [source.id], expiresAt: null, now })
+    if (!('memory' in target)) throw new Error('缺少测试记忆')
+    const job = registerMemoryJob(db, conversationId, now)!
+    const started = phase === '排队' ? undefined : beginMemoryAttempt(db, job.id, testModel, now)
+    mutateMemory(db, { conversationId, requestId: 'delete-source' }, {
+      action: 'forget', memoryId: target.memory.id, expectedRevision: target.memory.revision, deleteSources: true,
+    }, now + 1)
+    if (!started) {
+      expect(beginMemoryAttempt(db, job.id, testModel, now + 1)).toEqual({ status: 'unavailable' })
+      expect(db.select().from(agentRuns).all()).toEqual([])
+    } else {
+      if (started.status !== 'ready') throw new Error('未领取测试任务')
+      if (phase === '调用前') {
+        const model = new MockLanguageModelV4({ doGenerate: async () => { throw new Error('不应请求模型') } })
+        await runMemoryAttempt(db, started.attempt, model, new AbortController().signal)
+        expect(model.doGenerateCalls).toEqual([])
+        expect(db.select().from(agentRuns).get()).toMatchObject({ inputTokens: 0, outputTokens: 0 })
+      } else {
+        finishMemoryAttempt(db, started.attempt, { ok: true, candidates: [],
+          usage: { inputTokens: 19, outputTokens: 5, estimated: false } }, now + 1)
+        expect(db.select().from(agentRuns).get()).toMatchObject({ inputTokens: 19, outputTokens: 5, errorCode: 'E_MEMORY_STALE' })
+      }
+    }
+    expect(db.select().from(memoryJobs).get()).toMatchObject({ status: 'stale' })
+    expect(db.select().from(conversations).get()?.lastProcessedSeq).toBe(0)
+    expect(registerMemoryJob(db, conversationId, now + 2)).toBeNull()
+    expect(db.select().from(memories).get()).toMatchObject({ status: 'deleted', content: '' })
+  })
+
   it.each(['退出', '超时'])('%s后不等待忽略取消的模型，也不保存晚到候选', async (reason) => {
     vi.useFakeTimers({ now })
     try {
@@ -181,6 +215,45 @@ describe('整理租约恢复', () => {
 })
 
 describe('整理调度', () => {
+  it('A13 只取消受影响的运行；模型忽略取消也不能复写已忘记资料', async () => {
+    vi.useFakeTimers({ now })
+    const { db } = companion
+    const source = message('source')
+    const saved = saveCharacterMemory(db, { conversationId, kind: 'fact', memoryKey: 'project', content: '旧项目',
+      origin: 'user_explicit', sourceMessageIds: [source.id], expiresAt: null, now })
+    if (!('memory' in saved)) throw new Error('缺少测试记忆')
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const model = new MockLanguageModelV4({ doGenerate: async () => {
+      await held
+      throw new Error('故意忽略取消，最后才结束')
+    } })
+    const worker = createMemoryWorker(db, () => model)
+    try {
+      worker.wake()
+      await vi.advanceTimersByTimeAsync(1)
+      const signal = model.doGenerateCalls[0].abortSignal!
+      worker.invalidate(['other-character-conversation'])
+      expect(signal.aborted).toBe(false)
+      const change = mutateMemory(db, { conversationId, requestId: 'forget-running' }, {
+        action: 'forget', memoryId: saved.memory.id, expectedRevision: saved.memory.revision, deleteSources: false,
+      }, Date.now())
+      worker.invalidate(change.conversationIds)
+      expect(signal.aborted).toBe(true)
+      await vi.advanceTimersByTimeAsync(1)
+      release()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(model.doGenerateCalls).toHaveLength(1)
+      expect(db.select().from(memoryJobs).get()).toMatchObject({ status: 'stale' })
+      expect(db.select().from(agentRuns).get()).toMatchObject({ status: 'cancelled', usageEstimated: 1 })
+      expect(db.select().from(conversations).get()?.lastProcessedSeq).toBe(0)
+    } finally {
+      release()
+      await worker.stop()
+      vi.useRealTimers()
+    }
+  })
+
   it('空闲到点只执行一次，收到新聊天通知后重新判断空闲时刻', async () => {
     vi.useFakeTimers({ now })
     const { db } = companion
