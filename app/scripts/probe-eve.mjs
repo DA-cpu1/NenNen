@@ -333,7 +333,7 @@ try {
   }
   // 检查框架实际写入的工作区和锁目录，跳过旧安装包和构建产物。
   const runtimeData = ['smoke', 'locks', '.workflow-data'].map((name) => join(runtimeDir, '.eve', name))
-  runtimeData.push(join(runtimeDir, '.output', '.eve'))
+  runtimeData.push(join(runtimeDir, '.output', '.eve'), `${dbPath}.eve`)
   const leaks = (await Promise.all(runtimeData.map(secretFiles))).reduce((total, count) => total + count, 0)
   assert.equal(leaks, 0)
   assert.equal([modelKeyA, modelKeyB, ...tokens, '请只回复两个字'].some((text) => logs.includes(text)), false)

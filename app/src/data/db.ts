@@ -5,7 +5,7 @@
  * 文件里（SQLite：把整套数据库装进一个普通文件的技术）。开门时要带两道
  * 保险（见函数里两行 pragma）。如果各模块自己开门，只要有一处忘了带保险，
  * 坏数据就从那个口子溜进去了。全项目只走这一个函数，保险一处也不会漏。
- * 文件路径由调用方传入（将来传 Electron 给的用户数据目录），这里不写死。
+ * 文件路径由调用方传入，正式运行用 Electron 给的用户数据目录。
  */
 import Database from 'better-sqlite3'
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
@@ -16,6 +16,8 @@ export interface CompanionDb {
   sqlite: Database.Database
   /** Drizzle 查询对象——站在司机上面的"翻译"。日常读写用它，字段打错编辑器会红线 */
   db: BetterSQLite3Database
+  /** 把旁边的小本子写回主库并截断，避免本次忘记后旧页还留在小本子里。 */
+  checkpoint(): void
   /** 关闭连接；程序退出时调用，不关的话文件会被一直占用 */
   close(): void
 }
@@ -36,9 +38,15 @@ export function openCompanionDatabase(path: string): CompanionDb {
   // 而不是几个月后数据悄悄烂掉。SQLite 为了兼容老项目默认把它关着，而且
   // 每个连接各自开关——所以必须在这唯一的入口打开（05 §1）
   sqlite.pragma('foreign_keys = ON')
+  // 擦掉 SQLite 回收位置里的旧正文，避免删行后还从数据库空闲页读到内容。
+  sqlite.pragma('secure_delete = ON')
   return {
     sqlite,
     db: drizzle(sqlite),
+    checkpoint: () => {
+      const result = sqlite.pragma('wal_checkpoint(TRUNCATE)') as Array<{ busy: number }>
+      if (result[0]?.busy !== 0) throw new Error('E_DB_CHECKPOINT_FAILED')
+    },
     close: () => sqlite.close(),
   }
 }

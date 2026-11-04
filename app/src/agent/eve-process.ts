@@ -28,6 +28,8 @@ export interface EveStartOptions {
   modelBaseUrl?: string
   /** 本机业务服务的公开端口；工具令牌仍经 stdin。 */
   memoryToolPort?: number
+  /** 正式后台按数据库划分执行目录；独立探针可沿用仓库下的临时目录。 */
+  runtimeRoot?: string
 }
 
 /**
@@ -63,9 +65,19 @@ export function makeEveStop(child: ChildProcess, runtimeRoot: string, dataDir: s
     else child.once('exit', () => resolve())
   })
   // 正常停止和自行退出都走同一个回收；必须先见到 exit，才允许删除执行文件。
-  const stopped = exited.then(() => cleanupEveRuntimeDirectory(runtimeRoot, dataDir))
-  // 自行退出时暂时没有调用方等待；先接住拒绝，stop() 仍会返回同一固定码错误。
-  void stopped.catch(() => {})
+  let stopped: Promise<void> | undefined
+  /** 文件暂被系统占用时允许下一次重试清理，仍只删这个已经退出的进程目录。 */
+  function cleanup(): Promise<void> {
+    if (!stopped) {
+      stopped = exited.then(() => cleanupEveRuntimeDirectory(runtimeRoot, dataDir)).catch((error: unknown) => {
+        stopped = undefined
+        throw error
+      })
+    }
+    return stopped
+  }
+  // 自行退出也要收尾；没人等待时接住错误，之后仍可通过 stop() 重试。
+  void cleanup().catch(() => {})
   let stopRequested = false
   return () => {
     if (!stopRequested) {
@@ -75,7 +87,7 @@ export function makeEveStop(child: ChildProcess, runtimeRoot: string, dataDir: s
         child.kill()
       }
     }
-    return stopped
+    return cleanup()
   }
 }
 
@@ -91,7 +103,7 @@ export async function startEve(options: EveStartOptions): Promise<EveHandle> {
 
   const port = await choosePort()
   const token = randomBytes(32).toString('base64url')
-  const runtimeRoot = join(options.appDir, '.eve/smoke')
+  const runtimeRoot = options.runtimeRoot ?? join(options.appDir, '.eve/smoke')
   await mkdir(runtimeRoot, { recursive: true })
   // 每次用干净目录，防止框架重发上次请求；聊天只从 SQLite 重建。
   // 目录由这个进程捕获，退出后只回收这一项，不扫描清理其他 run-目录。

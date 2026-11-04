@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs'
 import { lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanupEveRuntimeDirectory } from '../src/agent/eve-runtime'
+import { cleanupEveRuntimeDirectory, cleanupEveRuntimeRoot } from '../src/agent/eve-runtime'
 import { makeEveStop } from '../src/agent/eve-process'
 
 const failure = vi.hoisted(() => ({ remove: false }))
@@ -58,6 +58,18 @@ function fakeChild() {
 }
 
 describe('eve 私有运行目录回收', () => {
+  it('重启只清理当前数据库自己的旧运行目录', async () => {
+    const siblingRoot = join(fixture, 'other-database')
+    await mkdir(siblingRoot)
+    const otherRun = await mkdtemp(join(siblingRoot, 'run-'))
+    const userFile = join(runtimeRoot, 'keep.txt')
+    await writeFile(userFile, 'fixed-user-file')
+    await cleanupEveRuntimeRoot(runtimeRoot)
+    expect(existsSync(dataDir)).toBe(false)
+    expect(existsSync(userFile)).toBe(true)
+    expect(existsSync(otherRun)).toBe(true)
+  })
+
   it('成功只删除指定run目录，保留根目录、其他实例和外部资料；重复清理可复用', async () => {
     const sibling = await mkdtemp(join(runtimeRoot, 'run-'))
     const outside = join(fixture, 'user-data.txt')
@@ -154,7 +166,10 @@ describe('eve 私有运行目录回收', () => {
     child.exitCode = 0
     child.emit('exit', 0, null)
     await expect(stopped).rejects.toThrow(/^E_EVE_RUNTIME_CLEANUP_FAILED$/)
-    expect(stop()).toBe(stopped)
     expect(existsSync(dataDir)).toBe(true)
+    failure.remove = false
+    await expect(stop()).resolves.toBeUndefined()
+    expect(existsSync(dataDir)).toBe(false)
+    expect(child.kill).toHaveBeenCalledTimes(1)
   })
 })

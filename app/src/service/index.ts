@@ -6,11 +6,13 @@
 import { basename, resolve } from 'node:path'
 import { startBackendServer, type BackendOptions, type BackendServer } from './server'
 import { startEve, type EveHandle } from '../agent/eve-process'
+import { cleanupEveRuntimeRoot } from '../agent/eve-runtime'
 import { pingEve } from '../agent/eve-client'
 import { createCompanionLanguageModel } from '../agent/model'
 import { createMemoryWorker } from '../jobs/memory-worker'
 import { openCompanionDatabase, type CompanionDb } from '../data/db'
 import { runMigrations } from '../data/migrations'
+import { conversations } from '../data/tables'
 import { bumpGlobalMemoryEpoch, readGlobalMemoryEpoch } from '../data/epochs'
 import { getFirstCharacter, initializeFirstCharacter } from '../data/character-init'
 import {
@@ -60,6 +62,7 @@ function main(): void {
   let database: CompanionDb | undefined
   let memoryWorker: ReturnType<typeof createMemoryWorker> | undefined
   let memoryModel: ReturnType<typeof createCompanionLanguageModel> | undefined
+  let runtimeRoot: string | undefined
 
   /**
    * 后台服务的选项表。特意用「一张可原地更新的表」而不是一次性常量：
@@ -124,6 +127,7 @@ function main(): void {
       // 只传公开测试地址；自动检查让请求落到本机假供应商，避免误花钱
       modelBaseUrl: process.env.COMPANION_MODEL_BASE_URL || undefined,
       memoryToolPort: server?.port,
+      runtimeRoot,
     })
   }
 
@@ -133,6 +137,9 @@ function main(): void {
   async function start(token: string, modelApiKey: string): Promise<void> {
     const dbPath = dbPathFromArgs(process.argv.slice(2))
     if (dbPath) {
+      // 每个数据库有自己的运行文件。启动锁保证没有另一套后台正在使用这个目录。
+      runtimeRoot = `${resolve(dbPath)}.eve`
+      await cleanupEveRuntimeRoot(runtimeRoot)
       database = openCompanionDatabase(dbPath)
       // 迁移抛错不在这里接：让它顺着 start 的 catch 统一走 E_START 退出
       runMigrations(database.sqlite)
@@ -149,6 +156,8 @@ function main(): void {
       // 用户按原请求编号重试；只动进行中的行，绝不补写「成功」。
       // 必须在任何回合开始前执行一次（此刻还没有回合，安全）。
       recoverInterruptedTurns(database.db)
+      database.db.update(conversations).set({ runtimeSessionId: null }).run()
+      database.checkpoint()
       memoryWorker = createMemoryWorker(database.db, () => memoryModel)
       options.db = {
         readEpoch,
