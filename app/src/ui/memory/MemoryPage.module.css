@@ -55,6 +55,9 @@
 .error { background: #fff2ed; color: #8b382e; }
 .cleanup { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .cleanup p { margin: 0; }
+.feedback { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; background: var(--accent-soft-weak); }
+.feedback[data-phase='done'] { border-color: #bfdccc; background: #e5f3ec; color: #225b42; }
+.feedback[data-phase='failed'] { border-color: #f0c7bc; background: #fff2ed; color: #8b382e; }
 .empty { margin: 16px 0; border: 1px dashed var(--border); border-radius: 10px; padding: 24px; color: var(--muted); }
 .empty h2 { margin: 0 0 7px; color: var(--ink); font-size: 15px; }
 .empty button { margin-top: 10px; }

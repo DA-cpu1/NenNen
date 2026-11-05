@@ -23,6 +23,7 @@ const origins: Record<string, string> = { user_edit: '用户编辑', user_explic
 
 type Selection = { memory: ManagedMemory; action: 'correct' | 'forget' }
 type DeletionReview = 'loading' | 'failed' | MemoryDeletionPreview | null
+type ForgetFeedback = { phase: 'working' | 'failed' | 'done'; title: string; message: string }
 
 interface MemoryPageProps {
   characterId?: string
@@ -123,6 +124,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [forgetFeedback, setForgetFeedback] = useState<ForgetFeedback | null>(null)
   const readGeneration = useRef(0)
   const saving = useRef(false)
   const previousRequest = useRef<{ key: string; id: string } | null>(null)
@@ -158,6 +160,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
     setDraft(memory.content)
     setConflictChoice(null)
     setNotice(null)
+    setForgetFeedback(null)
     setError(null)
     previousRequest.current = null
   }
@@ -200,14 +203,27 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
     saving.current = true
     setBusy(true)
     setError(null)
+    if (action === 'forget') {
+      // 刚提交的内容可能已经删了，等后台重读结果前不再渲染旧列表和确认原话。
+      readGeneration.current++
+      setOverview(null)
+      setForgetFeedback({
+        phase: 'working', title: '正在处理',
+        message: deletion ? '正在清理记忆、相关聊天原文和本地缓存…' : '正在清理记忆和本地缓存…',
+      })
+    }
     let reloaded = false
     try {
       const result = await window.appApi?.changeMemory(change)
       if (result?.ok && result.data?.receipt) {
         const receipt = result.data.receipt
-        const scope = receipt.removedSources ? `，已删除 ${receipt.removedSources} 条聊天原文` : '，聊天原文仍保留'
-        const persona = receipt.personaContainsContent ? '。角色设定里还有相同文字，可以在角色设置里修改。' : '。'
-        setNotice((action === 'correct' ? '记忆已纠正，原来的值可在「已替代」中查看' : `已忘记这条信息${scope}`) + persona)
+        const persona = receipt.personaContainsContent ? ' 角色设定里还有相同文字，可以在角色设置里修改。' : ''
+        if (action === 'correct') setNotice('记忆已纠正，原来的值可在「已替代」中查看。')
+        else setForgetFeedback({
+          phase: 'done', title: receipt.removedSources ? '已忘记，相关聊天原文已删除' : '已忘记此信息',
+          message: (receipt.removedSources ? `已删除 ${receipt.removedSources} 条聊天原文，本地缓存已清理。`
+            : deletion ? '本地缓存已清理。该记忆没有关联原话。' : '本地缓存已清理，聊天原文仍保留。') + persona,
+        })
         setSelection(null)
         setDeletionReview(null)
       } else {
@@ -225,20 +241,34 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
             setSelection(null)
             setError('这条记忆已过期、被忘记或无法重新读取。请刷新列表后核对。')
           }
+        } else if (action === 'forget' && !['STALE_REVISION', 'NOT_FOUND', 'SOURCE_PREVIEW_CHANGED'].includes(code)) {
+          setForgetFeedback({ phase: 'failed', title: '尚未完成忘记',
+            message: failureMessages[code] ?? '暂时无法确认清理结果，请重试。' })
         } else {
+          setForgetFeedback(null)
           setError(failureMessages[code] ?? '暂时无法确认操作结果，请重试。')
           if (['MEMORY_CLEANUP_FAILED', 'STALE_REVISION', 'NOT_FOUND'].includes(code)) setSelection(null)
           if (code === 'SOURCE_PREVIEW_CHANGED') setDeletionReview('failed')
         }
       }
     } catch {
-      setError('暂时无法确认操作结果，请重试。')
+      if (action === 'forget') setForgetFeedback({ phase: 'failed', title: '尚未完成忘记', message: '暂时无法确认清理结果，请重试。' })
+      else setError('暂时无法确认操作结果，请重试。')
     } finally {
       onHistoryChanged()
       if (!reloaded) await read()
       saving.current = false
       setBusy(false)
     }
+  }
+
+  /** 关闭结果时丢掉本次确认内容，已清理的正文不会在下一次打开时出现。 */
+  function closeForgetFeedback(): void {
+    if (busy) return
+    setForgetFeedback(null)
+    setSelection(null)
+    setDeletionReview(null)
+    setDraft('')
   }
 
   /** 清理可以单独重试，已经保存的纠正和删除无需再执行一遍。 */
@@ -330,7 +360,21 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
           onSelect={select} onOpenSource={onOpenSource} />
       </div> : null}
     </div>
-    {selection ? <ConfirmationDialog title={selection.action === 'correct' ? conflictChoice ? '这条记忆已有更新' : '纠正这条记忆' :
+    {forgetFeedback ? <ConfirmationDialog title={forgetFeedback.title} onCancel={closeForgetFeedback} actions={<>
+      {forgetFeedback.phase === 'working' ? <button type="button" className={styles.button} disabled>处理中…</button>
+        : forgetFeedback.phase === 'done' ? <button type="button" className={styles.primary} disabled={busy}
+          onClick={closeForgetFeedback}>完成</button>
+        : <>
+          <button type="button" className={styles.button} disabled={busy} onClick={closeForgetFeedback}>关闭</button>
+          <button type="button" className={styles.primary} disabled={busy} onClick={() => void save(deletion ?? undefined)}>重试</button>
+        </>}
+    </>}>
+      <div className={styles.feedback} data-phase={forgetFeedback.phase}
+        role={forgetFeedback.phase === 'failed' ? 'alert' : 'status'}>
+        <p>{forgetFeedback.message}</p>
+        {forgetFeedback.phase === 'failed' ? <p>重试会继续原操作，已保存的部分不会重复写入。</p> : null}
+      </div>
+    </ConfirmationDialog> : selection ? <ConfirmationDialog title={selection.action === 'correct' ? conflictChoice ? '这条记忆已有更新' : '纠正这条记忆' :
       deletionReview ? '忘记并删除相关原文？' : '忘记这条记忆？'}
       onCancel={() => { if (!dialogBusy) { setSelection(null); setDeletionReview(null) } }} actions={<>
         <button type="button" className={styles.button} disabled={dialogBusy}
