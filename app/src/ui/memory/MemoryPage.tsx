@@ -116,6 +116,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
   const [category, setCategory] = useState('all')
   const [query, setQuery] = useState('')
   const [detailId, setDetailId] = useState<string | null>(null)
+  const [sharedView, setSharedView] = useState(false)
   const [selection, setSelection] = useState<Selection | null>(null)
   const [deletionReview, setDeletionReview] = useState<DeletionReview>(null)
   const [draft, setDraft] = useState('')
@@ -218,9 +219,9 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
       if (result?.ok && result.data?.receipt) {
         const receipt = result.data.receipt
         const persona = receipt.personaContainsContent ? ' 角色设定里还有相同文字，可以在角色设置里修改。' : ''
-        if (action === 'correct') setNotice('记忆已纠正，原来的值可在「已替代」中查看。')
+        if (action === 'correct') setNotice(sharedView ? '共享资料已更新。' : '记忆已纠正，原来的值可在「已替代」中查看。')
         else setForgetFeedback({
-          phase: 'done', title: receipt.removedSources ? '已忘记，相关聊天原文已删除' : '已忘记此信息',
+          phase: 'done', title: sharedView ? '共享资料已删除' : receipt.removedSources ? '已忘记，相关聊天原文已删除' : '已忘记此信息',
           message: (receipt.removedSources ? `已删除 ${receipt.removedSources} 条聊天原文，本地缓存已清理。`
             : deletion ? '本地缓存已清理。该记忆没有关联原话。' : '本地缓存已清理，聊天原文仍保留。') + persona,
         })
@@ -301,6 +302,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
       memory.content.toLocaleLowerCase('zh-CN').includes(keyword)
   })
   const detail = shown.find((memory) => memory.id === detailId) ?? shown[0]
+  const shared = memories.filter((memory) => memory.scope === 'global' && memory.status === 'active')
   const privateScope = characterName ? `仅${characterName}可用` : '仅当前角色可用'
   const deletion = typeof deletionReview === 'object' ? deletionReview : null
   const dialogBusy = busy || deletionReview === 'loading'
@@ -308,9 +310,15 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
   return <section className={styles.page} aria-labelledby="memory-title">
     <header className={styles.header}>
       <span className={styles.eyebrow}>{characterName ? `${characterName}的手记` : '角色手记'}</span>
-      <h1 id="memory-title">记忆</h1>
-      <p>看看角色记下了什么。你可以查看原话、纠正旧信息，或让角色忘记一条记忆。</p>
+      <div className={styles.headerRow}>
+        <h1 id="memory-title">{sharedView ? '共享资料' : '记忆'}</h1>
+        <button type="button" className={styles.button} disabled={busy}
+          onClick={() => { setSharedView(!sharedView); setNotice(null) }}>{sharedView ? '返回记忆' : '共享资料'}</button>
+      </div>
+      <p>{sharedView ? '角色可以使用你明确共享的资料。聊天记录和私有记忆仍各自独立。'
+        : '看看角色记下了什么。你可以查看原话、纠正旧信息，或让角色忘记一条记忆。'}</p>
     </header>
+    {!sharedView ? <>
     <div className={styles.search}>
       <input type="search" aria-label="搜索记忆内容" placeholder="搜索记忆内容"
         value={query} onChange={(event) => setQuery(event.target.value)} />
@@ -325,6 +333,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
       </button>)}
       <button className={styles.refresh} type="button" disabled={loading || busy} onClick={() => { setError(null); void read() }}>刷新</button>
     </div>
+    </> : null}
     <div className={styles.scroll} aria-busy={loading || busy}>
       {notice ? <p className={styles.notice} role="status">{notice}</p> : null}
       {error && !selection ? <p className={styles.error} role="alert">{error}</p> : null}
@@ -333,7 +342,22 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
         <button type="button" className={styles.button} disabled={busy} onClick={() => void retryCleanup()}>重试清理</button>
       </div> : null}
       {loading && !overview ? <p role="status" className={styles.empty}>正在读取记忆…</p> : null}
-      {!loading && overview && shown.length === 0 ? <div className={styles.empty}>
+      {!loading && overview && sharedView && shared.length === 0 ? <div className={styles.empty}>
+        <h2>还没有共享资料</h2>
+        <p>你明确共享的资料会出现在这里。</p>
+      </div> : null}
+      {sharedView && shared.length > 0 ? <ol className={styles.list} aria-label="共享资料列表">
+        {shared.map((memory) => <li key={memory.id} className={styles.sharedItem}>
+          <p className={styles.content}>{memory.content}</p>
+          <span className={styles.kind}>用户明确共享</span>
+          <time className={styles.date} dateTime={new Date(memory.updatedAt).toISOString()}>{timeFormat.format(memory.updatedAt)}</time>
+          <div className={styles.actions}>
+            <button type="button" className={styles.button} disabled={busy} onClick={() => select(memory, 'correct')}>编辑</button>
+            <button type="button" className={styles.danger} disabled={busy} onClick={() => select(memory, 'forget')}>删除…</button>
+          </div>
+        </li>)}
+      </ol> : null}
+      {!sharedView && !loading && overview && shown.length === 0 ? <div className={styles.empty}>
         {memories.length === 0 ? <>
           <h2>还没有记忆</h2>
           <p>正式聊天里保存的记忆会出现在这里。</p>
@@ -345,7 +369,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
           </button>
         </>}
       </div> : null}
-      {detail ? <div className={styles.workspace}>
+      {!sharedView && detail ? <div className={styles.workspace}>
         <ol className={styles.list} aria-label="记忆列表">
           {shown.map((memory) => <li key={memory.id}>
             <button type="button" className={styles.card} aria-pressed={detail.id === memory.id} onClick={() => setDetailId(memory.id)}>
@@ -374,8 +398,9 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
         <p>{forgetFeedback.message}</p>
         {forgetFeedback.phase === 'failed' ? <p>重试会继续原操作，已保存的部分不会重复写入。</p> : null}
       </div>
-    </ConfirmationDialog> : selection ? <ConfirmationDialog title={selection.action === 'correct' ? conflictChoice ? '这条记忆已有更新' : '纠正这条记忆' :
-      deletionReview ? '忘记并删除相关原文？' : '忘记这条记忆？'}
+    </ConfirmationDialog> : selection ? <ConfirmationDialog title={selection.action === 'correct' ? conflictChoice ? '这条记忆已有更新'
+      : sharedView ? '编辑共享资料' : '纠正这条记忆'
+      : sharedView ? '删除这条共享资料？' : deletionReview ? '忘记并删除相关原文？' : '忘记这条记忆？'}
       onCancel={() => { if (!dialogBusy) { setSelection(null); setDeletionReview(null) } }} actions={<>
         <button type="button" className={styles.button} disabled={dialogBusy}
           onClick={() => { setSelection(null); setDeletionReview(null) }}>取消</button>
@@ -384,6 +409,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
           onClick={() => { if (conflictChoice === 'keep') setSelection(null); else void save() }}>
           {conflictChoice ? '确认选择' : '保存纠正'}
         </button>
+          : sharedView ? <button type="button" className={styles.danger} disabled={busy} onClick={() => void save()}>删除共享资料</button>
           : deletion ? <button type="button" className={styles.danger} disabled={busy}
             onClick={() => void save(deletion)}>确认忘记并删除</button>
           : deletionReview ? <button type="button" className={styles.button} disabled={dialogBusy}
@@ -422,7 +448,8 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
             </li>)}
           </ol>}
         </div> : null}
-        <p>选择删除原文会把对应消息从聊天记录移除。早先已导出的备份仍可能包含这些原话。</p>
+        <p>{sharedView ? '聊天原文仍保留。早先已导出的备份仍可能包含这些资料。'
+          : '选择删除原文会把对应消息从聊天记录移除。早先已导出的备份仍可能包含这些原话。'}</p>
         {selection.memory.scope === 'global' ? <p>这是共享资料，忘记后会影响可使用它的角色。</p> : null}
       </>}
       {busy ? <p role="status">正在保存并清理本地上下文…</p> : null}

@@ -3,6 +3,7 @@
 .header { padding: 25px clamp(20px, 4vw, 38px) 21px; border-bottom: 1px solid var(--border); background: var(--accent-soft-weak); }
 .eyebrow { color: #60528a; font-size: 12px; letter-spacing: .12em; }
 .header h1 { margin: 6px 0 7px; font-size: 25px; }
+.headerRow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .header p, .empty p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .search { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px clamp(20px, 4vw, 38px) 0; }
 .search input, .search select { min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; }
@@ -15,6 +16,9 @@
 .scroll { min-height: 0; flex: 1; overflow: auto; padding: 18px clamp(20px, 4vw, 38px) 28px; }
 .workspace { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 14px; align-items: start; }
 .list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.sharedItem { display: grid; grid-template-columns: minmax(120px, 1fr) repeat(3, auto); align-items: center;
+  gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.sharedItem .content { margin: 0; }
 .card { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px 8px; width: 100%; padding: 10px 12px;
   border: 1px solid var(--border); border-left: 3px solid #b9a9dc; border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
 .card:hover, .card[aria-pressed='true'] { background: var(--accent-soft-weak); }
