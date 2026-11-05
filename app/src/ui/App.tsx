@@ -1,5 +1,5 @@
 /**
- * 聊天窗的「壳」：左边一条窄导航（聊天 / 记忆 / 角色设置），
+ * 聊天窗的「壳」：左边是各页共用的导航（聊天 / 角色设置 / 记忆），
  * 右边是当前页。聊天页切到设置后仍保留，避免丢掉未保存文字和重试编号。
  *
  * 角色概览（名字、图片路径、人设版本）在这里统一取一次、传给各页：
@@ -18,7 +18,7 @@ import styles from './App.module.css'
 /** 页面标识：聊天页 / 记忆页 / 角色设置页 */
 export type PageId = 'chat' | 'memory' | 'settings'
 
-/** 传给两页的角色概览与刷新函数（设置页保存成功后会调它） */
+/** 传给各页的角色概览与刷新函数（设置页保存成功后会调它） */
 export interface CharacterProps {
   character: CharacterOverview | null
   /** 重新向后台取一份概览；后台没就绪时置错误状态 */
@@ -27,7 +27,10 @@ export interface CharacterProps {
   loadError: string | null
 }
 
-/** 聊天窗入口：统一读取角色，并把所有离开编辑页的入口交给草稿保护。 */
+/**
+ * 统一读取角色，并把所有离开编辑页的入口交给草稿保护。
+ * @returns 共用侧栏和当前页面；切页只改变选中项，不再换一套导航。
+ */
 export default function App() {
   const [page, setPage] = useState<PageId>('chat')
   const [leaveTarget, setLeaveTarget] = useState<PageId | null>(null)
@@ -88,13 +91,13 @@ export default function App() {
     [navigate],
   )
 
-  // 两页共用的props包
+  // 各页共用同一份角色资料，保存后一起刷新。
   const shared: CharacterProps = { character, reload, loadError }
   const sidebarImage = assetUrl(character?.desktopImagePath ?? character?.portraitImagePath)
 
   return (
     <div className={styles.shell}>
-      <nav className={page === 'memory' ? `${styles.rail} ${styles.memoryRail}` : styles.rail} aria-label="应用页面">
+      <nav className={styles.rail} aria-label="应用页面">
         <button
           type="button"
           className={page === 'chat' ? styles.railItemActive : styles.railItem}
@@ -113,9 +116,10 @@ export default function App() {
           aria-current={page === 'settings' ? 'page' : undefined}
           onClick={() => navigate('settings')}
         >
-          {/* 简笔图标：一个齿轮（简化为圆+齿） */}
+          {/* 线条图标随选中项一起变色，与聊天和记忆保持同样的粗细。 */}
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9 4 2-1.5-2-3.5-2.4.8a7.6 7.6 0 0 0-1.7-1L16.5 4h-4l-.4 2.8a7.6 7.6 0 0 0-1.7 1L8 7 6 10.5 8 12l-2 1.5 2 3.5 2.4-.8c.5.4 1.1.8 1.7 1l.4 2.8h4l.4-2.8c.6-.2 1.2-.6 1.7-1l2.4.8 2-3.5L21 12z" />
+            <path d="m10 3-.6 2.3-1.5.9-2.3-.6-2 3.5 1.7 1.7v1.8l-1.7 1.7 2 3.5 2.3-.6 1.5.9L10 21h4l.6-2.9 1.5-.9 2.3.6 2-3.5-1.7-1.7v-1.8l1.7-1.7-2-3.5-2.3.6-1.5-.9L14 3h-4Z" />
+            <circle cx="12" cy="12" r="3" />
           </svg>
           <span>角色设置</span>
         </button>
@@ -127,7 +131,7 @@ export default function App() {
           </svg>
           <span>记忆</span>
         </button>
-        {page === 'memory' && character ? <div className={styles.memoryCharacter}>
+        {character ? <div className={styles.railCharacter}>
           {sidebarImage ? <img src={sidebarImage} alt="" /> : <span aria-hidden="true">{character.name.slice(0, 1)}</span>}
           <strong>{character.name}</strong>
         </div> : null}
