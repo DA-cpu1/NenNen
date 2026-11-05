@@ -171,9 +171,10 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
   }
 
   return <section className={styles.page}>
-    <header className={styles.header}><div className={styles.cardHeader}><h1>角色设置</h1>
-      <span className={styles.badge}>{blocked ? '等待重新读取' : dirty ? '有未保存的修改' : `当前 v${character.activeVersion?.versionNo ?? '—'}`}</span></div>
-      <p>把性格、说话方式与相处起点写清楚。</p></header>
+    <header className={styles.header}><div className={styles.cardHeader}>
+      <div className={styles.heading}><h1>角色设置</h1><p>把性格、说话方式与相处起点写清楚。</p></div>
+      <span className={styles.badge} data-dirty={dirty}>{blocked ? '等待重新读取' : dirty ? '有未保存的修改' : `当前 v${character.activeVersion?.versionNo ?? '—'}`}</span>
+    </div></header>
     <nav className={styles.tabs} aria-label="角色设置分类">
       {([['basic', '基本信息与人设'], ['examples', '情境示例'], ['versions', '人设版本']] as const).map(([id, label]) =>
         <button key={id} type="button" aria-pressed={tab === id} onClick={() => setTab(id)}>{label}</button>)}

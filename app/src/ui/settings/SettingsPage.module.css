@@ -1,27 +1,39 @@
 /* 设置页沿用公共冷白与蓝紫配色；正文滚动，操作栏留在底部。 */
-.page { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100vh; }
-.header { padding: 26px 32px 16px; }
-.header h1, .empty h1 { font-size: 23px; margin: 0 0 8px; }
-.header p { margin: 0; color: var(--muted); font-size: 13px; }
+.page { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; height: 100%; }
+.header { padding: 18px 20px 8px; }
+.header h1, .empty h1 { font-size: 24px; margin: 0; }
+.heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 14px; }
+.header p { margin: 0; color: var(--muted); font-size: 12px; }
 .page button { font-family: inherit; cursor: pointer; }
-.scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 22px 32px; border: 0; margin: 0; }
-.card { padding: 22px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 18px; }
-.card h2 { font-size: 16px; margin: 0 0 18px; }
+.scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 16px 20px; border: 0; margin: 0; }
+.card { padding: 14px 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 14px; }
+.card h2 { font-size: 17px; margin: 0 0 14px; }
 .card h3 { font-size: 14px; margin: 0 0 14px; }
 .card label { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; font-size: 13px; font-weight: 600; }
-.card input, .card textarea { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); color: var(--ink); font-size: 13px; line-height: 1.7; font-weight: 400; }
-.card textarea { resize: vertical; min-height: 42px; }
+.card input, .card textarea { box-sizing: border-box; min-width: 0; width: 100%; padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--ink); font-size: 13px; line-height: 1.7; font-weight: 400; }
+.card textarea { resize: vertical; min-height: 36px; }
 .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .hint { font-size: 12px; color: var(--muted); line-height: 1.7; }
+/* 标签放左边、输入放右边；先把名字和输入框明确分组，窄窗口再上下排列。 */
+.card .formRow { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: start; gap: 8px; margin-bottom: 12px; }
+.formRow > span:first-child { padding-top: 7px; }
+.fieldControl { display: grid; gap: 4px; }
+.fieldControl .hint { font-weight: 400; }
+.alignedHint { margin: 0 0 0 72px; }
+.sectionTitle { display: flex; align-items: center; gap: 8px; }
+.sectionIcon { display: grid; place-items: center; flex-shrink: 0; width: 25px; height: 25px; border-radius: 6px; background: var(--accent-soft-weak); color: var(--accent); }
+.sectionIcon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.card > .cardHeader { margin-bottom: 12px; }
+.card > .cardHeader h2 { margin: 0; }
 .principles { border-radius: 8px; background: var(--accent-soft-weak); padding: 14px; font-size: 12px; line-height: 1.8; }
 .principles p { margin: 4px 0 0; color: var(--muted); }
 .cardHeader { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 12px; }
-.segment { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; }
+.segment { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 6px; }
 .segment button { background: none; border: 0; border-radius: 5px; padding: 6px 12px; color: var(--muted); font-size: 12px; }
 .segment button[aria-pressed='true'] { background: var(--accent); color: white; }
 .error { margin: 0 32px; padding: 12px; border-radius: 8px; background: #fff0ed; color: var(--danger); font-size: 13px; }
 .empty { padding: 32px; }
-.settingsColumns { display: grid; grid-template-columns: minmax(0, 1fr) 220px; align-items: start; gap: 18px; }
+.settingsColumns { display: grid; grid-template-columns: minmax(0, 1fr) 220px; align-items: start; gap: 16px; }
 .settingsColumns > .card { padding: 16px; }
 .imageCard { padding: 12px 0; border-top: 1px solid var(--border); }
 .imagePreview { height: 180px; display: flex; align-items: center; justify-content: center; margin: 8px 0; background: var(--accent-soft-weak); border-radius: 7px; }
@@ -29,10 +41,11 @@
 .imagePreview p { color: var(--muted); font-size: 12px; padding: 12px; }
 .imageCard button { width: 100%; font-size: 12px; }
 @media (max-width: 900px) { .settingsColumns { grid-template-columns: minmax(0, 1fr); } }
-.tabs { display: flex; gap: 20px; padding: 0 32px; border-bottom: 1px solid var(--border); }
+.tabs { display: flex; gap: 24px; padding: 0 20px; border-bottom: 1px solid var(--border); }
 .tabs button { padding: 12px 0; background: none; border: 0; border-bottom: 3px solid transparent; color: var(--muted); font-size: 13px; }
 .tabs button[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 .badge { padding: 6px 10px; border-radius: 20px; background: var(--accent-soft); font-size: 12px; }
+.badge[data-dirty='true']::before { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: #efa500; content: ''; }
 .example { padding: 20px 0; border-top: 1px solid var(--border); }
 .version { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 16px 0; border-top: 1px solid var(--border); font-size: 13px; }
 .version time { color: var(--muted); }
@@ -58,4 +71,4 @@
 .dialog p { font-size: 13px; line-height: 1.8; }
 .dialogActions { justify-content: flex-end; margin-top: 24px; }
 /* 窗口变窄时把两个输入框上下排列，避免文字挤成一团。 */
-@media (max-width: 800px) { .columns { grid-template-columns: 1fr; gap: 0; } .header, .scroll { padding-left: 20px; padding-right: 20px; } }
+@media (max-width: 800px) { .columns { grid-template-columns: 1fr; gap: 0; } .header, .scroll { padding-left: 16px; padding-right: 16px; } }

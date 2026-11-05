@@ -24,17 +24,21 @@ export default function PersonaFields({ draft, onChange, onError }: PersonaField
 
   return <>
     <section className={styles.card}>
-      <h2>基本信息</h2>
+      <h2 className={styles.sectionTitle}><span className={styles.sectionIcon} aria-hidden="true">
+        <svg viewBox="0 0 24 24"><circle cx="9" cy="7" r="3" /><path d="M3 20v-3a5 5 0 0 1 10 0v3H3Zm13-9h5m-5 4h5m-5 4h5" /></svg>
+      </span>基本信息</h2>
       <div className={styles.columns}>
-        <label>角色名字<input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} /></label>
-        <label>称呼设定<input value={draft.userNickname} placeholder="留空时由角色自然称呼" onChange={(event) => onChange({ ...draft, userNickname: event.target.value })} /></label>
+        <label className={styles.formRow}><span>角色名字</span><input value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} /></label>
+        <label className={styles.formRow}><span>称呼设定</span><input value={draft.userNickname} placeholder="留空时自然称呼" onChange={(event) => onChange({ ...draft, userNickname: event.target.value })} /></label>
       </div>
-      <label>初始关系<textarea rows={2} value={draft.initialRelationship} onChange={(event) => onChange({ ...draft, initialRelationship: event.target.value })} /></label>
-      <p className={styles.hint}>自由填写，不会自动升级关系。称呼随人设版本保存。</p>
+      <label className={styles.formRow}><span>初始关系</span><textarea rows={1} value={draft.initialRelationship} onChange={(event) => onChange({ ...draft, initialRelationship: event.target.value })} /></label>
+      <p className={`${styles.hint} ${styles.alignedHint}`}>自由填写，不会自动升级关系。称呼随人设版本保存。</p>
     </section>
     <section className={styles.card}>
       <div className={styles.cardHeader}>
-        <h2>人设与表达</h2>
+        <h2 className={styles.sectionTitle}><span className={styles.sectionIcon} aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="m14 4 6 6M4 20l5-1 12-12-4-4L5 15l-1 5Zm0 0h16" /></svg>
+        </span>人设与表达</h2>
         <div className={styles.segment} aria-label="人设填写模式">
           <button type="button" aria-pressed={draft.mode === 'sections'} onClick={() => changeMode('sections')}>分区填写</button>
           <button type="button" aria-pressed={draft.mode === 'full'} onClick={() => changeMode('full')}>完整文本</button>
@@ -42,9 +46,11 @@ export default function PersonaFields({ draft, onChange, onError }: PersonaField
       </div>
       {draft.mode === 'full'
         ? <label>完整人设<textarea rows={12} value={draft.fullText} onChange={(event) => onChange({ ...draft, fullText: event.target.value })} /></label>
-        : (['core', 'speech', 'background'] as const).map((key, index) => <label key={key}>
-          {['核心性格', '语言习惯', '背景边界'][index]}
-          <textarea rows={4} value={draft.sections[key]} onChange={(event) => onChange({ ...draft, sections: { ...draft.sections, [key]: event.target.value } })} />
+        : (['core', 'speech', 'background'] as const).map((key, index) => <label key={key} className={styles.formRow}>
+          <span>{['核心性格', '语言习惯', '背景边界'][index]}</span>
+          <span className={styles.fieldControl}><span className={styles.hint}>
+            {['她在乎什么、怎样表达关心、遇事会怎么反应。', '句长、用词、比喻与表达习惯。', '哪些情景沿用、哪些未知、哪些不能当成共同往事。'][index]}
+          </span><textarea rows={3} value={draft.sections[key]} onChange={(event) => onChange({ ...draft, sections: { ...draft.sections, [key]: event.target.value } })} /></span>
         </label>)}
       {budgetWarning && <p role="status" className={styles.hint}>{budgetWarning}</p>}
       <aside className={styles.principles}><strong>共同原则 · 始终生效</strong><p>不编造共同经历 · 不用内疚迫使你聊天 · 操作成功后才确认</p></aside>
