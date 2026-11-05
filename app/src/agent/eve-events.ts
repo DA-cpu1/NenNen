@@ -1,7 +1,7 @@
 /**
  * 消费一次 eve 回合的事件流：把框架事件翻译成数据库里的回复状态与用量记账。
  * 上一步（eve-turn）只拿到「受理句柄」，模型还没说话；逐段到达的文字、成败
- * 和用量都在这里落地。事件流像一根水管——读一段、存一段，读完才定终态。
+ * 和用量都在这里落地。正式工具回合先等步骤确认才展示并保存文字，试聊可逐段展示。
  * 这里只做翻译和落库，不重发请求、不补写用户消息；保存失败可用原结果单独补写。
  */
 import { Buffer } from 'node:buffer'
@@ -23,7 +23,7 @@ export type TurnEvent =
 /** 回合结束后的汇总；编排层（下一步）据此决定提示与重试入口。 */
 export interface TurnOutcome {
   status: 'completed' | 'failed' | 'cancelled'
-  /** 回复最终全文；失败/取消时保留已到的半截文字。 */
+  /** 回复最终全文；失败/取消时保留已确认可展示的文字，不保存待确认旁白。 */
   finalText: string
   /** 用量是否为保守估算；true 表示供应商没有报告精确数字。 */
   usageEstimated: boolean
@@ -84,7 +84,7 @@ export interface ConsumeEveTurnInput {
   runId: string
   /** 准备阶段按字节口径估算的输入 token；供应商不给用量时兜底记账。 */
   estimatedInputTokens: number
-  /** 可能立即保存的回合等步骤明确结束后才展示文字，以免抢先说成功。 */
+  /** 正式工具回合等步骤明确结束后才展示文字，以免尚未写成就抢先说成功。 */
   waitForToolDecision?: boolean
 }
 

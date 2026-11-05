@@ -1,4 +1,4 @@
-/** 真正启动 eve 与业务 HTTP 服务，用本机固定供应商验证工具来回和试聊隔离。 */
+/** 真正启动 eve 与业务 HTTP 服务，用本机固定供应商验证无关键词保存、工具回执和试聊隔离。 */
 import assert from 'node:assert/strict'
 import { eq } from 'drizzle-orm'
 import { createServer } from 'node:http'
@@ -18,7 +18,10 @@ interface FixedRequest {
   messages: Array<{ role: string; content: unknown }>
 }
 
-/** 启动本机链路，检索结果必须出现在模型续轮，试聊请求则没有工具或正式记忆。 */
+/**
+ * 启动本机链路，检查无关键词原话也能保存，续轮收到真实回执，试聊仍无正式工具或资料。
+ * @returns 所有固定断言完成后的空结果；失败则抛错并回收本次创建的服务
+ */
 async function main(): Promise<void> {
   const received: FixedRequest[] = []
   const provider = createServer(async (request, response) => {
@@ -34,7 +37,7 @@ async function main(): Promise<void> {
     const delta = invoke ? { role: 'assistant', ...(remember ? { content: '提前声称已经保存。' } : {}), tool_calls: [{
       index: 0, id: 'fixed-search', type: 'function',
       function: remember ? { name: 'remember_explicit', arguments: JSON.stringify({
-        content: '用户希望被称为阿达', kind: 'preference', memoryKey: 'preferred_name', sourceMessageId: sourceId,
+        content: '用户从小喝不惯咖啡', kind: 'preference', memoryKey: 'coffee_preference', sourceMessageId: sourceId,
       }) } : { name: 'search_memories', arguments: '{"query":"水彩"}' },
     }] } : { role: 'assistant', content: '固定回复' }
     response.writeHead(200, { 'content-type': 'text/event-stream' })
@@ -80,6 +83,9 @@ async function main(): Promise<void> {
     assert.equal(formalEnd, 'done')
     assert.equal(received.length, 2)
     assert(received[0].tools?.some((tool) => tool.function?.name === 'search_memories'))
+    // 查旧事时也提供保存能力；固定模型本轮只检索，不能因此凭空新增一条记忆。
+    assert(received[0].tools?.some((tool) => tool.function?.name === 'remember_explicit'))
+    assert.equal(db.select().from(memories).all().length, 1)
     const toolOutput = received[1].messages.find((message) => message.role === 'tool')
     assert(toolOutput && JSON.stringify(toolOutput.content).includes('用户喜欢用水彩画动物。'))
 
@@ -93,7 +99,7 @@ async function main(): Promise<void> {
     assert(!received[2].tools?.some((tool) => tool.function?.name === 'remember_explicit'))
     assert(!JSON.stringify(received[2].messages).includes('用户喜欢用水彩画动物。'))
 
-    const write = turns.startTurn({ conversationId, requestId: 'remember', content: '以后叫我阿达。' })
+    const write = turns.startTurn({ conversationId, requestId: 'remember', content: '咖啡我从小就喝不惯。' })
     let visible = ''
     let writeEnd = ''
     let toolStatus = ''
@@ -107,11 +113,13 @@ async function main(): Promise<void> {
     assert(received[3].tools?.some((tool) => tool.function?.name === 'remember_explicit'))
     const writeOutput = received[4].messages.find((message) => message.role === 'tool')
     assert(writeOutput && JSON.stringify(writeOutput.content).includes('saved'))
-    assert.equal(db.select().from(memories).where(eq(memories.memoryKey, 'preferred_name')).all().length, 1)
+    const saved = db.select().from(memories).where(eq(memories.memoryKey, 'coffee_preference')).all()
+    assert.equal(saved.length, 1)
+    assert.equal(saved[0].content, '用户从小喝不惯咖啡')
     assert.equal(visible, '固定回复')
     assert.equal(toolStatus, 'memory-saved')
     process.stdout.write(JSON.stringify({ formalRequests: 4, toolResults: 2, previewRequests: 1,
-      previewMemoryTools: 0, memoriesSaved: 1, interimTextDisplayed: 0 }) + '\n')
+      previewMemoryTools: 0, memoriesSaved: 1, keywordFreeSave: true, interimTextDisplayed: 0 }) + '\n')
   } finally {
     try { await eve?.stop() } finally { await server?.stop() }
     companion.close()

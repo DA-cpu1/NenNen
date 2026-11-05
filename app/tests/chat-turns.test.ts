@@ -38,6 +38,8 @@ afterEach(() => companion.close())
 
 type FakeEvent = { type: string; data?: Record<string, unknown> }
 const appended = (delta: string): FakeEvent => ({ type: 'message.appended', data: { messageDelta: delta } })
+/** 正式聊天等整段确认才显示；模拟真实 eve 在步骤结束时交付的全文，不能只给增量。 */
+const messageDone = (message: string): FakeEvent => ({ type: 'message.completed', data: { message, finishReason: 'stop' } })
 const turnCompleted = (): FakeEvent => ({ type: 'turn.completed', data: {} })
 const sessionCompleted = (): FakeEvent => ({ type: 'session.completed' })
 
@@ -167,12 +169,13 @@ describe('聊天回合服务（T06⑪c1）', () => {
       cancel: vi.fn(async () => { throw new Error('故意拒绝取消') }),
       async *[Symbol.asyncIterator]() {
         yield appended('已看到的半截')
+        yield messageDone('已看到的半截')
         await held
         yield appended('不许显示的晚到文字')
         yield turnCompleted()
       },
     }
-    fake.send.mockResolvedValueOnce(oldResponse).mockResolvedValueOnce(fakeResponse([appended('另一角色的回复'), turnCompleted(), sessionCompleted()]).response)
+    fake.send.mockResolvedValueOnce(oldResponse).mockResolvedValueOnce(fakeResponse([appended('另一角色的回复'), messageDone('另一角色的回复'), turnCompleted(), sessionCompleted()]).response)
     const turns = service()
     const original = turns.startTurn({ conversationId, requestId: 'old', content: '聊聊旧资料' })
     await original.events.next()
@@ -203,7 +206,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
       { id: 'shared', scope: 'global', characterId: null, content: '水彩在客厅' },
       { id: 'other', scope: 'character', characterId: secondCharacter, content: '水彩在卧室' },
     ] as const).map((row) => ({ ...row, kind: 'fact' as const, origin: 'user_edit', validFrom: 1, createdAt: 1, updatedAt: 1 }))).run()
-    fake.send.mockResolvedValue(fakeResponse([appended('固定半截')], true).response)
+    fake.send.mockResolvedValue(fakeResponse([appended('固定半截'), messageDone('固定半截')], true).response)
     const turns = service()
     const request = { sessionId: 'eve-1', tool: 'search_memories', input: { query: '水彩' } } as const
     const { events } = turns.startTurn({ conversationId, requestId: 'tool-r1', content: '固定问题' })
@@ -239,18 +242,18 @@ describe('聊天回合服务（T06⑪c1）', () => {
     await collect(preview.events)
   })
 
-  it('只保存当前用户原话，回执失败时回滚，之后重试沿用已存结果', async () => {
+  it('无关键词的偏好也可保存；只接受当前原话，回执失败回滚，重试沿用已存结果', async () => {
     const { db, sqlite } = companion
     let begin!: () => void
     const sending = new Promise<void>((resolve) => { begin = resolve })
     fake.send.mockImplementation(async () => { begin(); return fakeResponse([], true).response })
     const turns = service()
-    const formal = turns.startTurn({ conversationId, requestId: 'remember-r1', content: '以后叫我阿达。' })
+    const formal = turns.startTurn({ conversationId, requestId: 'remember-r1', content: '咖啡我从小就喝不惯。' })
     await formal.events.next()
     const reading = formal.events.next()
     await sending
-    const input = { sourceMessageId: formal.userMessageId, kind: 'preference', memoryKey: 'preferred_name',
-      content: '用户希望被称为阿达' } as const
+    const input = { sourceMessageId: formal.userMessageId, kind: 'preference', memoryKey: 'coffee_preference',
+      content: '用户从小喝不惯咖啡' } as const
     const request = { sessionId: 'eve-1', tool: 'remember_explicit', input } as const
     expect(turns.executeMemoryTool({ ...request, input: { ...input, sourceMessageId: 'not-this-turn' } }))
       .toMatchObject({ ok: false, code: 'SOURCE_NOT_ALLOWED' })
@@ -275,7 +278,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
     expect(db.select().from(memories).all()).toHaveLength(1)
   })
   it('退出等待已开始回合取消落库，停止后拒绝正式和试聊新请求，重复stop复用', async () => {
-    const { response } = fakeResponse([appended('退出前的半截')], true)
+    const { response } = fakeResponse([appended('退出前的半截'), messageDone('退出前的半截')], true)
     fake.send.mockResolvedValue(response)
     const turns = service()
     const { events } = turns.startTurn({ conversationId, requestId: 'shutdown-r1', content: '固定问题' })
@@ -307,7 +310,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
   })
 
   it('正常回合：首帧 saved，转发文字与完成帧，结束腾出登记簿', async () => {
-    const { response } = fakeResponse([appended('你好'), turnCompleted(), sessionCompleted()])
+    const { response } = fakeResponse([appended('你'), appended('好'), messageDone('你好'), turnCompleted(), sessionCompleted()])
     fake.send.mockResolvedValue(response)
     const turns = service()
     const { userMessageId, events } = turns.startTurn({
@@ -320,13 +323,15 @@ describe('聊天回合服务（T06⑪c1）', () => {
       { type: 'done', replyId: latestReply().id },
     ])
     expect(latestReply()).toMatchObject({ content: '你好', status: 'completed' })
+    // 提供保存能力不代表必须保存；这个固定回复没有调用工具，数据库就不应多出记忆。
+    expect(companion.db.select().from(memories).all()).toEqual([])
     expect(turns.activeCount()).toBe(0)
   })
 
   it('同角色新请求被挡下，不同完整角色可以同时回复并各自停止', async () => {
     const secondConversationId = addSecondCharacter()
-    fake.send.mockResolvedValueOnce(fakeResponse([appended('甲的半截')], true).response)
-      .mockResolvedValueOnce(fakeResponse([appended('乙的半截')], true).response)
+    fake.send.mockResolvedValueOnce(fakeResponse([appended('甲的半截'), messageDone('甲的半截')], true).response)
+      .mockResolvedValueOnce(fakeResponse([appended('乙的半截'), messageDone('乙的半截')], true).response)
     const turns = service()
     const first = turns.startTurn({ conversationId, requestId: 'r1', content: '第一句' })
     expect(() => turns.startTurn({ conversationId, requestId: 'r2', content: '插队' }))
@@ -350,7 +355,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
   })
 
   it.each(['normal', 'preview'] as const)('%s 活动时同角色另一入口被拒，取消后释放且拒绝不新增会话或消息', async (mode) => {
-    fake.send.mockResolvedValue(fakeResponse([appended('回复'), turnCompleted(), sessionCompleted()]).response)
+    fake.send.mockResolvedValue(fakeResponse([appended('回复'), messageDone('回复'), turnCompleted(), sessionCompleted()]).response)
     const turns = service()
     const previewRequest = { requestId: 'p1', content: '试聊', draft: { personaFullText: '草稿', initialRelationship: '恋人' } }
     const formalRequest = { conversationId, requestId: 'r1', content: '正式聊天' }
@@ -408,7 +413,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
   })
 
   it('同一编号重发在成功后不再花第二次模型钱', async () => {
-    const { response } = fakeResponse([appended('回答'), turnCompleted(), sessionCompleted()])
+    const { response } = fakeResponse([appended('回答'), messageDone('回答'), turnCompleted(), sessionCompleted()])
     fake.send.mockResolvedValue(response)
     const turns = service()
     await collect(turns.startTurn({ conversationId, requestId: 'r1', content: '问题' }).events)
@@ -429,7 +434,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
       CREATE TRIGGER fail_final_write BEFORE UPDATE ON agent_runs
       BEGIN SELECT RAISE(ABORT, 'fixed-test-failure'); END;
     `)
-    fake.send.mockResolvedValue(fakeResponse([appended('完整回复'), turnCompleted(), sessionCompleted()]).response)
+    fake.send.mockResolvedValue(fakeResponse([appended('完整回复'), messageDone('完整回复'), turnCompleted(), sessionCompleted()]).response)
     let eveAvailable = true
     const turns = createChatTurnService({
       getDb: () => companion.db, getEve: () => eveAvailable ? handle : undefined,
@@ -460,7 +465,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
     expect(turns.activeCount()).toBe(0)
   })
 
-  it('模型原本失败时，补写恢复后仍返回原失败原因，不改成成功或再次调用模型', async () => {
+  it('模型失败时丢弃尚未确认的旁白；补写恢复仍返回原失败，不再次调用模型', async () => {
     companion.sqlite.exec(`
       CREATE TRIGGER fail_failed_reply BEFORE UPDATE OF status ON messages
       WHEN NEW.role = 'assistant' AND NEW.status = 'failed'
@@ -474,7 +479,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
     expect((await collect(turns.startTurn(request).events)).at(-1)).toEqual({ type: 'failed', code: 'E_REPLY_SAVE_FAILED' })
     companion.sqlite.exec('DROP TRIGGER fail_failed_reply')
     expect((await collect(turns.startTurn(request).events)).at(-1)).toEqual({ type: 'failed', code: 'E_PROVIDER_DOWN' })
-    expect(latestReply()).toMatchObject({ status: 'failed', content: '半截' })
+    expect(latestReply()).toMatchObject({ status: 'failed', content: '' })
     expect(companion.db.select().from(agentRuns).get()).toMatchObject({ status: 'failed', errorCode: 'E_PROVIDER_DOWN' })
     expect(fake.send).toHaveBeenCalledTimes(1)
     expect(companion.db.select().from(messages).all()).toHaveLength(2)
@@ -540,7 +545,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
   })
 
   it('取消活动回合：事件以 cancelled 收尾、半截文字保留、账本记 cancelled', async () => {
-    const { response, state } = fakeResponse([appended('半截')], true)
+    const { response, state } = fakeResponse([appended('半截'), messageDone('半截')], true)
     fake.send.mockResolvedValue(response)
     const turns = service()
     const { events } = turns.startTurn({ conversationId, requestId: 'r1', content: '问题' })

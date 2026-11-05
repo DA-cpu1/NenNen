@@ -1,4 +1,4 @@
-/** 正式聊天里立即保存用户明确提出的记忆，并用数据库回执处理重试。 */
+/** 正式聊天里立即保存模型选出的、用户明确表达的资料，并用数据库回执处理重试。 */
 import { createHash } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
@@ -13,7 +13,7 @@ const stale = { ok: false, code: 'STALE_REVISION', message: '已有不同或已�
 const unavailable = { ok: false, code: 'STORAGE_UNAVAILABLE', message: '暂时无法确认记忆已保存。', retryable: true } as const
 
 /**
- * 把本轮明确提出的内容与回执一起保存。回执写失败，记忆也一起撤回。
+ * 把模型根据本轮用户原话选出的内容与回执一起保存。回执写失败，记忆也一起撤回。
  * @param db 后台 SQLite 连接
  * @param context 正式回合的实际会话与用户消息编号，来自后台登记
  * @param input 模型填写的候选记录和来源编号

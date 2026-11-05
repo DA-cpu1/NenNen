@@ -17,7 +17,7 @@ import type { EveHandle } from './eve-process'
 import type { ModelInputLimits } from './context-budget'
 import type { BuildTurnContextInput } from './turn-context'
 import type { PreviewPersonaDraft } from '../shared/chat-turn'
-import { hasBareForgetReference, mayRequestImmediateMemory, requestedMemoryChange } from '../shared/memory-tool'
+import { hasBareForgetReference, requestedMemoryChange } from '../shared/memory-tool'
 
 /** 04 §2：一轮的总用时上限；模型不能自己延长，到点由程序收场。 */
 export const DEFAULT_TURN_TIMEOUT_MS = 90_000
@@ -126,7 +126,8 @@ async function* runTurn(
     const content = prepared.context.currentMessage.content
     const normal = prepared.context.conversationMode === 'normal'
     const memoryChange = normal ? requestedMemoryChange(content) : undefined
-    const rememberAllowed = normal && !memoryChange && mayRequestImmediateMemory(content)
+    // 是否值得保存交给模型；后台仍只接受本轮正式原话，纠正/忘记沿用原修改分支。
+    const rememberAllowed = normal && !memoryChange
     let response: MessageResponse
     try {
       if ('registerToolSession' in input) unregisterTools = input.registerToolSession?.({

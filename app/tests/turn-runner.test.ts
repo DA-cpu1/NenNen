@@ -11,7 +11,7 @@ import { initializeFirstCharacter } from '../src/data/character-init'
 import { saveUserMessage, createAssistantReply, updateAssistantReply } from '../src/data/messages'
 import { startAgentRun } from '../src/data/agent-runs'
 import { agentRuns, characterVersions, conversations, messages } from '../src/data/tables'
-import { runFormalTurn, runPreviewTurn, recoverInterruptedTurns } from '../src/agent/turn-runner'
+import { runFormalTurn, runPreviewTurn, recoverInterruptedTurns, type ActiveToolSession } from '../src/agent/turn-runner'
 import { decodeEveTurnEnvelope } from '../src/shared/eve-turn-envelope'
 import type { TurnEvent, TurnOutcome } from '../src/agent/eve-events'
 import type { EveHandle } from '../src/agent/eve-process'
@@ -111,6 +111,36 @@ function runRows() {
 }
 
 describe('回合编排（T06⑪b）', () => {
+  it('普通正式回合允许自主保存，等全文确认才显示，结束撤下工具权限', async () => {
+    const { response } = fakeResponse([
+      appended('你'), appended('好'),
+      { type: 'message.completed', data: { message: '你好', finishReason: 'stop' } },
+      turnCompleted(), sessionCompleted(),
+    ])
+    const unregister = vi.fn()
+    const registerToolSession = vi.fn((_session: ActiveToolSession) => unregister)
+    fake.send.mockResolvedValue(response)
+    const { events } = await drive(runFormalTurn(companion.db, handle, {
+      conversationId, userMessageId, commonRules: '不编造经历。', limits,
+      model: 'fixed-model', provider: 'fixed-provider', registerToolSession,
+    }, new AbortController().signal))
+    expect(registerToolSession).toHaveBeenCalledWith(expect.objectContaining({ rememberAllowed: true }))
+    expect(events).toEqual([{ type: 'text', delta: '你好' }, { type: 'done', replyId: latestReply().id }])
+    expect(unregister).toHaveBeenCalledTimes(1)
+  })
+
+  it('普通正式回合在确认全文前取消，不显示或保存可能抢先报成功的旁白', async () => {
+    const { response } = fakeResponse([appended('我已经记住了。'), turnCancelled()])
+    fake.send.mockResolvedValue(response)
+    const { events, outcome } = await drive(runFormalTurn(companion.db, handle, {
+      conversationId, userMessageId, commonRules: '不编造经历。', limits,
+      model: 'fixed-model', provider: 'fixed-provider', registerToolSession: () => () => {},
+    }, new AbortController().signal))
+    expect(events).toEqual([{ type: 'cancelled' }])
+    expect(outcome).toMatchObject({ status: 'cancelled', finalText: '' })
+    expect(latestReply()).toMatchObject({ content: '', status: 'cancelled' })
+  })
+
   it('正常回合全链路：先留据后发送，结束时回复与账本都是终态', async () => {
     const { response } = fakeResponse([
       appended('你'), appended('好'), stepCompleted(31, 9), turnCompleted(), sessionCompleted(),

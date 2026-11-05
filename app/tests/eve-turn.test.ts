@@ -198,8 +198,35 @@ describe('干净 eve 会话准备（T06⑩a）', () => {
       prompt: prepared.input.prompt, optionalPromptGroups: prepared.input.optionalPromptGroups,
       modelWindowTokens: 32_000, outputReserveTokens: 0,
     })
+    // 没有后台登记时，即使是正式会话也不能向模型提供正式工具。
+    expect(decodeEveTurnEnvelope(body)?.allowMemoryTools).toBeUndefined()
+    expect(decodeEveTurnEnvelope(body)?.rememberSourceMessageId).toBeUndefined()
     expect(options).toEqual({ signal, streamReconnectPolicy: { reconnect: false } })
     expect(companion.db.select().from(messages).all()).toHaveLength(3)
+  })
+
+  it.each(['咖啡我从小就喝不惯。', '你好。', '以后叫我阿达。'])(
+    '已登记的正式回合都提供保存工具来源，是否保存由模型决定：%s', async (content) => {
+      userMessageId = saveUserMessage(companion.db, { conversationId, requestId: 'memory-source', content }).message.id
+      const prepared = await prepare()
+      fake.send.mockResolvedValue({ sessionId: 'eve-new' })
+      await sendPreparedEveTurn(companion.db, prepared, new AbortController().signal, true)
+      expect(decodeEveTurnEnvelope(fake.send.mock.calls[0][0])).toMatchObject({
+        allowMemoryTools: true, rememberSourceMessageId: userMessageId,
+      })
+    },
+  )
+
+  it.each([
+    ['我以前喝咖啡，现在不喝了', 'correct'], ['忘掉咖啡偏好', 'forget'],
+  ])('修改记忆的回合保留原分支，不混入新增保存：%s', async (content, action) => {
+    userMessageId = saveUserMessage(companion.db, { conversationId, requestId: 'memory-change', content }).message.id
+    const prepared = await prepare()
+    fake.send.mockResolvedValue({ sessionId: 'eve-new' })
+    await sendPreparedEveTurn(companion.db, prepared, new AbortController().signal, true)
+    const envelope = decodeEveTurnEnvelope(fake.send.mock.calls[0][0])
+    expect(envelope?.memoryChange).toEqual({ action, messageId: userMessageId })
+    expect(envelope?.rememberSourceMessageId).toBeUndefined()
   })
 
   it('发送前取消、内容版本或框架映射变化时拒绝，供应商不会收到这份旧输入', async () => {

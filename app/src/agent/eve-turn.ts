@@ -14,7 +14,7 @@ import {
 import { prepareBudgetedContext, type BudgetedTurnContext, type ModelInputLimits } from './context-budget'
 import type { EveHandle } from './eve-process'
 import { encodeEveTurnEnvelope } from '../shared/eve-turn-envelope'
-import { mayRequestImmediateMemory, requestedMemoryChange } from '../shared/memory-tool'
+import { requestedMemoryChange } from '../shared/memory-tool'
 
 /** 尚未启动模型的回合资料；后续发送入口继续使用这里固定的人设和预算输入。 */
 export interface PreparedEveTurn {
@@ -138,7 +138,8 @@ export async function sendPreparedEveTurn(
     outputReserveTokens: prepared.input.outputReserveTokens,
     maxOutputTokens: prepared.input.maxOutputTokens,
     allowMemoryTools: toolsAllowed ? true : undefined,
-    rememberSourceMessageId: toolsAllowed && !change && mayRequestImmediateMemory(currentMessage.content) ? currentMessage.id : undefined,
+    // 普通正式回合都提供当前原话编号，让模型按内容选择；纠正/忘记仍走原修改工具。
+    rememberSourceMessageId: toolsAllowed && !change ? currentMessage.id : undefined,
     memoryChange: change ? { action: change, messageId: currentMessage.id } : undefined,
   })
   sentTurns.add(prepared)
