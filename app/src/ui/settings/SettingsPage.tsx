@@ -182,10 +182,13 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
     {error && <p role="alert" className={styles.error}>{error}</p>}
     {notice && <p role="status" className={styles.notice}>{notice}</p>}
     {(loadError || needsRefresh) && <p className={styles.error}>资料刷新失败。<button disabled={busy} onClick={() => void refresh()}>重新读取</button></p>}
-    <fieldset className={styles.scroll} disabled={busy || blocked || imageBusy} aria-busy={busy || imageBusy}>
-      {tab === 'basic' && <div className={styles.settingsColumns}><div>
+    <fieldset className={tab === 'basic' ? `${styles.scroll} ${styles.basicScroll}` : styles.scroll}
+      disabled={busy || blocked || imageBusy} aria-busy={busy || imageBusy}>
+      {tab === 'basic' && <div className={styles.settingsColumns}><div className={styles.formScroll} role="region" aria-label="人设编辑内容">
         <PersonaFields draft={draft} onChange={changeDraft} onError={setError} />
-      </div><CharacterImages character={character} reload={reload} onBusy={setImageBusy} /></div>}
+      </div><div className={styles.imageScroll} role="region" aria-label="角色图片设置">
+        <CharacterImages character={character} reload={reload} onBusy={setImageBusy} />
+      </div></div>}
       {tab === 'examples' && <ExamplesEditor examples={draft.dialogueExamples} onChange={(dialogueExamples) => changeDraft({ ...draft, dialogueExamples })} />}
       {tab === 'versions' && <section className={styles.card}><h2>已保存的人设版本</h2>
         <p className={styles.hint}>回退恢复人设、关系、称呼与示例；名字和图片保持当前设置。</p>
@@ -201,9 +204,9 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
     <footer className={styles.footer}><p>保存生成新版本，从下一轮聊天生效。</p><div>
       <button type="button" className={styles.secondary} disabled={busy || imageBusy || blocked}
         onClick={() => setSampleRequested(true)}>载入六花样稿 0.2</button>
+      <button type="button" className={styles.secondary} disabled={busy || imageBusy || !dirty} onClick={() => setCancelRequested(true)}>取消修改</button>
       <button type="button" className={styles.secondary} disabled={busy || imageBusy || blocked}
         onClick={() => setPreviewOpen(true)}>试聊当前草稿</button>
-      <button type="button" className={styles.secondary} disabled={busy || imageBusy || !dirty} onClick={() => setCancelRequested(true)}>取消修改</button>
       <button type="button" className={styles.primary} disabled={busy || imageBusy || blocked || !dirty} onClick={() => void save()}>{busy ? '正在处理…' : '保存人设版本'}</button>
     </div></footer>
     {sampleRequested && <ConfirmationDialog title="载入六花样稿 0.2？" onCancel={() => setSampleRequested(false)}

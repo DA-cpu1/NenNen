@@ -35,12 +35,14 @@ export default function CharacterImages({ character, reload, onBusy }: Character
     finally { setPicking(false); onBusy(false) }
   }
 
-  return <aside className={styles.card}>
-    <h2>角色图片</h2><p className={styles.hint}>桌面形象与聊天立绘分别设置，支持 PNG。</p>
+  return <aside className={`${styles.card} ${styles.imagesPanel}`}>
+    <h2 className={styles.sectionTitle}><span className={styles.sectionIcon} aria-hidden="true">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8" cy="8" r="1.5" /><path d="m3 16 5-5 4 4 4-5 5 6" /></svg>
+    </span>角色图片</h2><p className={styles.hint}>桌面形象与聊天立绘分别设置，支持 PNG。</p>
     {([['desktop', '桌面形象（Q 版）', character.desktopImagePath], ['portrait', '聊天立绘', character.portraitImagePath]] as const).map(([slot, title, path]) =>
       <section className={styles.imageCard} key={slot}>
         <h3>{title}</h3>
-        <ImagePreview path={path} title={title} />
+        <ImagePreview path={path} title={title} slot={slot} />
         <button type="button" className={styles.secondary} disabled={picking} onClick={() => void pick(slot)}>
           {slot === 'desktop' ? '更换桌面图片' : '更换聊天立绘'}
         </button>
@@ -50,11 +52,15 @@ export default function CharacterImages({ character, reload, onBusy }: Character
   </aside>
 }
 
-/** 图片不存在或读坏时给说明；路径改变会重新创建预览，清掉旧错误状态。 */
-function ImagePreview({ path, title }: { path: string | null; title: string }) {
+/**
+ * 图片不存在或读坏时显示说明；不同槽位只影响预览高度，不裁切原图。
+ * @param props 已保存的路径、图片说明和桌面／立绘槽位
+ * @returns 图片或读取失败的占位说明
+ */
+function ImagePreview({ path, title, slot }: { path: string | null; title: string; slot: 'desktop' | 'portrait' }) {
   const [failedPath, setFailedPath] = useState<string | null>(null)
   const url = assetUrl(path)
-  return <div className={styles.imagePreview}>
+  return <div className={styles.imagePreview} data-slot={slot}>
     {url && failedPath !== path ? <img src={url} alt={title} onError={() => setFailedPath(path)} />
       : <p>{path ? '图片无法读取，请重新选择。' : '图片待设置'}</p>}
   </div>
