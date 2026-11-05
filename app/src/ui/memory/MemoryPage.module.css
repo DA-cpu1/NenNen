@@ -1,14 +1,6 @@
-/* 按设计稿排列左侧资料表和右侧详情。两栏分别滚动，操作按钮留在详情底部。 */
+/* 按设计稿排列资料表和详情；颜色来自 global.css，两栏分别滚动，操作按钮留在底部。 */
 .page {
-  --ink: #151d4d;
-  --muted: #59658c;
-  --border: #e0e7f7;
-  --panel: #fff;
-  --bg: #f6f9ff;
-  --accent: #5746eb;
-  --accent-soft: #e6e6ff;
-  --accent-soft-weak: #f0f4fc;
-  display: flex; flex: 1; min-width: 0; background: #fcfdff; color: var(--ink);
+  display: flex; flex: 1; min-width: 0; background: var(--bg); color: var(--ink);
 }
 .workspace { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; min-height: 0;
   box-sizing: border-box; padding: 12px 12px 12px 15px; }

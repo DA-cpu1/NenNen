@@ -2,27 +2,29 @@
  * 全局样式与颜色变量（两个窗口页面共用）。
  * 变量定义在 :root（文档根元素）上，组件样式里用 var(--名字) 取用——
  * 颜色只在这一处定义，将来调整主题色不用满文件搜替换。
- * 取值按界面设计稿（output/design/full-ui-v1）的暖白 / 淡紫 / 深靛蓝。
+ * 取值统一按详细设计稿 02 / 05 / 21 的冷白、蓝紫和深靛蓝。
+ * 各页只决定内容怎么排列，不再重新定义整套主题，避免切页时颜色突变。
  */
 :root {
-  /* 暖白底色（页面背景） */
-  --bg: #faf9f6;
+  /* 冷白底色：三个页面打开后都像同一个窗口。 */
+  --bg: #fcfdff;
   /* 纯白面板（导航栏、卡片面） */
   --panel: #ffffff;
   /* 深靛蓝：主文字 */
-  --ink: #2f2b4a;
+  --ink: #151d4d;
   /* 灰蓝：次级文字 */
-  --muted: #6d6a87;
-  /* 淡紫：主题强调色（按钮、选中态、托盘图标同色系） */
-  --accent: #a78fe0;
+  --muted: #59658c;
+  /* 蓝紫：按钮和当前选中项；悬停时略加深，方便看出鼠标停在哪。 */
+  --accent: #5746eb;
+  --accent-hover: #4937d6;
   /* 更淡的紫：选中填充 */
-  --accent-soft: #ece7f9;
+  --accent-soft: #e6e6ff;
   /* 最淡的紫：装饰（圆环等）与悬停 */
-  --accent-soft-weak: #f4f1fc;
+  --accent-soft-weak: #f0f4fc;
   /* 边框与禁用底 */
-  --border: #e3e0ee;
+  --border: #e0e7f7;
   /* 危险/错误文字 */
-  --danger: #b3564d;
+  --danger: #c72046;
 }
 
 /* 基础重置：去掉浏览器给 body 的默认边距，字体用系统 UI 栈 */
@@ -37,14 +39,19 @@ body {
   color: var(--ink);
 }
 
-/* 文本框与文本域的通用手感：聚焦时淡紫描边 */
+/* 表单控件沿用界面字体，避免中文输入框和按钮突然变成另一种字形。 */
+button,
+select,
 input,
 textarea {
   font-family: inherit;
 }
 
-input:focus,
-textarea:focus {
-  outline: 2px solid var(--accent-soft);
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
   border-color: var(--accent);
+  outline-offset: 2px;
 }
