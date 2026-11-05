@@ -56,7 +56,8 @@ export default function ChatPage({ character, loadError, reload, historyVersion,
           <p>角色资料读取失败（{loadError}）</p>
           <button type="button" onClick={() => void reload()}>重试读取角色</button>
         </div> : <ChatHistory key={character?.characterId ?? 'loading'} characterId={character?.characterId}
-          displayName={displayName} refreshKey={historyRefresh + historyVersion}
+          displayName={displayName} avatarUrl={assetUrl(character?.desktopImagePath ?? character?.portraitImagePath)}
+          refreshKey={historyRefresh + historyVersion}
           source={source} onCloseSource={onCloseSource} onReturnToMemory={onReturnToMemory} />}
         <ChatComposer enabled={!!character && !loadError}
           onTurnSettled={() => { onCloseSource(); setHistoryRefresh((value) => value + 1) }} />

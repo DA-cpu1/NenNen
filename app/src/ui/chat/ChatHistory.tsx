@@ -10,6 +10,8 @@ import styles from './ChatHistory.module.css'
 interface ChatHistoryProps {
   characterId?: string
   displayName: string
+  /** 头像沿用已保存的角色图，只作识别，不另外读取用户资料。 */
+  avatarUrl: string | null
   /** 父层的刷新信号：发送/回合落定时 +1，列表重读最近一页。 */
   refreshKey?: number
   source: ChatSourceLocation | null
@@ -25,7 +27,7 @@ const timeFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeSt
  * @param props 当前角色编号与显示名
  * @returns 只读消息列表、分页按钮与读取状态
  */
-export default function ChatHistory({ characterId, displayName, refreshKey, source, onCloseSource, onReturnToMemory }: ChatHistoryProps) {
+export default function ChatHistory({ characterId, displayName, avatarUrl, refreshKey, source, onCloseSource, onReturnToMemory }: ChatHistoryProps) {
   const [page, setPage] = useState<ChatHistoryPage | null>(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -139,12 +141,15 @@ export default function ChatHistory({ characterId, displayName, refreshKey, sour
           tabIndex={message.id === source?.id ? -1 : undefined}
           data-source={message.id === source?.id ? 'true' : undefined}
           className={message.role === 'user' ? styles.user : styles.character}>
+          {message.role !== 'user' ? <span className={styles.avatar} aria-hidden="true">
+            {avatarUrl ? <img src={avatarUrl} alt="" /> : displayName.slice(0, 1)}
+          </span> : null}
+          <p className={styles.text}>{message.content ||
+            (message.status === 'pending' || message.status === 'streaming' ? '等待回复…' : '未收到回复文字')}</p>
           <div className={styles.meta}>
             <span>{message.role === 'user' ? '你' : displayName}{message.role === 'proactive' ? ' · 主动问候' : ''}</span>
             <time dateTime={new Date(message.createdAt).toISOString()}>{timeFormat.format(message.createdAt)}</time>
           </div>
-          <p className={styles.text}>{message.content ||
-            (message.status === 'pending' || message.status === 'streaming' ? '等待回复…' : '未收到回复文字')}</p>
           {message.excludedFromContext && <p className={styles.incomplete}>已停止用作聊天背景</p>}
           {message.status !== 'completed' && <p className={styles.incomplete}>
             未完成 · {message.status === 'failed' ? '回复失败' : message.status === 'cancelled' ? '已取消' : '等待或生成中'}
