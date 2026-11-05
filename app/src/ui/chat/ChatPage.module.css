@@ -82,6 +82,9 @@
   letter-spacing: .08em;
   color: var(--ink);
   text-shadow: 0 1px 8px #ffffffcc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .artHint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; text-shadow: 0 1px 4px #fff; }
 
@@ -99,7 +102,7 @@
   padding: 18px 22px 14px;
   border-bottom: 1px solid var(--border);
 }
-.header h1 { margin: 0 0 5px; font-size: 23px; line-height: 1.25; }
+.header h1 { margin: 0 0 5px; font-size: 23px; line-height: 1.25; overflow-wrap: anywhere; }
 .header p { margin: 0; color: var(--muted); font-size: 13px; }
 
 /* 角色资料读取失败时，重试真正重读父层资料，不让历史列表代替它假重试。 */

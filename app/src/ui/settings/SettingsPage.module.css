@@ -77,7 +77,7 @@
   border-top: 1px solid var(--border); padding: 12px 20px; background: var(--panel); font-size: 12px; }
 .footer p { margin: 0; color: var(--muted); }
 .footer > div, .dialogActions { display: flex; gap: 8px; flex-wrap: wrap; }
-.dialog { width: min(420px, 80vw); border: 1px solid var(--border); border-radius: 14px; padding: 24px; color: var(--ink); box-shadow: 0 16px 60px #2f2b4a30; }
+.dialog { width: min(420px, 80vw); border: 1px solid var(--border); border-radius: 9px; padding: 20px; color: var(--ink); box-shadow: 0 12px 36px #25396b30; }
 .dialog::backdrop { background: #2f2b4a55; }
 .dialog h2 { font-size: 18px; margin-top: 0; }
 .dialogClose { position: absolute; top: 12px; right: 12px; border: 0; border-radius: 5px; padding: 2px 7px;

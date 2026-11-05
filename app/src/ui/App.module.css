@@ -72,6 +72,8 @@
 .railCharacter img, .railCharacter > span { display: grid; place-items: center; box-sizing: border-box;
   width: 64px; height: 64px; border: 1px solid #dce6fa; border-radius: 50%; background: #e9f0ff; color: var(--accent);
   font-size: 24px; object-fit: contain; }
+/* 名字过长时用省略号，避免一行英文名字把整个侧栏撑出窗口。 */
+.railCharacter strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 右侧页面区：让当前页组件自己铺满 */
 .body {
