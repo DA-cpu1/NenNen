@@ -1,14 +1,14 @@
 /**
- * 聊天输入区样式：输入行 + 进行中回复的实时条（设计沿用 full-ui-v1）。
+ * 聊天输入区按图纸显示为多行卡片；回复状态和试聊逐字显示仍留在卡片上方。
  */
 
 /* 底部固定输入区：纵向排「实时条 / 提示行 / 输入行」。 */
 .composer {
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
   gap: 6px;
-  padding: 10px 16px 12px;
-  border-top: 1px solid var(--border);
+  padding: 10px 20px 14px;
 }
 
 /* 进行中回复的实时显示：浅底圆角条，随文字增长自动变高（限高滚动）。 */
@@ -17,7 +17,7 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 8px 12px;
-  max-height: 180px;
+  max-height: min(180px, 24vh);
   overflow-y: auto;
 }
 
@@ -61,36 +61,52 @@
   cursor: pointer;
 }
 
-/* 输入行。 */
+/* 一张卡片分为上方正文、下方快捷键与发送按钮，排列与设计稿一致。 */
 .row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
   gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 3px 9px #25396b10;
 }
 
 .input {
-  flex: 1;
+  grid-column: 1 / -1;
+  box-sizing: border-box;
+  width: 100%;
   min-width: 0;
-  padding: 9px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 13px;
-  background: var(--bg);
+  min-height: 60px;
+  padding: 0;
+  border: 0;
+  resize: none;
+  font-size: 14px;
+  line-height: 1.6;
+  background: transparent;
   color: var(--ink);
 }
 
-.input:disabled {
-  background: var(--panel);
-}
+/* 光标进入正文时描亮整张卡片，不在里面再套一个边框。 */
+.row:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.input:focus-visible { outline: none; }
+.input::placeholder { color: var(--muted); }
+.shortcut { align-self: center; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 
 .send {
+  min-width: 76px;
+  min-height: 36px;
   padding: 8px 18px;
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--accent);
   color: #fff;
   font-size: 13px;
   cursor: pointer;
 }
+.send:hover:not(:disabled) { background: var(--accent-hover); }
 
 .send:disabled {
   background: var(--border);
@@ -100,9 +116,10 @@
 
 /* 停止按钮：描边样式与发送区分，表达「中断」而不是「提交」。 */
 .stop {
+  min-height: 36px;
   padding: 8px 18px;
   border: 1px solid var(--danger);
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
   color: var(--danger);
   font-size: 13px;

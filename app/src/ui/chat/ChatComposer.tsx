@@ -258,10 +258,17 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
         onClick={() => void startTurn(retry)}>重试</button>}
     </div>}
     <div className={styles.row}>
-      <input className={styles.input} value={text} placeholder={enabled ? '说点什么…' : '请先补齐角色资料…'}
+      <textarea className={styles.input} rows={3} value={text} placeholder={enabled ? '想说些什么？' : '请先补齐角色资料…'}
         disabled={!enabled} onChange={(event) => setText(event.target.value)}
-        onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) send() }}
+        onKeyDown={(event) => {
+          // 中文输入法确认候选词和 Shift＋Enter 都不发送，避免一句话没写完就被送出。
+          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+            event.preventDefault()
+            send()
+          }
+        }}
         aria-label={previewDraft ? '试聊输入框' : '聊天输入框'} />
+      <p className={styles.shortcut}>Enter 发送 · Shift + Enter 换行</p>
       {busy ? <button type="button" className={styles.stop} disabled={phase === 'stopping'} onClick={stop}>
         {phase === 'stopping' ? '停止中' : '停止'}</button>
         : <button type="button" className={styles.send} disabled={!enabled || !text.trim() || tooLong || pendingSave.current !== null} onClick={send}>发送</button>}
