@@ -118,6 +118,25 @@ describe('记忆读写', () => {
 })
 
 describe('纠正与忘记', () => {
+  it('手填资料按明确范围保存，重复提交不多写，聊天工具不能代为共享', () => {
+    const { db } = companion
+    const shared = { action: 'create', scope: 'global', content: '共享测试资料' } as const
+    expect(() => mutateMemory(db, { conversationId: 'normal', requestMessageId: 'original' }, shared, now))
+      .toThrow('SOURCE_NOT_ALLOWED')
+    const context = { conversationId: 'normal', requestId: 'add-shared' }
+    const saved = mutateMemory(db, context, shared, now)
+    expect(saved.conversationIds.sort()).toEqual(['normal', 'other'])
+    expect(mutateMemory(db, context, shared, now + 1)).toEqual({ receipt: saved.receipt, conversationIds: [] })
+    const privateSave = mutateMemory(db, { ...context, requestId: 'add-private' },
+      { ...shared, scope: 'character', content: '私有测试资料' }, now + 1)
+    expect(privateSave.conversationIds).toEqual(['normal'])
+    expect(listCurrentMemories(db, 'a', now + 2)).toHaveLength(2)
+    expect(listCurrentMemories(db, 'b', now + 2)).toMatchObject([{ id: saved.receipt.memoryId, scope: 'global' }])
+    expect(readGlobalMemoryEpoch(db)).toBe(1)
+    expect(db.select().from(memorySources).all()).toEqual([])
+    expect(db.select().from(conversations).where(eq(conversations.id, 'preview')).get()?.contextEpoch).toBe(0)
+  })
+
   it('A11 纠正后只有新值生效，旧值有时间和来源，重复请求不再写入', () => {
     const { db } = companion
     saveCharacterMemory(db, initial)

@@ -97,6 +97,7 @@ describe('后台服务认证', () => {
         memoryId: 'fixed-memory', expectedRevision: 1, deleteSources: false }
       const post = (body: object) => fetch(path, { method: 'POST', headers, body: JSON.stringify(body) })
       expect((await post({ ...change, conversationId: '伪造会话' })).status).toBe(400)
+      expect((await post({ action: 'create', requestId: change.requestId, content: '没有明确范围' })).status).toBe(400)
       expect((await post({ ...change, deleteSources: true })).status).toBe(400)
       const previewBody = { memoryId: change.memoryId, expectedRevision: change.expectedRevision }
       const previewRequest = { method: 'POST', body: JSON.stringify(previewBody) }

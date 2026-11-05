@@ -8,14 +8,14 @@ import { characterVersions, contextExclusions, conversations, memories, memoryJo
 import { beginToolOperation, buildOperationKey, completeToolOperation } from './tool-ops'
 import {
   memoryChangeReceiptSchema, memoryContentSchema, type ManagedMemory, type MemoryChangeReceipt,
-  type MemoryDeletionPreview, type MemoryTarget,
+  type MemoryDeletionPreview, type MemoryScope, type MemoryTarget,
 } from '../shared/memory-management'
 
-/** 界面必须先明确选择删除原文。聊天操作只能使用本轮已保存的用户原话。 */
-export type MemoryMutation = { memoryId: string; expectedRevision: number } & (
+/** 新建由用户明确指定范围；删除原文必须确认。聊天操作只使用本轮已保存的用户原话。 */
+export type MemoryMutation = { action: 'create'; scope: MemoryScope; content: string } | (MemoryTarget & (
   | { action: 'correct'; content: string }
   | { action: 'forget'; deleteSources: boolean; sourceFingerprint?: string }
-)
+))
 
 /** 管理页与聊天工具都要说明是谁触发的操作，方便复用同一份回执。 */
 export type MemoryMutationContext = { conversationId: string } & (
@@ -144,8 +144,26 @@ function excludeMessages(db: BetterSQLite3Database, ids: Set<string>, reason: 'f
   }
 }
 
+/** 按资料范围提升版本号，让受影响的正式聊天和未运行的整理任务丢掉旧上下文。 */
+function invalidateMemoryContexts(
+  db: BetterSQLite3Database, privateIds: Set<string>, sourceConversations: Set<string>, globalChanged: boolean, now: number,
+): string[] {
+  for (const id of privateIds) bumpCharacterMemoryEpoch(db, id)
+  if (globalChanged) bumpGlobalMemoryEpoch(db)
+  // 所有正式角色都可能读取明确共享的资料；试聊根本不使用它们。
+  const affected = db.select({ id: conversations.id }).from(conversations).where(and(eq(conversations.mode, 'normal'),
+    globalChanged ? undefined : or(inArray(conversations.characterId, [...privateIds]), inArray(conversations.id, [...sourceConversations])))).all()
+  const conversationIds = affected.map(({ id }) => id)
+  for (const id of conversationIds) bumpContextEpoch(db, id)
+  db.update(conversations).set({ runtimeSessionId: null }).where(inArray(conversations.id, conversationIds)).run()
+  db.update(memoryJobs).set({ status: 'stale', leaseUntil: null, updatedAt: now }).where(and(
+    eq(memoryJobs.status, 'pending'), inArray(memoryJobs.conversationId, conversationIds),
+  )).run()
+  return conversationIds
+}
+
 /**
- * 完成一次记忆纠正或忘记。旧任务先失效，运行中的任务仍可写用量账本。
+ * 完成一次资料新建、纠正或忘记。旧任务先失效，运行中的任务仍可写用量账本。
  * @param db 后台唯一写连接
  * @param context 实际正式会话和页面请求编号，或本轮用户原话编号
  * @param change 已校验的操作、目标与修订号
@@ -160,15 +178,31 @@ export function mutateMemory(
     const conversation = tx.select().from(conversations).where(eq(conversations.id, context.conversationId)).get()
     if (!conversation || conversation.mode !== 'normal') throw new Error('SOURCE_NOT_ALLOWED')
     const sourceId = context.requestMessageId
+    if (change.action === 'create' && sourceId !== undefined) throw new Error('SOURCE_NOT_ALLOWED')
+    const toolNames = { create: 'create_managed_memory', correct: 'correct_memory', forget: 'forget_memory' }
     const operation = { conversationId: conversation.id, requestMessageId: sourceId ?? null,
-      toolName: change.action === 'correct' ? 'correct_memory' : 'forget_memory', targetId: change.memoryId }
+      toolName: toolNames[change.action], targetId: change.action === 'create' ? null : change.memoryId }
     const begun = beginToolOperation(tx, { ...operation, now,
-      operationKey: buildOperationKey({ ...operation, targetId: context.requestId ?? change.memoryId }) })
+      operationKey: buildOperationKey({ ...operation, targetId: context.requestId ?? operation.targetId }) })
     if (begun.kind === 'already-committed') {
       const receipt = memoryChangeReceiptSchema.parse(JSON.parse(begun.resultJson ?? 'null'))
       return { receipt, conversationIds: [] }
     }
     if (begun.kind !== 'new') throw new Error('STORAGE_UNAVAILABLE')
+    if (change.action === 'create') {
+      const content = memoryContentSchema.safeParse(change.content)
+      if (!content.success) throw new Error('INVALID_INPUT')
+      const characterId = change.scope === 'character' ? conversation.characterId : null
+      // 手填资料单独保存，不引用原聊天，也不会把同一句话里的其他资料一起共享。
+      const saved = tx.insert(memories).values({ id: `mem-${randomUUID()}`, scope: change.scope, characterId,
+        kind: 'fact', content: content.data, origin: 'user_edit', validFrom: now, createdAt: now, updatedAt: now,
+      }).returning().get()
+      const receipt: MemoryChangeReceipt = { action: 'create', memoryId: saved.id, revision: saved.revision,
+        removedSources: 0, affectedMemories: 0, personaContainsContent: false }
+      const conversationIds = invalidateMemoryContexts(tx, new Set(characterId ? [characterId] : []), new Set(), change.scope === 'global', now)
+      completeToolOperation(tx, begun.operationId, JSON.stringify(receipt), now)
+      return { receipt, conversationIds }
+    }
     const target = tx.select().from(memories).where(and(eq(memories.id, change.memoryId), visibleTo(conversation.characterId))).get()
     if (!target || (sourceId && target.scope === 'global')) throw new Error('NOT_FOUND')
     if (target.status === 'deleted' || target.revision !== change.expectedRevision) throw new Error('STALE_REVISION')
@@ -263,17 +297,7 @@ export function mutateMemory(
         affectedMemories: invalid.length, personaContainsContent }
     }
 
-    for (const id of privateIds) bumpCharacterMemoryEpoch(tx, id)
-    if (globalChanged) bumpGlobalMemoryEpoch(tx)
-    // 所有正式角色都可能读取明确共享的资料；试聊根本不使用它们。
-    const affected = tx.select({ id: conversations.id }).from(conversations).where(and(eq(conversations.mode, 'normal'),
-      globalChanged ? undefined : or(inArray(conversations.characterId, [...privateIds]), inArray(conversations.id, [...sourceConversations])))).all()
-    const conversationIds = affected.map(({ id }) => id)
-    for (const id of conversationIds) bumpContextEpoch(tx, id)
-    tx.update(conversations).set({ runtimeSessionId: null }).where(inArray(conversations.id, conversationIds)).run()
-    tx.update(memoryJobs).set({ status: 'stale', leaseUntil: null, updatedAt: now }).where(and(
-      eq(memoryJobs.status, 'pending'), inArray(memoryJobs.conversationId, conversationIds),
-    )).run()
+    const conversationIds = invalidateMemoryContexts(tx, privateIds, sourceConversations, globalChanged, now)
     completeToolOperation(tx, begun.operationId, JSON.stringify(receipt), now)
     return { receipt, conversationIds }
   })

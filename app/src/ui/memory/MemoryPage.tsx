@@ -1,7 +1,7 @@
 /** 记忆页提供筛选、选中记录的详情，以及纠正或忘记操作。 */
 import { useEffect, useRef, useState } from 'react'
 import type { ChatSourceLocation } from '../../shared/chat-history'
-import type { ManagedMemory, MemoryChange, MemoryDeletionPreview, MemoryManagementOverview } from '../../shared/memory-management'
+import type { ManagedMemory, MemoryChange, MemoryDeletionPreview, MemoryManagementOverview, MemoryScope } from '../../shared/memory-management'
 import ConfirmationDialog from '../settings/ConfirmationDialog'
 import styles from './MemoryPage.module.css'
 
@@ -117,6 +117,9 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
   const [query, setQuery] = useState('')
   const [detailId, setDetailId] = useState<string | null>(null)
   const [sharedView, setSharedView] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createScope, setCreateScope] = useState<MemoryScope | null>(null)
+  const [createRequestId, setCreateRequestId] = useState<string | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
   const [deletionReview, setDeletionReview] = useState<DeletionReview>(null)
   const [draft, setDraft] = useState('')
@@ -164,6 +167,43 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
     setForgetFeedback(null)
     setError(null)
     previousRequest.current = null
+  }
+
+  /** 新资料每次都从空白范围开始，由用户明确选择可使用的角色。 */
+  function openCreate(): void {
+    setCreateOpen(true)
+    setCreateScope(null)
+    setCreateRequestId(null)
+    setDraft('')
+    setNotice(null)
+    setError(null)
+  }
+
+  /** 一旦提交，重试继续使用原编号和范围，防止同一份资料被保存两次。 */
+  async function saveMaterial(): Promise<void> {
+    const content = draft.trim()
+    if (!createScope || !content || saving.current) return
+    const requestId = createRequestId ?? crypto.randomUUID()
+    saving.current = true
+    setCreateRequestId(requestId)
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await window.appApi?.changeMemory({ action: 'create', content, scope: createScope, requestId })
+      if (result?.ok && result.data?.receipt) {
+        setCreateOpen(false)
+        setNotice(createScope === 'global' ? '共享资料已保存。' : '已保存为当前角色的私有记忆。')
+      } else {
+        setError(failureMessages[result?.code ?? ''] ?? '暂时无法确认保存结果，请重试。')
+      }
+    } catch {
+      setError('暂时无法确认保存结果，请重试。')
+    } finally {
+      onHistoryChanged()
+      await read()
+      saving.current = false
+      setBusy(false)
+    }
   }
 
   /** 第一次点击只向后台读名单。用户看完完整消息后才能确认删除。 */
@@ -312,8 +352,12 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
       <span className={styles.eyebrow}>{characterName ? `${characterName}的手记` : '角色手记'}</span>
       <div className={styles.headerRow}>
         <h1 id="memory-title">{sharedView ? '共享资料' : '记忆'}</h1>
-        <button type="button" className={styles.button} disabled={busy}
-          onClick={() => { setSharedView(!sharedView); setNotice(null) }}>{sharedView ? '返回记忆' : '共享资料'}</button>
+        <div className={styles.actions}>
+          <button type="button" className={styles.button} disabled={busy}
+            onClick={() => { setSharedView(!sharedView); setNotice(null) }}>{sharedView ? '返回记忆' : '共享资料'}</button>
+          {sharedView ? <button type="button" className={styles.primary} disabled={busy || loading}
+            onClick={openCreate}>新增资料…</button> : null}
+        </div>
       </div>
       <p>{sharedView ? '角色可以使用你明确共享的资料。聊天记录和私有记忆仍各自独立。'
         : '看看角色记下了什么。你可以查看原话、纠正旧信息，或让角色忘记一条记忆。'}</p>
@@ -336,7 +380,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
     </> : null}
     <div className={styles.scroll} aria-busy={loading || busy}>
       {notice ? <p className={styles.notice} role="status">{notice}</p> : null}
-      {error && !selection ? <p className={styles.error} role="alert">{error}</p> : null}
+      {error && !selection && !createOpen ? <p className={styles.error} role="alert">{error}</p> : null}
       {overview?.cleanupPending ? <div className={styles.cleanup}>
         <p>还有本地缓存待清理，相关聊天会暂时停用。</p>
         <button type="button" className={styles.button} disabled={busy} onClick={() => void retryCleanup()}>重试清理</button>
@@ -384,6 +428,26 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
           onSelect={select} onOpenSource={onOpenSource} />
       </div> : null}
     </div>
+    {createOpen ? <ConfirmationDialog title="新增资料" onCancel={() => { if (!busy) setCreateOpen(false) }} actions={<>
+      <button type="button" className={styles.button} disabled={busy} onClick={() => setCreateOpen(false)}>关闭</button>
+      <button type="button" className={styles.primary} disabled={busy || !draft.trim() || !createScope}
+        onClick={() => void saveMaterial()}>{error && createRequestId ? '重试' : createScope === 'global' ? '确认共享' : '保存资料'}</button>
+    </>}>
+      <label className={styles.edit}>资料内容
+        <textarea rows={4} maxLength={400} value={draft} disabled={createRequestId !== null}
+          onChange={(event) => setDraft(event.target.value)} />
+      </label>
+      <fieldset className={styles.choices} disabled={createRequestId !== null}>
+        <legend>使用范围</legend>
+        <label><input type="radio" name="memory-scope" checked={createScope === 'character'}
+          onChange={() => setCreateScope('character')} />{privateScope}</label>
+        <label><input type="radio" name="memory-scope" checked={createScope === 'global'}
+          onChange={() => setCreateScope('global')} />用户明确共享</label>
+      </fieldset>
+      <p>共享后，角色可以使用这条资料。聊天记录和其他私有记忆仍各自独立。</p>
+      {busy ? <p role="status">正在保存资料…</p> : null}
+      {error ? <p className={styles.error} role="alert">{error}</p> : null}
+    </ConfirmationDialog> : null}
     {forgetFeedback ? <ConfirmationDialog title={forgetFeedback.title} onCancel={closeForgetFeedback} actions={<>
       {forgetFeedback.phase === 'working' ? <button type="button" className={styles.button} disabled>处理中…</button>
         : forgetFeedback.phase === 'done' ? <button type="button" className={styles.primary} disabled={busy}

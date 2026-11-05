@@ -11,9 +11,12 @@ export const memoryTargetSchema = z.strictObject({
 
 /** 保存纠正后的简短文字。空白内容必须走单独的忘记操作。 */
 export const memoryContentSchema = z.string().trim().min(1).max(400)
+const memoryScopeSchema = z.enum(['character', 'global'])
+export type MemoryScope = z.infer<typeof memoryScopeSchema>
 
 /** 后台只接受界面明示选择的操作，删除原文不能由聊天模型代选。 */
 export const memoryChangeSchema = z.discriminatedUnion('action', [
+  z.strictObject({ action: z.literal('create'), requestId: z.uuid(), scope: memoryScopeSchema, content: memoryContentSchema }),
   memoryTargetSchema.extend({ action: z.literal('correct'), requestId: z.uuid(), content: memoryContentSchema }),
   memoryTargetSchema.extend({ action: z.literal('forget'), requestId: z.uuid(), deleteSources: z.boolean(),
     sourceFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -33,7 +36,7 @@ export interface MemoryDeletionPreview {
 export interface ManagedMemory {
   id: string
   revision: number
-  scope: 'character' | 'global'
+  scope: MemoryScope
   kind: typeof memoryKinds[number]
   content: string
   status: 'active' | 'superseded' | 'expired'
@@ -50,7 +53,7 @@ export interface MemoryManagementOverview { memories: ManagedMemory[]; cleanupPe
 
 /** 只用编号和计数记录回执，重放操作时不会从回执读回已忘记正文。 */
 export const memoryChangeReceiptSchema = z.strictObject({
-  action: z.enum(['correct', 'forget']), memoryId: z.string(), revision: z.number().int().positive(),
+  action: z.enum(['create', 'correct', 'forget']), memoryId: z.string(), revision: z.number().int().positive(),
   removedSources: z.number().int().nonnegative(), affectedMemories: z.number().int().nonnegative(),
   personaContainsContent: z.boolean(),
 })
