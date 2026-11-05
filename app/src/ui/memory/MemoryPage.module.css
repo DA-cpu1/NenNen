@@ -4,9 +4,12 @@
 .eyebrow { color: #60528a; font-size: 12px; letter-spacing: .12em; }
 .header h1 { margin: 6px 0 7px; font-size: 25px; }
 .header p, .empty p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
-.filters { display: flex; align-items: center; gap: 14px; padding: 0 clamp(20px, 4vw, 38px); border-bottom: 1px solid var(--border); }
-.filters button { padding: 11px 2px 10px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
-.filters button[aria-pressed='true'] { color: var(--ink); border-bottom-color: #7560b1; font-weight: 600; }
+.search { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px clamp(20px, 4vw, 38px) 0; }
+.search input, .search select { min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; }
+.search input { flex: 1 1 180px; }
+.filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px clamp(20px, 4vw, 38px); border-bottom: 1px solid var(--border); }
+.filters button { padding: 5px 10px; border: 1px solid transparent; border-radius: 20px; background: var(--accent-soft-weak); color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
+.filters button[aria-pressed='true'] { color: #fff; background: #6953a3; font-weight: 600; }
 .filters span { margin-left: 4px; font-variant-numeric: tabular-nums; }
 .filters .refresh { margin-left: auto; }
 .scroll { min-height: 0; flex: 1; overflow: auto; padding: 18px clamp(20px, 4vw, 38px) 28px; }
@@ -36,6 +39,7 @@
 .cleanup p { margin: 0; }
 .empty { margin: 16px 0; border: 1px dashed var(--border); border-radius: 10px; padding: 24px; color: var(--muted); }
 .empty h2 { margin: 0 0 7px; color: var(--ink); font-size: 15px; }
+.empty button { margin-top: 10px; }
 .target { padding: 9px 12px; border-left: 2px solid #b9a9dc; background: var(--accent-soft-weak); }
 .deletionPreview { padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--accent-soft-weak); }
 .deletionPreview h3 { margin: 0 0 8px; font-size: 14px; }
@@ -45,6 +49,6 @@
 .deletionPreview p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .edit { display: grid; gap: 8px; font-size: 13px; }
 .edit textarea { resize: vertical; border: 1px solid var(--border); border-radius: 7px; padding: 9px; color: var(--ink); line-height: 1.6; }
-.filters button:focus-visible, .sources summary:focus-visible, .button:focus-visible, .primary:focus-visible, .danger:focus-visible {
+.search :focus-visible, .filters button:focus-visible, .sources summary:focus-visible, .button:focus-visible, .primary:focus-visible, .danger:focus-visible {
   outline: 2px solid #7560b1; outline-offset: 2px;
 }

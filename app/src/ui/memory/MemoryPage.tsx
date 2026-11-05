@@ -7,7 +7,8 @@ import styles from './MemoryPage.module.css'
 const kinds: Record<ManagedMemory['kind'], string> = {
   fact: '事实', preference: '偏好', episode: '共同经历', temporary: '近期状态', interaction_request: '相处方式',
 }
-const statuses = { active: '生效中', superseded: '已被纠正', expired: '已过期' }
+const statuses = { active: '有效', superseded: '已替代', expired: '已过期' }
+const statusFilters = ['all', 'active', 'superseded', 'expired'] as const
 const timeFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
 const failureMessages: Record<string, string> = {
   STALE_REVISION: '这条记忆刚刚有变化，已重新读取。请核对后再操作。',
@@ -34,7 +35,9 @@ interface MemoryPageProps {
  */
 export default function MemoryPage({ characterId, characterName, onHistoryChanged }: MemoryPageProps) {
   const [overview, setOverview] = useState<MemoryManagementOverview | null>(null)
-  const [filter, setFilter] = useState<'active' | 'past'>('active')
+  const [filter, setFilter] = useState<typeof statusFilters[number]>('all')
+  const [category, setCategory] = useState('all')
+  const [query, setQuery] = useState('')
   const [selection, setSelection] = useState<Selection | null>(null)
   const [deletionReview, setDeletionReview] = useState<DeletionReview>(null)
   const [draft, setDraft] = useState('')
@@ -121,7 +124,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
         const receipt = result.data.receipt
         const scope = receipt.removedSources ? `，已删除 ${receipt.removedSources} 条聊天原文` : '，聊天原文仍保留'
         const persona = receipt.personaContainsContent ? '。角色设定里还有相同文字，可以在角色设置里修改。' : '。'
-        setNotice((action === 'correct' ? '记忆已纠正，原来的值已收进「过去的记忆」' : `已忘记这条信息${scope}`) + persona)
+        setNotice((action === 'correct' ? '记忆已纠正，原来的值可在「已替代」中查看' : `已忘记这条信息${scope}`) + persona)
         setSelection(null)
         setDeletionReview(null)
       } else {
@@ -161,9 +164,14 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
   }
 
   const memories = overview?.memories ?? []
-  const current = memories.filter((memory) => memory.status === 'active')
-  const past = memories.filter((memory) => memory.status !== 'active')
-  const shown = filter === 'active' ? current : past
+  const keyword = query.trim().toLocaleLowerCase('zh-CN')
+  const counts = { all: memories.length, active: 0, superseded: 0, expired: 0 }
+  const shown = memories.filter((memory) => {
+    counts[memory.status]++
+    return (filter === 'all' || memory.status === filter) &&
+      (category === 'all' || memory.kind === category) &&
+      memory.content.toLocaleLowerCase('zh-CN').includes(keyword)
+  })
   const deletion = typeof deletionReview === 'object' ? deletionReview : null
   const dialogBusy = busy || deletionReview === 'loading'
 
@@ -173,9 +181,18 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
       <h1 id="memory-title">记忆</h1>
       <p>看看角色记下了什么。你可以查看原话、纠正旧信息，或让角色忘记一条记忆。</p>
     </header>
-    <div className={styles.filters} aria-label="记忆时段">
-      <button type="button" aria-pressed={filter === 'active'} onClick={() => setFilter('active')}>当前记忆 <span>{current.length}</span></button>
-      <button type="button" aria-pressed={filter === 'past'} onClick={() => setFilter('past')}>过去的记忆 <span>{past.length}</span></button>
+    <div className={styles.search}>
+      <input type="search" aria-label="搜索记忆内容" placeholder="搜索记忆内容"
+        value={query} onChange={(event) => setQuery(event.target.value)} />
+      <select aria-label="记忆类别" value={category} onChange={(event) => setCategory(event.target.value)}>
+        <option value="all">全部类别</option>
+        {Object.entries(kinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}
+      </select>
+    </div>
+    <div className={styles.filters} role="group" aria-label="记忆状态">
+      {statusFilters.map((status) => <button key={status} type="button" aria-pressed={filter === status} onClick={() => setFilter(status)}>
+        {status === 'all' ? '全部' : statuses[status]} <span>{counts[status]}</span>
+      </button>)}
       <button className={styles.refresh} type="button" disabled={loading || busy} onClick={() => { setError(null); void read() }}>刷新</button>
     </div>
     <div className={styles.scroll} aria-busy={loading || busy}>
@@ -187,8 +204,16 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
       </div> : null}
       {loading && !overview ? <p role="status" className={styles.empty}>正在读取记忆…</p> : null}
       {!loading && overview && shown.length === 0 ? <div className={styles.empty}>
-        <h2>{filter === 'active' ? '还没有当前记忆' : '还没有过去的记忆'}</h2>
-        <p>{filter === 'active' ? '聊天里保存的记忆会出现在这里。' : '被纠正的旧值和过期记忆会收在这里。'}</p>
+        {memories.length === 0 ? <>
+          <h2>还没有记忆</h2>
+          <p>正式聊天里保存的记忆会出现在这里。</p>
+        </> : <>
+          <h2>没有找到相关记忆</h2>
+          <p>试试换个关键词，或调整筛选条件。</p>
+          <button type="button" className={styles.button} onClick={() => { setQuery(''); setCategory('all'); setFilter('all') }}>
+            清除筛选
+          </button>
+        </>}
       </div> : null}
       <ol className={styles.list}>
         {shown.map((memory) => <li key={memory.id} className={styles.card}>
