@@ -35,6 +35,9 @@ const iconPaths = {
   right: 'm10 6 6 6-6 6',
   link: 'M13 4h7v7m0-7-9 9m5 0v7H4V8h7',
   trash: 'M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5',
+  lock: 'M7 10V7a5 5 0 0 1 10 0v3m-12 0h14v11H5V10Zm7 4v3',
+  check: 'm5 12 5 5 9-10',
+  warning: 'M12 5v9m0 3v.2',
 }
 const kindIcons: Record<ManagedMemory['kind'], keyof typeof iconPaths> = {
   fact: 'person', preference: 'heart', episode: 'calendar', temporary: 'clock', interaction_request: 'message',
@@ -516,7 +519,8 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
           </dl>
         </aside> : null}
     </div>
-    {createOpen ? <ConfirmationDialog title="新增资料" onCancel={() => { if (!busy) setCreateOpen(false) }} actions={<>
+    {createOpen ? <ConfirmationDialog title="新增资料" className={styles.memoryDialog} closeButton={{ disabled: busy }}
+      onCancel={() => { if (!busy) setCreateOpen(false) }} actions={<>
       <button type="button" className={styles.button} disabled={busy} onClick={() => setCreateOpen(false)}>关闭</button>
       <button type="button" className={styles.primary} disabled={busy || !draft.trim() || !createScope}
         onClick={() => void saveMaterial()}>{error && createRequestId ? '重试' : createScope === 'global' ? '确认共享' : '保存资料'}</button>
@@ -536,7 +540,8 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
       {busy ? <p role="status">正在保存资料…</p> : null}
       {error ? <p className={styles.error} role="alert">{error}</p> : null}
     </ConfirmationDialog> : null}
-    {forgetFeedback ? <ConfirmationDialog title={forgetFeedback.title} onCancel={closeForgetFeedback} actions={<>
+    {forgetFeedback ? <ConfirmationDialog title={forgetFeedback.phase === 'done' ? '已完成' : forgetFeedback.title}
+      className={styles.memoryDialog} closeButton={{ disabled: busy }} onCancel={closeForgetFeedback} actions={<>
       {forgetFeedback.phase === 'working' ? <button type="button" className={styles.button} disabled>处理中…</button>
         : forgetFeedback.phase === 'done' ? <button type="button" className={styles.primary} disabled={busy}
           onClick={closeForgetFeedback}>完成</button>
@@ -547,12 +552,19 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
     </>}>
       <div className={styles.feedback} data-phase={forgetFeedback.phase}
         role={forgetFeedback.phase === 'failed' ? 'alert' : 'status'}>
-        <p>{forgetFeedback.message}</p>
+        <span className={styles.feedbackIcon} aria-hidden="true">
+          {forgetFeedback.phase === 'working' ? null : <MemoryIcon name={forgetFeedback.phase === 'done' ? 'check' : 'warning'} />}
+        </span>
+        <strong>{forgetFeedback.phase === 'done' ? forgetFeedback.title : forgetFeedback.message}</strong>
+        {forgetFeedback.phase === 'done' ? <p>{forgetFeedback.message}</p> : null}
+        {forgetFeedback.phase === 'working' ? <p>清理完成后会显示结果。</p> : null}
         {forgetFeedback.phase === 'failed' ? <p>重试会继续原操作，已保存的部分不会重复写入。</p> : null}
       </div>
     </ConfirmationDialog> : selection ? <ConfirmationDialog title={selection.action === 'correct' ? conflictChoice ? '这条记忆已有更新'
       : sharedView ? '编辑共享资料' : '纠正这条记忆'
       : sharedView ? '删除这条共享资料？' : deletionReview ? '忘记并删除相关原文？' : '忘记这条记忆？'}
+      className={deletionReview ? `${styles.memoryDialog} ${styles.wideDialog}` : styles.memoryDialog}
+      closeButton={{ disabled: dialogBusy }}
       onCancel={() => { if (!dialogBusy) { setSelection(null); setDeletionReview(null) } }} actions={<>
         <button type="button" className={styles.button} disabled={dialogBusy}
           onClick={() => { setSelection(null); setDeletionReview(null) }}>取消</button>
@@ -566,13 +578,10 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
             onClick={() => void save(deletion)}>确认忘记并删除</button>
           : deletionReview ? <button type="button" className={styles.button} disabled={dialogBusy}
             onClick={() => void reviewDeletion()}>重新查看删除范围</button>
-          : <>
-            <button type="button" className={styles.button} disabled={busy} onClick={() => void save()}>忘记此信息（聊天原文仍保留）</button>
-            <button type="button" className={styles.danger} disabled={busy} onClick={() => void reviewDeletion()}>查看并删除相关原文…</button>
-          </>}
+          : <button type="button" className={styles.danger} disabled={busy} onClick={() => void save()}>确认忘记</button>}
       </>}>
       {selection.action === 'correct' ? <>
-        <div className={styles.comparison}>
+        <div className={styles.comparison} data-conflict={!!conflictChoice}>
           <div><strong>当前内容</strong><p className={styles.target}>{selection.memory.content}</p></div>
           {conflictChoice ? <div><strong>本次填写</strong><p className={styles.target}>{draft.trim()}</p></div>
             : <label className={styles.edit}>改为
@@ -582,27 +591,50 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
         {conflictChoice ? <fieldset className={styles.choices} disabled={busy}>
           <legend>请选择要保留的内容</legend>
           <label><input type="radio" name="memory-conflict" checked={conflictChoice === 'keep'}
-            onChange={() => setConflictChoice('keep')} />保留当前内容</label>
+            onChange={() => setConflictChoice('keep')} />
+            <span><strong>保留当前内容</strong><small>继续使用现有记录。</small></span></label>
           <label><input type="radio" name="memory-conflict" checked={conflictChoice === 'replace'}
-            disabled={draft.trim() === selection.memory.content} onChange={() => setConflictChoice('replace')} />改用本次填写</label>
-        </fieldset> : <p>保存后会保留旧记录，并让新内容生效。</p>}
-        <p>{selection.memory.scope === 'global' ? '用户明确共享' : privateScope}</p>
+            disabled={draft.trim() === selection.memory.content} onChange={() => setConflictChoice('replace')} />
+            <span><strong>改用本次填写</strong><small>用草稿替换当前记录。</small></span></label>
+        </fieldset> : null}
+        <div className={styles.scopeLine}><MemoryIcon name={selection.memory.scope === 'global' ? 'share' : 'lock'} />
+          {selection.memory.scope === 'global' ? '用户明确共享' : privateScope}
+        </div>
+        {!conflictChoice ? <p className={styles.editHint}><MemoryIcon name="info" />保存后会保留旧记录，并让新内容生效。</p> : null}
       </> : <>
+        {deletionReview ? <strong className={styles.fieldLabel}>本次待忘记信息</strong> : null}
+        {sharedView ? <span className={styles.kind}>用户明确共享</span> : null}
         <p className={styles.target}>{selection.memory.content}</p>
-        <p>同一信息的旧值也会忘记。相关原话将整条停止用于回复和整理，依赖这些原话的记忆也可能失效。</p>
+        {!sharedView ? <div className={styles.forgetOptions}>
+          {!deletionReview ? <p className={styles.defaultChoice}><span aria-hidden="true" />忘记此信息（聊天原文仍保留）</p> : null}
+          <label className={styles.deleteChoice}>
+            <input type="checkbox" checked={!!deletionReview} disabled={dialogBusy} onChange={(event) => {
+              if (event.target.checked) void reviewDeletion()
+              else { setDeletionReview(null); setError(null) }
+            }} />
+            <span><strong>同时删除原文</strong>{deletionReview ? <small>将忘记此信息，并删除下面列出的整条来源消息。</small> : null}</span>
+          </label>
+        </div> : null}
         {deletionReview === 'loading' ? <p role="status">正在读取将删除的原话…</p> : null}
         {deletion ? <div className={styles.deletionPreview}>
           <h3>即将删除的来源消息（{deletion.sources.length} 条）</h3>
           {deletion.sources.length === 0 ? <p>没有关联原话，这次只会忘记资料。</p> : <ol aria-label="即将删除的来源消息">
             {deletion.sources.map((source) => <li key={source.id}>
-              <time dateTime={new Date(source.createdAt).toISOString()}>{timeFormat.format(source.createdAt)}</time>
-              <p><strong>{sourceRoles[source.role] ?? '消息'} · </strong>{source.content}</p>
+              <MemoryIcon name={source.role === 'user' ? 'person' : 'message'} />
+              <div><time dateTime={new Date(source.createdAt).toISOString()}>{timeFormat.format(source.createdAt)}</time>
+                <p><strong>{sourceRoles[source.role] ?? '消息'} · </strong>{source.content}</p></div>
             </li>)}
           </ol>}
         </div> : null}
-        <p>{sharedView ? '聊天原文仍保留。早先已导出的备份仍可能包含这些资料。'
-          : '选择删除原文会把对应消息从聊天记录移除。早先已导出的备份仍可能包含这些原话。'}</p>
-        {selection.memory.scope === 'global' ? <p>这是共享资料，忘记后会影响可使用它的角色。</p> : null}
+        <div className={styles.warning} data-deleting={!!deletionReview}>
+          <MemoryIcon name="info" />
+          <ol>
+            <li>同一信息的旧值也会忘记。整条相关原话将停止用于回复和整理，依赖记忆也可能失效。</li>
+            {sharedView ? <li>相关原文仍保留，依赖共享资料的后续回复会更新。</li> : null}
+            <li>角色设定里的相同内容需另行修改。</li>
+            <li>你导出的旧备份仍可能包含这些信息。</li>
+          </ol>
+        </div>
       </>}
       {busy ? <p role="status">正在保存并清理本地上下文…</p> : null}
       {error ? <p className={styles.error} role="alert">{error}</p> : null}

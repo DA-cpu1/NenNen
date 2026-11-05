@@ -105,7 +105,7 @@ export default function ChatHistory({ characterId, displayName, refreshKey, sour
 
   const sourceRemoved = !!(source && page && !busy && !error && !page.messages.some((message) => message.id === source.id))
   return <>
-    {source ? <div className={styles.sourceBar}>
+    {source && !sourceRemoved ? <div className={styles.sourceBar}>
       <span>原聊天位置</span>
       <button type="button" onClick={onCloseSource}>返回最新聊天</button>
     </div> : null}
@@ -122,7 +122,11 @@ export default function ChatHistory({ characterId, displayName, refreshKey, sour
           else setReloadAttempt((value) => value + 1)
         }}>重试读取</button>
       </div>}
-      {sourceRemoved ? <div className={styles.notice} role="status">
+      {sourceRemoved ? <div className={styles.sourceMissing} role="status">
+        <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"
+          strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 8v13h13v-4M8 3h6l4 4v5M3 3l18 18" />
+        </svg></span>
         <h2>原文已删除</h2>
         <p>该来源消息已删除，无法再显示正文。</p>
         <button type="button" onClick={onReturnToMemory}>返回记忆</button>

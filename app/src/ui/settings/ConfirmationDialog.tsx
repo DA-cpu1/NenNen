@@ -10,6 +10,8 @@ interface ConfirmationDialogProps {
   children: ReactNode
   actions: ReactNode
   onCancel: () => void
+  className?: string
+  closeButton?: { disabled?: boolean }
 }
 
 /**
@@ -17,7 +19,7 @@ interface ConfirmationDialogProps {
  * @param props 标题、说明、操作按钮与取消回调
  * @returns 原生确认框
  */
-export default function ConfirmationDialog({ title, children, actions, onCancel }: ConfirmationDialogProps) {
+export default function ConfirmationDialog({ title, children, actions, onCancel, className, closeButton }: ConfirmationDialogProps) {
   const ref = useRef<HTMLDialogElement>(null)
   const titleId = useId()
   useEffect(() => {
@@ -25,8 +27,10 @@ export default function ConfirmationDialog({ title, children, actions, onCancel 
     dialog?.showModal()
     return () => dialog?.close()
   }, [])
-  return <dialog ref={ref} className={styles.dialog} aria-labelledby={titleId}
+  return <dialog ref={ref} className={className ? `${styles.dialog} ${className}` : styles.dialog} aria-labelledby={titleId}
     onCancel={(event) => { event.preventDefault(); onCancel() }}>
-    <h2 id={titleId}>{title}</h2><div>{children}</div><div className={styles.dialogActions}>{actions}</div>
+    {closeButton ? <button type="button" className={styles.dialogClose} disabled={closeButton.disabled}
+      aria-label="关闭对话框" onClick={onCancel}>×</button> : null}
+    <h2 id={titleId}>{title}</h2><div>{children}</div><div className={styles.dialogActions} data-dialog-actions>{actions}</div>
   </dialog>
 }

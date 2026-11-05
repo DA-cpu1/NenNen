@@ -50,6 +50,10 @@
 .dialog { width: min(420px, 80vw); border: 1px solid var(--border); border-radius: 14px; padding: 24px; color: var(--ink); box-shadow: 0 16px 60px #2f2b4a30; }
 .dialog::backdrop { background: #2f2b4a55; }
 .dialog h2 { font-size: 18px; margin-top: 0; }
+.dialogClose { position: absolute; top: 12px; right: 12px; border: 0; border-radius: 5px; padding: 2px 7px;
+  color: inherit; background: transparent; font: inherit; font-size: 19px; cursor: pointer; }
+.dialogClose:hover:not(:disabled) { background: var(--accent-soft-weak); }
+.dialogClose:disabled { opacity: .45; cursor: default; }
 .dialog p { font-size: 13px; line-height: 1.8; }
 .dialogActions { justify-content: flex-end; margin-top: 24px; }
 /* 窗口变窄时把两个输入框上下排列，避免文字挤成一团。 */
