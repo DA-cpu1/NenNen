@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ChatSourceLocation } from '../shared/chat-history'
 import type { CharacterOverview } from '../shared/data-types'
+import { assetUrl } from '../shared/asset-url'
 import ChatPage from './chat/ChatPage'
 import MemoryPage from './memory/MemoryPage'
 import SettingsPage from './settings/SettingsPage'
@@ -89,10 +90,11 @@ export default function App() {
 
   // 两页共用的props包
   const shared: CharacterProps = { character, reload, loadError }
+  const sidebarImage = assetUrl(character?.desktopImagePath ?? character?.portraitImagePath)
 
   return (
     <div className={styles.shell}>
-      <nav className={styles.rail} aria-label="应用页面">
+      <nav className={page === 'memory' ? `${styles.rail} ${styles.memoryRail}` : styles.rail} aria-label="应用页面">
         <button
           type="button"
           className={page === 'chat' ? styles.railItemActive : styles.railItem}
@@ -104,13 +106,6 @@ export default function App() {
             <path d="M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H9l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" />
           </svg>
           <span>聊天</span>
-        </button>
-        <button type="button" className={page === 'memory' ? styles.railItemActive : styles.railItem}
-          aria-current={page === 'memory' ? 'page' : undefined} onClick={() => navigate('memory')}>
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M6 3h13v18H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm1 2v14h10V5zm2 3h6v2H9zm0 4h6v2H9z" />
-          </svg>
-          <span>记忆</span>
         </button>
         <button
           type="button"
@@ -124,6 +119,18 @@ export default function App() {
           </svg>
           <span>角色设置</span>
         </button>
+        <button type="button" className={page === 'memory' ? styles.railItemActive : styles.railItem}
+          aria-current={page === 'memory' ? 'page' : undefined} onClick={() => navigate('memory')}>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 5h6c1.7 0 3 1.1 3 2.6V21c0-1.5-1.3-2.6-3-2.6H3V5Zm9 2.6C12 6.1 13.3 5 15 5h6v13.4h-6c-1.7 0-3 1.1-3 2.6"
+              fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+          </svg>
+          <span>记忆</span>
+        </button>
+        {page === 'memory' && character ? <div className={styles.memoryCharacter}>
+          {sidebarImage ? <img src={sidebarImage} alt="" /> : <span aria-hidden="true">{character.name.slice(0, 1)}</span>}
+          <strong>{character.name}</strong>
+        </div> : null}
       </nav>
       <main className={styles.body}>
         {/* 隐藏只改变可见性，不卸载输入区；返回聊天时仍能重试保存原结果。 */}

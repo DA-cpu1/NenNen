@@ -10,6 +10,7 @@ const kinds: Record<ManagedMemory['kind'], string> = {
 }
 const statuses = { active: '有效', superseded: '已替代', expired: '已过期' }
 const statusFilters = ['all', 'active', 'superseded', 'expired', 'forgotten'] as const
+const memoriesPerPage = 6
 const timeFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
 const failureMessages: Record<string, string> = {
   STALE_REVISION: '这条记忆刚刚有变化，已重新读取。请核对后再操作。',
@@ -20,6 +21,29 @@ const failureMessages: Record<string, string> = {
 }
 const sourceRoles: Record<string, string> = { user: '你', assistant: '角色', system: '系统' }
 const origins: Record<string, string> = { user_edit: '用户编辑', user_explicit: '用户明确交代', conversation_event: '聊天整理' }
+const iconPaths = {
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14Zm5-2 5 5',
+  share: 'M7 12l10-6M7 12l10 6M7 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm14-7a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm0 14a2 2 0 1 1-4 0 2 2 0 0 1 4 0Z',
+  person: 'M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM4 21v-2a8 6 0 0 1 16 0v2H4Z',
+  heart: 'M20 5a5 5 0 0 0-7 0l-1 1-1-1a5 5 0 0 0-7 7l8 8 8-8a5 5 0 0 0 0-7Z',
+  calendar: 'M4 6h16v15H4V6Zm4-3v6m8-6v6M4 11h16',
+  clock: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-5v6l4 2',
+  message: 'M4 5h16v12H9l-5 4V5Zm4 5h8m-8 3h5',
+  note: 'M6 3h12v18H6V3Zm3 5h6m-6 4h6m-6 4h4',
+  info: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM12 11v5m0-8v.1',
+  left: 'm14 6-6 6 6 6',
+  right: 'm10 6 6 6-6 6',
+  link: 'M13 4h7v7m0-7-9 9m5 0v7H4V8h7',
+  trash: 'M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5',
+}
+const kindIcons: Record<ManagedMemory['kind'], keyof typeof iconPaths> = {
+  fact: 'person', preference: 'heart', episode: 'calendar', temporary: 'clock', interaction_request: 'message',
+}
+
+/** 图标旁边已有文字，屏幕阅读器只读按钮或列表本身的名字。 */
+function MemoryIcon({ name }: { name: keyof typeof iconPaths }) {
+  return <svg className={styles.icon} viewBox="0 0 24 24" aria-hidden="true"><path d={iconPaths[name]} /></svg>
+}
 
 type Selection = { memory: ManagedMemory; action: 'correct' | 'forget' }
 type DeletionReview = 'loading' | 'failed' | MemoryDeletionPreview | null
@@ -68,39 +92,48 @@ function MemoryDetail({ memory, memories, privateScope, busy, onSelect, onOpenSo
       <h2 id="memory-detail-title">记忆详情</h2>
       <span className={styles.state} data-state={memory.status}>{statuses[memory.status]}</span>
     </header>
-    <p className={styles.content}>{memory.content}</p>
-    <dl className={styles.metadata}>
-      <dt>使用范围</dt><dd>{memory.scope === 'global' ? '用户明确共享' : privateScope}</dd>
-      <dt>记录时间</dt><dd>{timeFormat.format(memory.validFrom)}</dd>
-      <dt>更新时间</dt><dd>{timeFormat.format(memory.updatedAt)}</dd>
-      <dt>记录方式</dt><dd>{origins[memory.origin] ?? '已保存'}</dd>
-      {previous ? <><dt>替代了</dt><dd>{previous.content}</dd></> : null}
-      {memory.expiresAt !== null ? <><dt>有效期至</dt><dd>{timeFormat.format(memory.expiresAt)}</dd></> : null}
-    </dl>
-    <section className={styles.detailSection}>
-      <h3>来源</h3>
-      {memory.sources.length ? <div className={styles.sources}>
-        {memory.sources.map((source) => <blockquote key={source.id}>
-          <p>{source.content}</p>
-          <footer>{timeFormat.format(source.createdAt)}{source.excluded ? ' · 已停止用作聊天背景' : ''}</footer>
-          {source.location ? <button type="button" className={styles.button} disabled={busy}
-            onClick={() => { if (source.location) onOpenSource(source.location) }}>跳到原聊天</button> : null}
-        </blockquote>)}
-      </div> : <p className={styles.date}>无关联聊天原话</p>}
-    </section>
-    <section className={styles.detailSection}>
-      <h3>历史变化</h3>
-      <ol className={styles.timeline}>
-        {history.map((row) => <li key={row.id}>
-          <time dateTime={new Date(row.validFrom).toISOString()}>{timeFormat.format(row.validFrom)}</time>
-          <p>{row.supersedesId ? '更新为' : '首次记录'} · {row.content}</p>
-        </li>)}
-      </ol>
-    </section>
-    <div className={styles.actions}>
+    <div className={styles.detailBody} tabIndex={0} role="region" aria-label="记忆详情内容">
+      <p className={styles.content}>{memory.content}</p>
+      <div className={styles.tags}>
+        <span className={styles.kind}>{kinds[memory.kind]}</span>
+        <span className={styles.scopeTag}>{memory.scope === 'global' ? '用户明确共享' : privateScope}</span>
+      </div>
+      <dl className={styles.metadata}>
+        <dt>记录时间</dt><dd>{timeFormat.format(memory.validFrom)}</dd>
+        <dt>更新时间</dt><dd>{timeFormat.format(memory.updatedAt)}</dd>
+        <dt>记录方式</dt><dd>{origins[memory.origin] ?? '已保存'}</dd>
+        {previous ? <><dt>替代了</dt><dd>{previous.content}</dd></> : null}
+        {memory.expiresAt !== null ? <><dt>有效期至</dt><dd>{timeFormat.format(memory.expiresAt)}</dd></> : null}
+      </dl>
+      <section className={styles.detailSection}>
+        <h3>来源</h3>
+        {memory.sources.length ? <div className={styles.sources}>
+          {memory.sources.map((source) => <blockquote key={source.id}>
+            <p>{source.content}</p>
+            <footer className={styles.sourceFooter}>
+              <span>{timeFormat.format(source.createdAt)}{source.excluded ? ' · 已停止用作聊天背景' : ''}</span>
+              {source.location ? <button type="button" className={styles.button} disabled={busy}
+                onClick={() => { if (source.location) onOpenSource(source.location) }}>跳到原聊天 <MemoryIcon name="link" /></button> : null}
+            </footer>
+          </blockquote>)}
+        </div> : <p className={styles.date}>无关联聊天原话</p>}
+      </section>
+      <section className={styles.detailSection}>
+        <h3>历史变化</h3>
+        <ol className={styles.timeline}>
+          {history.map((row) => <li key={row.id}>
+            <time dateTime={new Date(row.validFrom).toISOString()}>{timeFormat.format(row.validFrom)}</time>
+            <p>{row.supersedesId ? '更新为' : '首次记录'} · {row.content}</p>
+          </li>)}
+        </ol>
+      </section>
+    </div>
+    <div className={`${styles.actions} ${styles.detailActions}`}>
       {memory.status === 'active' ? <button type="button" className={styles.primary} disabled={busy}
         onClick={() => onSelect(memory, 'correct')}>编辑纠正</button> : null}
-      <button type="button" className={styles.danger} disabled={busy} onClick={() => onSelect(memory, 'forget')}>忘记此信息…</button>
+      <button type="button" className={styles.danger} disabled={busy} onClick={() => onSelect(memory, 'forget')}>
+        <MemoryIcon name="trash" />忘记此信息…
+      </button>
     </div>
   </aside>
 }
@@ -116,6 +149,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
   const [category, setCategory] = useState('all')
   const [query, setQuery] = useState('')
   const [detailId, setDetailId] = useState<string | null>(null)
+  const [listPage, setListPage] = useState(0)
   const [forgottenIndex, setForgottenIndex] = useState(0)
   const [sharedView, setSharedView] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
@@ -345,79 +379,134 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
       (category === 'all' || memory.kind === category) &&
       memory.content.toLocaleLowerCase('zh-CN').includes(keyword)
   })
-  const detail = shown.find((memory) => memory.id === detailId) ?? shown[0]
+  const lastPage = Math.max(0, Math.ceil(shown.length / memoriesPerPage) - 1)
+  const currentPage = Math.min(listPage, lastPage)
+  const visibleMemories = shown.slice(currentPage * memoriesPerPage, (currentPage + 1) * memoriesPerPage)
+  const detail = visibleMemories.find((memory) => memory.id === detailId) ?? visibleMemories[0]
   const shared = memories.filter((memory) => memory.scope === 'global' && memory.status === 'active')
   const privateScope = characterName ? `仅${characterName}可用` : '仅当前角色可用'
   const deletion = typeof deletionReview === 'object' ? deletionReview : null
   const dialogBusy = busy || deletionReview === 'loading'
+  const hasDetail = !sharedView && (filter === 'forgotten' ? forgottenTime !== undefined : !!detail)
 
   return <section className={styles.page} aria-labelledby="memory-title">
-    <header className={styles.header}>
-      <span className={styles.eyebrow}>{characterName ? `${characterName}的手记` : '角色手记'}</span>
-      <div className={styles.headerRow}>
-        <h1 id="memory-title">{sharedView ? '共享资料' : '记忆'}</h1>
-        <div className={styles.actions}>
-          <button type="button" className={styles.button} disabled={busy}
-            onClick={() => { setSharedView(!sharedView); setNotice(null) }}>{sharedView ? '返回记忆' : '共享资料'}</button>
-          {sharedView ? <button type="button" className={styles.primary} disabled={busy || loading}
-            onClick={openCreate}>新增资料…</button> : null}
-        </div>
-      </div>
-      <p>{sharedView ? '角色可以使用你明确共享的资料。聊天记录和私有记忆仍各自独立。'
-        : '看看角色记下了什么。你可以查看原话、纠正旧信息，或让角色忘记一条记忆。'}</p>
-    </header>
-    {!sharedView ? <>
-    {filter !== 'forgotten' ? <div className={styles.search}>
-      <input type="search" aria-label="搜索记忆内容" placeholder="搜索记忆内容"
-        value={query} onChange={(event) => setQuery(event.target.value)} />
-      <select aria-label="记忆类别" value={category} onChange={(event) => setCategory(event.target.value)}>
-        <option value="all">全部类别</option>
-        {Object.entries(kinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}
-      </select>
-    </div> : null}
-    <div className={styles.filters} role="group" aria-label="记忆状态">
-      {statusFilters.map((status) => <button key={status} type="button" aria-pressed={filter === status} onClick={() => setFilter(status)}>
-        {status === 'all' ? '全部' : status === 'forgotten' ? '已忘记' : statuses[status]} <span>{counts[status]}</span>
-      </button>)}
-      <button className={styles.refresh} type="button" disabled={loading || busy} onClick={() => { setError(null); void read() }}>刷新</button>
-    </div>
-    </> : null}
-    <div className={styles.scroll} aria-busy={loading || busy}>
-      {notice ? <p className={styles.notice} role="status">{notice}</p> : null}
-      {error && !selection && !createOpen ? <p className={styles.error} role="alert">{error}</p> : null}
-      {overview?.cleanupPending ? <div className={styles.cleanup}>
-        <p>还有本地缓存待清理，相关聊天会暂时停用。</p>
-        <button type="button" className={styles.button} disabled={busy} onClick={() => void retryCleanup()}>重试清理</button>
-      </div> : null}
-      {loading && !overview ? <p role="status" className={styles.empty}>正在读取记忆…</p> : null}
-      {!loading && overview && sharedView && shared.length === 0 ? <div className={styles.empty}>
-        <h2>还没有共享资料</h2>
-        <p>你明确共享的资料会出现在这里。</p>
-      </div> : null}
-      {sharedView && shared.length > 0 ? <ol className={styles.list} aria-label="共享资料列表">
-        {shared.map((memory) => <li key={memory.id} className={styles.sharedItem}>
-          <p className={styles.content}>{memory.content}</p>
-          <span className={styles.kind}>用户明确共享</span>
-          <time className={styles.date} dateTime={new Date(memory.updatedAt).toISOString()}>{timeFormat.format(memory.updatedAt)}</time>
-          <div className={styles.actions}>
-            <button type="button" className={styles.button} disabled={busy} onClick={() => select(memory, 'correct')}>编辑</button>
-            <button type="button" className={styles.danger} disabled={busy} onClick={() => select(memory, 'forget')}>删除…</button>
+    <div className={styles.workspace} data-detail={hasDetail}>
+      <div className={styles.inventory} data-shared={sharedView}>
+        <header className={styles.header}>
+          <div className={styles.headerTitle}>
+            <h1 id="memory-title">{sharedView ? '共享资料' : '记忆'}</h1>
+            <p>{sharedView ? '只共享你明确指定的资料。' : '查看她记住了什么，也可以纠正或忘记。'}</p>
           </div>
-        </li>)}
-      </ol> : null}
-      {!sharedView && filter === 'forgotten' && !loading && overview && forgottenTime === undefined
-        ? <div className={styles.empty}><h2>还没有删除记录</h2><p>忘记资料后，这里只会留下操作时间。</p></div> : null}
-      {!sharedView && filter === 'forgotten' && forgottenTime !== undefined ? <div className={styles.workspace}>
-        <ol className={styles.list} aria-label="删除记录">
-          {forgotten.map((time, index) => <li key={`${time}-${index}`}>
-            <button type="button" className={styles.card} aria-pressed={selectedForgottenIndex === index}
-              onClick={() => setForgottenIndex(index)}>
-              <span className={styles.cardText}>已忘记的信息</span>
-              <time className={styles.date} dateTime={new Date(time).toISOString()}>{timeFormat.format(time)}</time>
-              <span className={styles.state} data-state="expired">正文已清理</span>
+          <div className={styles.actions}>
+            <button type="button" className={styles.button} disabled={busy}
+              onClick={() => { setSharedView(!sharedView); setNotice(null) }}>
+              <MemoryIcon name={sharedView ? 'left' : 'share'} />{sharedView ? '返回记忆' : '共享资料'}
             </button>
-          </li>)}
-        </ol>
+            {sharedView ? <button type="button" className={styles.primary} disabled={busy || loading}
+              onClick={openCreate}>新增资料…</button> : null}
+          </div>
+        </header>
+        {!sharedView ? <>
+          {filter !== 'forgotten' ? <div className={styles.search}>
+            <div className={styles.searchBox}>
+              <MemoryIcon name="search" />
+              <input type="search" aria-label="搜索记忆内容" placeholder="搜索记忆内容"
+                value={query} onChange={(event) => { setQuery(event.target.value); setListPage(0) }} />
+            </div>
+            <select aria-label="记忆类别" value={category} onChange={(event) => { setCategory(event.target.value); setListPage(0) }}>
+              <option value="all">全部类别</option>
+              {Object.entries(kinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}
+            </select>
+          </div> : null}
+          <div className={styles.filters} role="group" aria-label="记忆状态">
+            {statusFilters.map((status) => <button key={status} type="button" aria-pressed={filter === status}
+              onClick={() => { setFilter(status); setListPage(0) }}>
+              {status === 'all' ? '全部' : status === 'forgotten' ? '已忘记' : statuses[status]} <span>{counts[status]}</span>
+            </button>)}
+            <button className={styles.refresh} type="button" disabled={loading || busy}
+              onClick={() => { setError(null); void read() }}>刷新</button>
+          </div>
+        </> : null}
+        <div className={styles.scroll} aria-busy={loading || busy}>
+          {notice ? <p className={styles.notice} role="status">{notice}</p> : null}
+          {error && !selection && !createOpen ? <p className={styles.error} role="alert">{error}</p> : null}
+          {overview?.cleanupPending ? <div className={styles.cleanup}>
+            <p>还有本地缓存待清理，相关聊天会暂时停用。</p>
+            <button type="button" className={styles.button} disabled={busy} onClick={() => void retryCleanup()}>重试清理</button>
+          </div> : null}
+          {loading && !overview ? <p role="status" className={styles.empty}>正在读取记忆…</p> : null}
+          {!loading && overview && sharedView && shared.length === 0 ? <div className={styles.empty}>
+            <h2>还没有共享资料</h2>
+            <p>你明确共享的资料会出现在这里。</p>
+          </div> : null}
+          {sharedView && shared.length > 0 ? <ol className={styles.list} aria-label="共享资料列表">
+            {shared.map((memory) => <li key={memory.id} className={styles.sharedItem}>
+              <p className={styles.content}>{memory.content}</p>
+              <span className={styles.kind}>用户明确共享</span>
+              <time className={styles.date} dateTime={new Date(memory.updatedAt).toISOString()}>{timeFormat.format(memory.updatedAt)}</time>
+              <div className={styles.actions}>
+                <button type="button" className={styles.button} disabled={busy} onClick={() => select(memory, 'correct')}>编辑</button>
+                <button type="button" className={styles.danger} disabled={busy} onClick={() => select(memory, 'forget')}>删除…</button>
+              </div>
+            </li>)}
+          </ol> : null}
+          {!sharedView && filter === 'forgotten' && !loading && overview && forgottenTime === undefined
+            ? <div className={styles.empty}><h2>还没有删除记录</h2><p>忘记资料后，这里只会留下操作时间。</p></div> : null}
+          {!sharedView && filter === 'forgotten' && forgottenTime !== undefined ?
+            <ol className={styles.list} aria-label="删除记录">
+              {forgotten.map((time, index) => <li key={`${time}-${index}`}>
+                <button type="button" className={styles.card} aria-pressed={selectedForgottenIndex === index}
+                  onClick={() => setForgottenIndex(index)}>
+                  <span className={styles.cardText}>已忘记的信息</span>
+                  <time className={styles.date} dateTime={new Date(time).toISOString()}>{timeFormat.format(time)}</time>
+                  <span className={styles.state} data-state="expired">正文已清理</span>
+                </button>
+              </li>)}
+            </ol>
+          : null}
+          {!sharedView && filter !== 'forgotten' && !loading && overview && shown.length === 0 ? <div className={styles.empty}>
+            <span className={styles.emptyIcon}><MemoryIcon name={memories.length === 0 ? 'note' : 'search'} /></span>
+            {memories.length === 0 ? <>
+              <h2>还没有记忆</h2>
+              <p>正式聊天后，重要信息会逐渐出现在这里。</p>
+            </> : <>
+              <h2>没有找到相关记忆</h2>
+              <p>试试换个关键词，或调整筛选条件。</p>
+              <button type="button" className={styles.button}
+                onClick={() => { setQuery(''); setCategory('all'); setFilter('all'); setListPage(0) }}>
+                清除筛选
+              </button>
+            </>}
+          </div> : null}
+          {!sharedView && detail ? <>
+            <div className={styles.tableHeading} aria-hidden="true"><span>内容</span><span>类别</span><span>使用范围</span><span>状态</span></div>
+            <ol className={styles.list} aria-label="记忆列表">
+              {visibleMemories.map((memory) => <li key={memory.id}>
+                <button type="button" className={styles.memoryRow} data-state={memory.status} aria-pressed={detail.id === memory.id}
+                  onClick={() => setDetailId(memory.id)}>
+                  <span className={styles.rowContent}><MemoryIcon name={kindIcons[memory.kind]} /><span>{memory.content}</span></span>
+                  <span>{kinds[memory.kind]}</span>
+                  <span>{memory.scope === 'global' ? '用户明确共享' : privateScope}</span>
+                  <span className={styles.state} data-state={memory.status}>{statuses[memory.status]}</span>
+                </button>
+              </li>)}
+            </ol>
+          </> : null}
+        </div>
+        {!sharedView && filter !== 'forgotten' && detail ? <footer className={styles.listFooter}>
+          <p><MemoryIcon name="info" />自动记忆只用于正式聊天，试聊不会写入这里。</p>
+          <div className={styles.pagination} aria-label="记忆列表分页">
+            <button type="button" className={styles.button} aria-label="上一页" disabled={currentPage === 0}
+              onClick={() => setListPage(currentPage - 1)}><MemoryIcon name="left" /></button>
+            <span aria-live="polite">{currentPage + 1} / {lastPage + 1}</span>
+            <button type="button" className={styles.button} aria-label="下一页" disabled={currentPage === lastPage}
+              onClick={() => setListPage(currentPage + 1)}><MemoryIcon name="right" /></button>
+          </div>
+        </footer> : null}
+      </div>
+      {!sharedView && detail ? <MemoryDetail key={detail.id} memory={detail} memories={memories}
+        privateScope={privateScope} busy={busy} onSelect={select} onOpenSource={onOpenSource} /> : null}
+      {!sharedView && filter === 'forgotten' && forgottenTime !== undefined ?
         <aside className={styles.detail} aria-labelledby="forgotten-detail-title">
           <h2 id="forgotten-detail-title">删除记录</h2>
           <p className={styles.content}>正文已清理</p>
@@ -425,34 +514,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
           <dl className={styles.metadata}>
             <dt>删除时间</dt><dd><time dateTime={new Date(forgottenTime).toISOString()}>{timeFormat.format(forgottenTime)}</time></dd>
           </dl>
-        </aside>
-      </div> : null}
-      {!sharedView && filter !== 'forgotten' && !loading && overview && shown.length === 0 ? <div className={styles.empty}>
-        {memories.length === 0 ? <>
-          <h2>还没有记忆</h2>
-          <p>正式聊天里保存的记忆会出现在这里。</p>
-        </> : <>
-          <h2>没有找到相关记忆</h2>
-          <p>试试换个关键词，或调整筛选条件。</p>
-          <button type="button" className={styles.button} onClick={() => { setQuery(''); setCategory('all'); setFilter('all') }}>
-            清除筛选
-          </button>
-        </>}
-      </div> : null}
-      {!sharedView && detail ? <div className={styles.workspace}>
-        <ol className={styles.list} aria-label="记忆列表">
-          {shown.map((memory) => <li key={memory.id}>
-            <button type="button" className={styles.card} aria-pressed={detail.id === memory.id} onClick={() => setDetailId(memory.id)}>
-              <span className={styles.cardText}>{memory.content}</span>
-              <span className={styles.kind}>{kinds[memory.kind]}</span>
-              <span className={styles.cardScope}>{memory.scope === 'global' ? '共享资料' : privateScope}</span>
-              <span className={styles.state} data-state={memory.status}>{statuses[memory.status]}</span>
-            </button>
-          </li>)}
-        </ol>
-        <MemoryDetail memory={detail} memories={memories} privateScope={privateScope} busy={busy}
-          onSelect={select} onOpenSource={onOpenSource} />
-      </div> : null}
+        </aside> : null}
     </div>
     {createOpen ? <ConfirmationDialog title="新增资料" onCancel={() => { if (!busy) setCreateOpen(false) }} actions={<>
       <button type="button" className={styles.button} disabled={busy} onClick={() => setCreateOpen(false)}>关闭</button>

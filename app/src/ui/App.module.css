@@ -60,6 +60,18 @@
   fill: currentColor;
 }
 
+/* 记忆页沿用设计稿的横排图标和底部角色头像。 */
+.memoryRail { box-sizing: border-box; width: 109px; padding: 12px 8px; gap: 4px;
+  border-color: #e0e7f7; background: linear-gradient(160deg, #f7f9ff 0%, #eef4ff 100%); }
+.memoryRail :is(.railItem, .railItemActive) { flex-direction: row; justify-content: flex-start; gap: 8px;
+  padding: 9px 7px; border-radius: 6px; color: #1d2855; text-align: left; }
+.memoryRail .railItemActive { background: #e6e6ff; color: #5746eb; }
+.memoryRail :is(.railItem, .railItemActive) svg { width: 17px; height: 17px; flex-shrink: 0; }
+.memoryCharacter { display: grid; justify-items: center; gap: 4px; margin-top: auto; color: #1d2855; font-size: 12px; text-align: center; }
+.memoryCharacter img, .memoryCharacter > span { display: grid; place-items: center; box-sizing: border-box;
+  width: 64px; height: 64px; border: 1px solid #dce6fa; border-radius: 50%; background: #e9f0ff; color: #5746eb;
+  font-size: 24px; object-fit: contain; }
+
 /* 右侧页面区：让当前页组件自己铺满 */
 .body {
   flex: 1;
