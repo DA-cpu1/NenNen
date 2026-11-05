@@ -32,14 +32,7 @@ interface MemoryPageProps {
 }
 
 /** 用替代关系串起新旧值，不靠文字猜测哪些记录属于同一次改动。 */
-function MemoryDetail({ memory, memories, privateScope, busy, onSelect, onOpenSource }: {
-  memory: ManagedMemory
-  memories: ManagedMemory[]
-  privateScope: string
-  busy: boolean
-  onSelect: (memory: ManagedMemory, action: Selection['action']) => void
-  onOpenSource: MemoryPageProps['onOpenSource']
-}) {
+function memoryHistory(memory: ManagedMemory, memories: ManagedMemory[]): ManagedMemory[] {
   const versions = new Map(memories.map((row) => [row.id, row]))
   const successors = new Map<string, ManagedMemory[]>()
   for (const row of memories) {
@@ -48,14 +41,27 @@ function MemoryDetail({ memory, memories, privateScope, busy, onSelect, onOpenSo
     newer.push(row)
     successors.set(row.supersedesId, newer)
   }
-  const history = new Set<ManagedMemory>([memory])
+  const history = new Set<ManagedMemory>([versions.get(memory.id) ?? memory])
   // 往两个方向找，用户点中旧值时也看得见后续版本。已看过的记录只加入一次。
   for (const row of history) {
     const previous = row.supersedesId && versions.get(row.supersedesId)
     if (previous) history.add(previous)
     for (const newer of successors.get(row.id) ?? []) history.add(newer)
   }
-  const previous = memory.supersedesId ? versions.get(memory.supersedesId) : undefined
+  return [...history].sort((a, b) => b.validFrom - a.validFrom)
+}
+
+/** 展示选中记录的详情与历史，操作目标始终是当前选中的记录。 */
+function MemoryDetail({ memory, memories, privateScope, busy, onSelect, onOpenSource }: {
+  memory: ManagedMemory
+  memories: ManagedMemory[]
+  privateScope: string
+  busy: boolean
+  onSelect: (memory: ManagedMemory, action: Selection['action']) => void
+  onOpenSource: MemoryPageProps['onOpenSource']
+}) {
+  const history = memoryHistory(memory, memories)
+  const previous = history.find((row) => row.id === memory.supersedesId)
   return <aside className={styles.detail} aria-labelledby="memory-detail-title">
     <header className={styles.detailHeader}>
       <h2 id="memory-detail-title">记忆详情</h2>
@@ -84,7 +90,7 @@ function MemoryDetail({ memory, memories, privateScope, busy, onSelect, onOpenSo
     <section className={styles.detailSection}>
       <h3>历史变化</h3>
       <ol className={styles.timeline}>
-        {[...history].sort((a, b) => b.validFrom - a.validFrom).map((row) => <li key={row.id}>
+        {history.map((row) => <li key={row.id}>
           <time dateTime={new Date(row.validFrom).toISOString()}>{timeFormat.format(row.validFrom)}</time>
           <p>{row.supersedesId ? '更新为' : '首次记录'} · {row.content}</p>
         </li>)}
@@ -112,6 +118,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
   const [selection, setSelection] = useState<Selection | null>(null)
   const [deletionReview, setDeletionReview] = useState<DeletionReview>(null)
   const [draft, setDraft] = useState('')
+  const [conflictChoice, setConflictChoice] = useState<'keep' | 'replace' | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -127,7 +134,10 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
     try {
       const response = await window.appApi?.getMemories()
       if (!response?.ok || !response.data) throw new Error('READ_FAILED')
-      if (current === readGeneration.current) setOverview(response.data)
+      if (current === readGeneration.current) {
+        setOverview(response.data)
+        return response.data
+      }
     } catch {
       if (current === readGeneration.current) setError('暂时无法读取记忆，请重试。')
     } finally {
@@ -146,6 +156,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
     setSelection({ memory, action })
     setDeletionReview(null)
     setDraft(memory.content)
+    setConflictChoice(null)
     setNotice(null)
     setError(null)
     previousRequest.current = null
@@ -189,6 +200,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
     saving.current = true
     setBusy(true)
     setError(null)
+    let reloaded = false
     try {
       const result = await window.appApi?.changeMemory(change)
       if (result?.ok && result.data?.receipt) {
@@ -200,15 +212,30 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
         setDeletionReview(null)
       } else {
         const code = result?.code ?? ''
-        setError(failureMessages[code] ?? '暂时无法确认操作结果，请重试。')
-        if (['MEMORY_CLEANUP_FAILED', 'STALE_REVISION', 'NOT_FOUND'].includes(code)) setSelection(null)
-        if (code === 'SOURCE_PREVIEW_CHANGED') setDeletionReview('failed')
+        if (action === 'correct' && code === 'STALE_REVISION') {
+          // 冲突时保留草稿，但只允许针对最新有效版本重新选择。
+          const fresh = await read()
+          reloaded = true
+          const latest = fresh && memoryHistory(memory, fresh.memories).find((row) =>
+            row.status === 'active' && (row.id !== memory.id || row.revision !== memory.revision))
+          if (latest) {
+            setSelection({ memory: latest, action })
+            setConflictChoice('keep')
+          } else {
+            setSelection(null)
+            setError('这条记忆已过期、被忘记或无法重新读取。请刷新列表后核对。')
+          }
+        } else {
+          setError(failureMessages[code] ?? '暂时无法确认操作结果，请重试。')
+          if (['MEMORY_CLEANUP_FAILED', 'STALE_REVISION', 'NOT_FOUND'].includes(code)) setSelection(null)
+          if (code === 'SOURCE_PREVIEW_CHANGED') setDeletionReview('failed')
+        }
       }
     } catch {
       setError('暂时无法确认操作结果，请重试。')
     } finally {
       onHistoryChanged()
-      await read()
+      if (!reloaded) await read()
       saving.current = false
       setBusy(false)
     }
@@ -303,13 +330,16 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
           onSelect={select} onOpenSource={onOpenSource} />
       </div> : null}
     </div>
-    {selection ? <ConfirmationDialog title={selection.action === 'correct' ? '纠正这条记忆' :
+    {selection ? <ConfirmationDialog title={selection.action === 'correct' ? conflictChoice ? '这条记忆已有更新' : '纠正这条记忆' :
       deletionReview ? '忘记并删除相关原文？' : '忘记这条记忆？'}
       onCancel={() => { if (!dialogBusy) { setSelection(null); setDeletionReview(null) } }} actions={<>
         <button type="button" className={styles.button} disabled={dialogBusy}
           onClick={() => { setSelection(null); setDeletionReview(null) }}>取消</button>
         {selection.action === 'correct' ? <button type="button" className={styles.primary}
-          disabled={busy || !draft.trim() || draft.trim() === selection.memory.content} onClick={() => void save()}>保存纠正</button>
+          disabled={busy || (conflictChoice !== 'keep' && (!draft.trim() || draft.trim() === selection.memory.content))}
+          onClick={() => { if (conflictChoice === 'keep') setSelection(null); else void save() }}>
+          {conflictChoice ? '确认选择' : '保存纠正'}
+        </button>
           : deletion ? <button type="button" className={styles.danger} disabled={busy}
             onClick={() => void save(deletion)}>确认忘记并删除</button>
           : deletionReview ? <button type="button" className={styles.button} disabled={dialogBusy}
@@ -319,9 +349,23 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
             <button type="button" className={styles.danger} disabled={busy} onClick={() => void reviewDeletion()}>查看并删除相关原文…</button>
           </>}
       </>}>
-      {selection.action === 'correct' ? <label className={styles.edit}>新的记忆内容
-        <textarea rows={4} maxLength={400} value={draft} disabled={busy} onChange={(event) => setDraft(event.target.value)} />
-      </label> : <>
+      {selection.action === 'correct' ? <>
+        <div className={styles.comparison}>
+          <div><strong>当前内容</strong><p className={styles.target}>{selection.memory.content}</p></div>
+          {conflictChoice ? <div><strong>本次填写</strong><p className={styles.target}>{draft.trim()}</p></div>
+            : <label className={styles.edit}>改为
+              <textarea rows={4} maxLength={400} value={draft} disabled={busy} onChange={(event) => setDraft(event.target.value)} />
+            </label>}
+        </div>
+        {conflictChoice ? <fieldset className={styles.choices} disabled={busy}>
+          <legend>请选择要保留的内容</legend>
+          <label><input type="radio" name="memory-conflict" checked={conflictChoice === 'keep'}
+            onChange={() => setConflictChoice('keep')} />保留当前内容</label>
+          <label><input type="radio" name="memory-conflict" checked={conflictChoice === 'replace'}
+            disabled={draft.trim() === selection.memory.content} onChange={() => setConflictChoice('replace')} />改用本次填写</label>
+        </fieldset> : <p>保存后会保留旧记录，并让新内容生效。</p>}
+        <p>{selection.memory.scope === 'global' ? '用户明确共享' : privateScope}</p>
+      </> : <>
         <p className={styles.target}>{selection.memory.content}</p>
         <p>同一信息的旧值也会忘记。相关原话将整条停止用于回复和整理，依赖这些原话的记忆也可能失效。</p>
         {deletionReview === 'loading' ? <p role="status">正在读取将删除的原话…</p> : null}

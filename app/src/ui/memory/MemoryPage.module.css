@@ -67,6 +67,11 @@
 .deletionPreview p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .edit { display: grid; gap: 8px; font-size: 13px; }
 .edit textarea { resize: vertical; border: 1px solid var(--border); border-radius: 7px; padding: 9px; color: var(--ink); line-height: 1.6; }
+.comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.comparison strong { font-size: 13px; }
+.comparison .target { margin: 8px 0 0; max-height: 150px; overflow: auto; }
+.choices { display: grid; gap: 8px; margin-top: 12px; border: 1px solid var(--border); border-radius: 7px; }
+.choices label { display: flex; align-items: center; gap: 6px; }
 .search :focus-visible, .filters button:focus-visible, .card:focus-visible, .button:focus-visible, .primary:focus-visible, .danger:focus-visible {
   outline: 2px solid #7560b1; outline-offset: 2px;
 }
