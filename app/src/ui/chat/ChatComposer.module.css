@@ -114,3 +114,5 @@
   color: var(--muted);
   cursor: default;
 }
+.memoryInterrupted { margin: 0 0 8px; padding: 8px 10px; border: 1px solid #e8c792; border-radius: 7px;
+  background: #fff5e4; color: #704b1d; font-size: 13px; }

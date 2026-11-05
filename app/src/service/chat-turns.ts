@@ -220,12 +220,13 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
             }
             if (turn.memoryChange) {
               try { await turn.memoryChange.cleaned }
-              catch { yield { type: 'failed', code: 'MEMORY_CLEANUP_FAILED' }; break }
+              catch { yield { type: 'failed', code: 'MEMORY_CLEANUP_FAILED', reason: 'memory-changed' }; break }
               const receipt = turn.memoryChange.receipt
               yield { type: 'tool-status', status: receipt.action === 'correct' ? 'memory-corrected' : 'memory-forgotten',
                 personaContainsContent: receipt.personaContainsContent }
             }
-            if (turn.invalidated && !write) yield { type: 'cancelled' }
+            if (turn.invalidated && !write) yield { type: 'cancelled', reason: 'memory-changed' }
+            else if (turn.invalidated && terminalEvent?.type === 'failed') yield { ...terminalEvent, reason: 'memory-changed' }
             else if (terminalEvent) yield terminalEvent as SseTurnEvent
             break
           }
@@ -238,7 +239,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
         }
       } catch (error) {
         const code = error instanceof Error && /^E_[A-Z0-9_]+$/.test(error.message) ? error.message : 'E_TURN_FAILED'
-        yield turn.invalidated ? { type: 'cancelled' } : { type: 'failed', code }
+        yield turn.invalidated ? { type: 'cancelled', reason: 'memory-changed' } : { type: 'failed', code }
       } finally {
         turn.finishRuntime()
         active.delete(conversationId)

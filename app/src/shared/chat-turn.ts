@@ -27,8 +27,8 @@ export type SseTurnEvent =
   | { type: 'tool-status'; status: 'memory-saved' | 'memory-already-saved' }
   | { type: 'tool-status'; status: 'memory-corrected' | 'memory-forgotten'; personaContainsContent: boolean }
   | { type: 'done'; replyId: string }
-  | { type: 'cancelled' }
-  | { type: 'failed'; code: string }
+  | { type: 'cancelled'; reason?: 'memory-changed' }
+  | { type: 'failed'; code: string; reason?: 'memory-changed' }
 
 /** 取消当前回合的请求体：按会话取消，一个会话同时最多一个活动回合。 */
 export const chatTurnCancelSchema = z.strictObject({

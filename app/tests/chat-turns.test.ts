@@ -133,7 +133,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
     expect(management.isBlocked(conversationId)).toBe(true)
     clean()
     expect(await tail).toEqual([{ type: 'tool-status', status: action === 'correct' ? 'memory-corrected' : 'memory-forgotten',
-      personaContainsContent: false }, { type: 'cancelled' }])
+      personaContainsContent: false }, { type: 'cancelled', reason: 'memory-changed' }])
     expect(db.select().from(memories).where(eq(memories.id, 'coffee')).get()?.status).toBe(action === 'correct' ? 'superseded' : 'deleted')
   })
 
@@ -185,7 +185,7 @@ describe('聊天回合服务（T06⑪c1）', () => {
     }, Date.now())
     turns.invalidateContexts(change.conversationIds)
     release()
-    expect(await originalTail).toEqual([{ type: 'cancelled' }])
+    expect(await originalTail).toEqual([{ type: 'cancelled', reason: 'memory-changed' }])
     expect((await collect(other.events)).map((frame) => frame.type)).toEqual(['text', 'done'])
     expect(oldResponse.cancel).toHaveBeenCalledTimes(1)
     expect(db.select().from(messages).where(eq(messages.replyToId, original.userMessageId)).get()).toMatchObject({

@@ -59,6 +59,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
   const [waitingHint, setWaitingHint] = useState(false)
   const [retry, setRetry] = useState<RetryPayload | null>(null)
   const [memoryReceipt, setMemoryReceipt] = useState<{ requestId: string; text: string } | null>(null)
+  const [memoryInterrupted, setMemoryInterrupted] = useState(false)
   const active = useRef<RetryPayload | null>(null)
   const conversationId = useRef<string | null>(null)
   const phaseRef = useRef<TurnPhase>('idle')
@@ -156,8 +157,11 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
           ? '。角色设定里还有相同文字，可以在角色设置里修改' : ''
         setMemoryReceipt({ requestId: message.requestId, text: notices[frame.status] + personaHint })
       } else if (frame.type === 'done') settleTurn('completed', null, true)
-      else if (frame.type === 'cancelled') settleTurn('cancelled', null, true)
-      else settleTurn('failed', frame.code, true)
+      else {
+        setMemoryInterrupted(frame.reason === 'memory-changed')
+        if (frame.type === 'cancelled') settleTurn('cancelled', null, true)
+        else settleTurn('failed', frame.code, true)
+      }
     })
     return () => {
       mounted.current = false
@@ -192,6 +196,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
     setErrorCode(null)
     setRetry(null)
     setMemoryReceipt((receipt) => receipt?.requestId === payload.requestId ? receipt : null)
+    setMemoryInterrupted(false)
     setWaitingHint(false)
     clearHintTimer()
     hintTimer.current = window.setTimeout(() => setWaitingHint(true), 30_000)
@@ -243,6 +248,7 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
         : <p className={styles.hint}>{phase === 'stopping' ? '正在停止…' : waitingHint ? '对方还在思考，稍等一下…' : '正在输入…'}</p>}
     </div>}
     {memoryReceipt ? <p className={styles.hint} role="status">{memoryReceipt.text}</p> : null}
+    {memoryInterrupted ? <p className={styles.memoryInterrupted} role="status">记忆已更新，使用旧内容的回复已停止。</p> : null}
     {(errorCode || retry) && <div className={styles.notice}>
       {errorCode && <span role="alert" className={styles.error}>
         {errorCode === 'CANCEL_FAILED' ? '停止请求未确认，可再次停止' :
