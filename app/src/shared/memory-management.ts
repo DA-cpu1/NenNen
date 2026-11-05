@@ -14,10 +14,19 @@ export const memoryContentSchema = z.string().trim().min(1).max(400)
 /** 后台只接受界面明示选择的操作，删除原文不能由聊天模型代选。 */
 export const memoryChangeSchema = z.discriminatedUnion('action', [
   memoryTargetSchema.extend({ action: z.literal('correct'), requestId: z.uuid(), content: memoryContentSchema }),
-  memoryTargetSchema.extend({ action: z.literal('forget'), requestId: z.uuid(), deleteSources: z.boolean() }),
+  memoryTargetSchema.extend({ action: z.literal('forget'), requestId: z.uuid(), deleteSources: z.boolean(),
+    sourceFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  }).refine((change) => !change.deleteSources || change.sourceFingerprint !== undefined),
 ])
 
 export type MemoryChange = z.infer<typeof memoryChangeSchema>
+export type MemoryTarget = z.infer<typeof memoryTargetSchema>
+
+/** 删除前给用户看的整条消息，以及用于确认这份名单的内容指纹。 */
+export interface MemoryDeletionPreview {
+  sources: Array<{ id: string; role: string; content: string; createdAt: number }>
+  sourceFingerprint: string
+}
 
 /** 管理页可看的资料。聊天上下文不能使用这个列表，因为它也包含过去的值。 */
 export interface ManagedMemory {

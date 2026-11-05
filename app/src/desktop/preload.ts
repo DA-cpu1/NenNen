@@ -9,7 +9,7 @@
  */
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ChatStreamMessage } from '../bridge/chat-stream'
-import type { MemoryChange } from '../shared/memory-management'
+import type { MemoryChange, MemoryTarget } from '../shared/memory-management'
 
 /** 拖动控制（页面里用 window.petDrag 访问） */
 contextBridge.exposeInMainWorld('petDrag', {
@@ -51,6 +51,7 @@ contextBridge.exposeInMainWorld('appApi', {
     ipcRenderer.invoke('chat:history', { conversationId, beforeSeq }),
   /** 记忆页读取当前和历史资料、保存变更及重试清理。 */
   getMemories: () => ipcRenderer.invoke('memory:list'),
+  previewMemoryDeletion: (target: MemoryTarget) => ipcRenderer.invoke('memory:deletion-preview', target),
   changeMemory: (change: MemoryChange) => ipcRenderer.invoke('memory:change', change),
   retryMemoryCleanup: () => ipcRenderer.invoke('memory:cleanup'),
   /** 发起一次聊天回合；受理结果立即返回，回复经 onChatTurnEvent 逐帧推送。 */

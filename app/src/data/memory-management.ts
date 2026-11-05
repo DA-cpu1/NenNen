@@ -1,5 +1,5 @@
 /** 把记忆修改、来源排除、旧任务失效和操作回执一起保存。 */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { and, asc, desc, eq, gte, inArray, ne, or } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { bumpCharacterMemoryEpoch, bumpContextEpoch, bumpGlobalMemoryEpoch } from './epochs'
@@ -8,12 +8,13 @@ import { characterVersions, contextExclusions, conversations, memories, memoryJo
 import { beginToolOperation, buildOperationKey, completeToolOperation } from './tool-ops'
 import {
   memoryChangeReceiptSchema, memoryContentSchema, type ManagedMemory, type MemoryChangeReceipt,
+  type MemoryDeletionPreview, type MemoryTarget,
 } from '../shared/memory-management'
 
 /** 界面必须先明确选择删除原文。聊天操作只能使用本轮已保存的用户原话。 */
 export type MemoryMutation = { memoryId: string; expectedRevision: number } & (
   | { action: 'correct'; content: string }
-  | { action: 'forget'; deleteSources: boolean }
+  | { action: 'forget'; deleteSources: boolean; sourceFingerprint?: string }
 )
 
 /** 管理页与聊天工具都要说明是谁触发的操作，方便复用同一份回执。 */
@@ -93,6 +94,43 @@ function memoryChain(all: Memory[], target: Memory): Memory[] {
   return linked.filter((row) => ids.has(row.id))
 }
 
+/** 两条历史记忆可能引用同一句话，预览和删除都只处理一次。 */
+function readChainSources(db: BetterSQLite3Database, chain: Memory[]) {
+  const ids = chain.map(({ id }) => id)
+  const sources = new Map<string, typeof messages.$inferSelect>()
+  for (let start = 0; start < ids.length; start += 500) {
+    const rows = db.select({ message: messages }).from(memorySources)
+      .innerJoin(messages, eq(memorySources.messageId, messages.id))
+      .where(inArray(memorySources.memoryId, ids.slice(start, start + 500))).all()
+    for (const { message } of rows) sources.set(message.id, message)
+  }
+  return [...sources.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+}
+
+/** 内容指纹像一张名单的校验码，编号或原文有变化就要重新确认。 */
+function deletionPreview(rows: ReturnType<typeof readChainSources>): MemoryDeletionPreview {
+  const sources = rows.map(({ id, role, content, createdAt }) => ({ id, role, content, createdAt }))
+  const sourceFingerprint = createHash('sha256').update(JSON.stringify(sources)).digest('hex')
+  return { sources, sourceFingerprint }
+}
+
+/**
+ * 预览目标及同属性旧值实际关联的原话。其他被排除的回复仍保留在聊天里。
+ * @param db 后台数据库连接
+ * @param characterId 由后台选定的角色
+ * @param change 页面选定的记忆与修订号
+ * @returns 待删除原话与用于再次核对的指纹
+ */
+export function previewMemoryDeletion(db: BetterSQLite3Database, characterId: string, change: MemoryTarget): MemoryDeletionPreview {
+  return db.transaction((tx) => {
+    const all = tx.select().from(memories).where(visibleTo(characterId)).all()
+    const target = all.find((row) => row.id === change.memoryId)
+    if (!target) throw new Error('NOT_FOUND')
+    if (target.status === 'deleted' || target.revision !== change.expectedRevision) throw new Error('STALE_REVISION')
+    return deletionPreview(readChainSources(tx, memoryChain(all, target)))
+  })
+}
+
 /** 保留原文时，消息的快速过滤标记和排除理由一起写。 */
 function excludeMessages(db: BetterSQLite3Database, ids: Set<string>, reason: 'forgotten' | 'source_removed', now: number): void {
   for (const messageId of ids) {
@@ -129,11 +167,13 @@ export function mutateMemory(
     const target = tx.select().from(memories).where(and(eq(memories.id, change.memoryId), visibleTo(conversation.characterId))).get()
     if (!target || (sourceId && target.scope === 'global')) throw new Error('NOT_FOUND')
     if (target.status === 'deleted' || target.revision !== change.expectedRevision) throw new Error('STALE_REVISION')
+    let requestCreatedAt: number | undefined
     if (sourceId) {
-      const source = tx.select({ id: messages.id }).from(messages).where(and(eq(messages.id, sourceId),
+      const source = tx.select({ createdAt: messages.createdAt }).from(messages).where(and(eq(messages.id, sourceId),
         eq(messages.conversationId, conversation.id), eq(messages.role, 'user'), eq(messages.status, 'completed'),
         eq(messages.excludedFromContext, 0))).get()
       if (!source || (change.action === 'forget' && change.deleteSources)) throw new Error('SOURCE_NOT_ALLOWED')
+      requestCreatedAt = source.createdAt
     }
 
     const privateIds = new Set<string>()
@@ -154,17 +194,19 @@ export function mutateMemory(
     } else {
       const all = tx.select().from(memories).all()
       const chain = memoryChain(all, target)
-      const originalIds = new Set(tx.select({ id: memorySources.messageId }).from(memorySources)
-        .where(inArray(memorySources.memoryId, chain.map((row) => row.id))).all().map((row) => row.id))
-      const excludedIds = new Set(originalIds)
+      const originals = readChainSources(tx, chain)
+      if (change.deleteSources && deletionPreview(originals).sourceFingerprint !== change.sourceFingerprint) {
+        throw new Error('SOURCE_PREVIEW_CHANGED')
+      }
+      const excludedIds = new Set(originals.map(({ id }) => id))
       // 用户说「忘掉我的某个偏好」也可能复述内容，不能把这条指令作为新记忆来源。
       if (sourceId) excludedIds.add(sourceId)
-      const originals = tx.select({ id: messages.id, conversationId: messages.conversationId, seq: messages.seq, createdAt: messages.createdAt })
-        .from(messages).where(inArray(messages.id, [...excludedIds])).all()
+      if (sourceId) sourceConversations.add(conversation.id)
       for (const row of originals) sourceConversations.add(row.conversationId)
       const invalidIds = new Set(chain.map((row) => row.id))
       const invalid: Memory[] = []
       let earliest = originals.reduce((at, row) => Math.min(at, row.createdAt), target.validFrom)
+      if (requestCreatedAt !== undefined) earliest = Math.min(earliest, requestCreatedAt)
       const reason = change.deleteSources ? 'source_removed' : 'forgotten'
       let newlyExcluded = [...excludedIds]
       for (;;) {
@@ -200,7 +242,6 @@ export function mutateMemory(
       let removedSources = 0
       if (change.deleteSources) {
         for (const row of originals) {
-          if (!originalIds.has(row.id)) continue
           tx.delete(messages).where(eq(messages.id, row.id)).run()
           // 书签若卡在已删原话的中间，保留原顺序号，下一条消息从后面继续。
           tx.update(conversations).set({ lastProcessedOffset: 0 }).where(and(

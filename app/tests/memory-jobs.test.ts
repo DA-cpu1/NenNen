@@ -9,7 +9,7 @@ import { initializeFirstCharacter } from '../src/data/character-init'
 import { bumpCharacterMemoryEpoch, bumpContextEpoch, bumpGlobalMemoryEpoch } from '../src/data/epochs'
 import { saveUserMessage } from '../src/data/messages'
 import { saveCharacterMemory } from '../src/data/memories'
-import { mutateMemory } from '../src/data/memory-management'
+import { mutateMemory, previewMemoryDeletion } from '../src/data/memory-management'
 import { runMigrations } from '../src/data/migrations'
 import { agentRuns, conversations, memories, memoryJobs, memorySources, messages } from '../src/data/tables'
 import { beginMemoryAttempt, finishMemoryAttempt, recoverExpiredMemoryJobs } from '../src/jobs/memory-budget'
@@ -123,8 +123,10 @@ describe('整理单次执行', () => {
     if (!('memory' in target)) throw new Error('缺少测试记忆')
     const job = registerMemoryJob(db, conversationId, now)!
     const started = phase === '排队' ? undefined : beginMemoryAttempt(db, job.id, testModel, now)
+    const memory = { memoryId: target.memory.id, expectedRevision: target.memory.revision }
+    const { sourceFingerprint } = previewMemoryDeletion(db, target.memory.characterId!, memory)
     mutateMemory(db, { conversationId, requestId: 'delete-source' }, {
-      action: 'forget', memoryId: target.memory.id, expectedRevision: target.memory.revision, deleteSources: true,
+      ...memory, action: 'forget', deleteSources: true, sourceFingerprint,
     }, now + 1)
     if (!started) {
       expect(beginMemoryAttempt(db, job.id, testModel, now + 1)).toEqual({ status: 'unavailable' })

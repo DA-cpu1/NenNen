@@ -12,7 +12,7 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import type { BackendHandle } from '../desktop/backend'
 import { chatHistoryQuerySchema } from '../shared/chat-history'
-import { memoryChangeSchema } from '../shared/memory-management'
+import { memoryChangeSchema, memoryTargetSchema } from '../shared/memory-management'
 
 /** 后台 HTTP 请求的通用结果：成功带数据，失败只带错误码（03 §7：
  *  状态码可以给，原始错误文本不出后台） */
@@ -86,7 +86,7 @@ export function registerBridgeRequests(
     return callBackend(getBackend(), 'GET', `/chat/history?${params}`)
   })
 
-  // 原话和修改能力只交给聊天窗口主页面。桌宠和嵌入页没有这三个入口的权限。
+  // 原话和修改能力只交给聊天窗口主页面。桌宠和嵌入页没有这些入口的权限。
   ipcMain.handle('memory:list', (event) => {
     if (!isChatPage(event)) return { ok: false, code: 'UNAUTHORIZED' }
     return callBackend(getBackend(), 'GET', '/memory')
@@ -96,6 +96,12 @@ export function registerBridgeRequests(
     const checked = memoryChangeSchema.safeParse(body)
     if (!checked.success) return { ok: false, code: 'INVALID_INPUT' }
     return callBackend(getBackend(), 'POST', '/memory', checked.data)
+  })
+  ipcMain.handle('memory:deletion-preview', (event, body: unknown) => {
+    if (!isChatPage(event)) return { ok: false, code: 'UNAUTHORIZED' }
+    const checked = memoryTargetSchema.safeParse(body)
+    if (!checked.success) return { ok: false, code: 'INVALID_INPUT' }
+    return callBackend(getBackend(), 'POST', '/memory/deletion-preview', checked.data)
   })
   ipcMain.handle('memory:cleanup', (event) => {
     if (!isChatPage(event)) return { ok: false, code: 'UNAUTHORIZED' }

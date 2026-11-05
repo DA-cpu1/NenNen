@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { listCurrentMemories, saveCharacterMemory, type SaveCharacterMemoryInput } from '../src/data/memories'
-import { listManagedMemories, mutateMemory } from '../src/data/memory-management'
+import { listManagedMemories, mutateMemory, previewMemoryDeletion } from '../src/data/memory-management'
 import { readGlobalMemoryEpoch } from '../src/data/epochs'
 import { saveUserMessage } from '../src/data/messages'
 import { runMigrations } from '../src/data/migrations'
@@ -192,13 +192,25 @@ describe('纠正与忘记', () => {
     db.update(conversations).set({ lastProcessedSeq: 1, lastProcessedOffset: 1 }).where(eq(conversations.id, 'normal')).run()
     saveCharacterMemory(db, initial)
     const [target] = listCurrentMemories(db, 'a', now)
-    const change = { action: 'forget', memoryId: target.id, expectedRevision: target.revision, deleteSources: true } as const
+    const updated = mutateMemory(db, { conversationId: 'normal', requestId: 'correction-before-erase' }, {
+      action: 'correct', memoryId: target.id, expectedRevision: target.revision, content: '更新后的称呼',
+    }, now + 1).receipt
+    const request = { memoryId: updated.memoryId, expectedRevision: updated.revision }
+    expect(() => previewMemoryDeletion(db, 'b', request)).toThrow('NOT_FOUND')
+    const preview = previewMemoryDeletion(db, 'a', request)
+    expect(preview.sources).toEqual([{ id: 'original', role: 'user', content: '虚构测试原话', createdAt: now }])
+    const change = { ...request, action: 'forget', deleteSources: true, sourceFingerprint: preview.sourceFingerprint } as const
     const context = { conversationId: 'normal', requestId: 'erase-1' }
+    // 确认期间原话变化时，即使记忆修订号没变，旧清单也不能用于删除。
+    db.update(messages).set({ content: '变化后的虚构原话' }).where(eq(messages.id, 'original')).run()
+    expect(() => mutateMemory(db, context, change, now + 1)).toThrow('SOURCE_PREVIEW_CHANGED')
+    expect(db.select().from(messages).where(eq(messages.id, 'original')).get()).toBeDefined()
+    db.update(messages).set({ content: '虚构测试原话' }).where(eq(messages.id, 'original')).run()
     sqlite.exec("CREATE TRIGGER reject_erase BEFORE DELETE ON messages BEGIN SELECT RAISE(ABORT, '拒绝删除'); END")
     expect(() => mutateMemory(db, context, change, now + 1)).toThrow()
-    expect(listCurrentMemories(db, 'a', now + 1)).toEqual([target])
+    expect(listCurrentMemories(db, 'a', now + 1)).toMatchObject([{ id: request.memoryId }])
     expect(db.select().from(contextExclusions).all()).toEqual([])
-    expect(db.select().from(toolOperations).all()).toEqual([])
+    expect(db.select().from(toolOperations).all()).toHaveLength(1)
     sqlite.exec('DROP TRIGGER reject_erase')
     expect(mutateMemory(db, context, change, now + 2).receipt.removedSources).toBe(1)
     expect(db.select().from(messages).where(eq(messages.id, 'original')).get()).toBeUndefined()

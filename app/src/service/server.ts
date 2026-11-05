@@ -24,7 +24,8 @@ import {
 } from '../shared/character-schema'
 import { personaFromSections, personaSectionsAllEmpty } from '../shared/persona-format'
 import { memoryToolPath, memoryToolRequestSchema, type MemoryToolRequest, type MemoryToolResult } from '../shared/memory-tool'
-import { memoryChangeSchema, type MemoryChange, type MemoryChangeReceipt, type MemoryManagementOverview } from '../shared/memory-management'
+import { memoryChangeSchema, memoryTargetSchema, type MemoryChange, type MemoryChangeReceipt, type MemoryDeletionPreview,
+  type MemoryManagementOverview, type MemoryTarget } from '../shared/memory-management'
 import { chatHistoryQuerySchema, type ChatHistoryPage, type ChatHistoryQuery } from '../shared/chat-history'
 import {
   chatTurnCancelSchema, chatTurnRequestSchema, previewTurnRequestSchema,
@@ -84,6 +85,7 @@ export interface BackendOptions {
   /** 正式角色的记忆管理，只能由通过主进程令牌检查的请求访问。 */
   memoryManagement?: {
     list: () => MemoryManagementOverview
+    previewDeletion: (target: MemoryTarget) => MemoryDeletionPreview
     change: (change: MemoryChange) => Promise<MemoryChangeReceipt>
     retryCleanup: () => Promise<void>
   }
@@ -200,7 +202,7 @@ function sendTurnError(res: ServerResponse, code: string): void {
 function sendMemoryError(res: ServerResponse, error: unknown): void {
   const statusByCode = new Map([
     ['NOT_FOUND', 404], ['STALE_REVISION', 409], ['INVALID_INPUT', 400], ['SOURCE_NOT_ALLOWED', 403],
-    ['MEMORY_CLEANUP_PENDING', 409], ['MEMORY_CLEANUP_FAILED', 503],
+    ['MEMORY_CLEANUP_PENDING', 409], ['MEMORY_CLEANUP_FAILED', 503], ['SOURCE_PREVIEW_CHANGED', 409],
   ])
   const code = error instanceof Error ? error.message : ''
   const status = statusByCode.get(code)
@@ -387,12 +389,16 @@ async function handleRequest(
     sendJson(res, 503, { ok: false, code: 'BACKEND_STOPPING' })
     return
   }
-  if (req.url === '/memory' || req.url === '/memory/cleanup') {
+  if (req.url === '/memory' || req.url === '/memory/deletion-preview' || req.url === '/memory/cleanup') {
     const management = options.memoryManagement
     if (!management) { sendJson(res, 503, { ok: false, code: 'DB_UNAVAILABLE' }); return }
     try {
       if (req.method === 'GET' && req.url === '/memory') {
         sendJson(res, 200, { ok: true, ...management.list() })
+      } else if (req.method === 'POST' && req.url === '/memory/deletion-preview') {
+        const parsed = memoryTargetSchema.safeParse(await readJsonBody(req).catch(() => null))
+        if (!parsed.success) throw new Error('INVALID_INPUT')
+        sendJson(res, 200, { ok: true, ...management.previewDeletion(parsed.data) })
       } else if (req.method === 'POST' && req.url === '/memory') {
         const parsed = memoryChangeSchema.safeParse(await readJsonBody(req).catch(() => null))
         if (!parsed.success) throw new Error('INVALID_INPUT')

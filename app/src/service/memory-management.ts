@@ -1,9 +1,9 @@
 /** 先保存记忆变更，再取消旧工作；等本地缓存清理完成才给成功回执。 */
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
-import { listManagedMemories, mutateMemory, type MemoryMutation, type MemoryMutationContext } from '../data/memory-management'
+import { listManagedMemories, mutateMemory, previewMemoryDeletion, type MemoryMutation, type MemoryMutationContext } from '../data/memory-management'
 import { getFirstCharacter } from '../data/character-init'
 import { getFormalConversation } from '../data/conversations'
-import type { MemoryChange, MemoryChangeReceipt } from '../shared/memory-management'
+import type { MemoryChange, MemoryChangeReceipt, MemoryTarget } from '../shared/memory-management'
 
 /** 使用实际会话身份的聊天工具修改。服务层先复查原话和工具许可。 */
 export type ChatMemoryChange = { memoryId: string; expectedRevision: number } & (
@@ -63,6 +63,8 @@ export function createMemoryManagement(
   return {
     /** 管理页读取当前资料、旧值及来源，另外告知是否还有待清理事项。 */
     list: () => ({ memories: listManagedMemories(db, activeCharacter().character.id, Date.now()), cleanupPending: blocked.size > 0 }),
+    /** 只读确认清单，取消确认不会写入任何数据。 */
+    previewDeletion: (target: MemoryTarget) => previewMemoryDeletion(db, activeCharacter().character.id, target),
     /** 只暂停受影响的会话。 */
     isBlocked: (conversationId: string) => blocked.has(conversationId),
     retryCleanup,

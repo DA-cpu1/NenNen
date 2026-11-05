@@ -1,6 +1,6 @@
 /** 记忆页显示当前与过去的资料，让用户核对来源并明确选择纠正或忘记范围。 */
 import { useEffect, useRef, useState } from 'react'
-import type { ManagedMemory, MemoryChange, MemoryManagementOverview } from '../../shared/memory-management'
+import type { ManagedMemory, MemoryChange, MemoryDeletionPreview, MemoryManagementOverview } from '../../shared/memory-management'
 import ConfirmationDialog from '../settings/ConfirmationDialog'
 import styles from './MemoryPage.module.css'
 
@@ -14,9 +14,12 @@ const failureMessages: Record<string, string> = {
   NOT_FOUND: '这条记忆已找不到，请重新读取列表。',
   MEMORY_CLEANUP_FAILED: '记忆已经更新，但本地清理未完成。请重试清理。',
   MEMORY_CLEANUP_PENDING: '本地正在清理上一项变更，请稍后再试。',
+  SOURCE_PREVIEW_CHANGED: '相关原话有变化，请重新查看删除范围。',
 }
+const sourceRoles: Record<string, string> = { user: '你', assistant: '角色', system: '系统' }
 
 type Selection = { memory: ManagedMemory; action: 'correct' | 'forget' }
+type DeletionReview = 'loading' | 'failed' | MemoryDeletionPreview | null
 
 interface MemoryPageProps {
   characterId?: string
@@ -33,6 +36,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
   const [overview, setOverview] = useState<MemoryManagementOverview | null>(null)
   const [filter, setFilter] = useState<'active' | 'past'>('active')
   const [selection, setSelection] = useState<Selection | null>(null)
+  const [deletionReview, setDeletionReview] = useState<DeletionReview>(null)
   const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -66,22 +70,48 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
   /** 打开确认框时固定记忆修订号。保存前即使后台修改了它，也不能把别人更新覆盖掉。 */
   function select(memory: ManagedMemory, action: Selection['action']): void {
     setSelection({ memory, action })
+    setDeletionReview(null)
     setDraft(memory.content)
     setNotice(null)
     setError(null)
     previousRequest.current = null
   }
 
+  /** 第一次点击只向后台读名单。用户看完完整消息后才能确认删除。 */
+  async function reviewDeletion(): Promise<void> {
+    if (!selection || deletionReview === 'loading') return
+    const { id, revision } = selection.memory
+    setDeletionReview('loading')
+    setError(null)
+    try {
+      const result = await window.appApi?.previewMemoryDeletion({ memoryId: id, expectedRevision: revision })
+      if (result?.ok && result.data) {
+        setDeletionReview(result.data)
+        return
+      }
+      if (result?.code === 'STALE_REVISION' || result?.code === 'NOT_FOUND') {
+        setSelection(null)
+        setError(failureMessages[result.code])
+        await read()
+        return
+      }
+    } catch { /* 读取失败仍停在确认框，用户可以重读。 */ }
+    setDeletionReview('failed')
+    setError('暂时无法读取将删除的原话，请重试。')
+  }
+
   /** 同一按钮的重试沿用请求编号；改文案或换删除范围时属于另一项操作。 */
-  async function save(deleteSources = false): Promise<void> {
+  async function save(deletion?: MemoryDeletionPreview): Promise<void> {
     if (!selection || saving.current) return
     const { memory, action } = selection
     const content = draft.trim()
     if (action === 'correct' && (!content || content === memory.content)) return
-    const key = JSON.stringify([memory.id, memory.revision, action, action === 'correct' ? content : deleteSources])
+    const key = JSON.stringify([memory.id, memory.revision, action, action === 'correct' ? content : deletion?.sourceFingerprint])
     if (previousRequest.current?.key !== key) previousRequest.current = { key, id: crypto.randomUUID() }
     const base = { memoryId: memory.id, expectedRevision: memory.revision, requestId: previousRequest.current.id }
-    const change: MemoryChange = action === 'correct' ? { ...base, action, content } : { ...base, action, deleteSources }
+    const change: MemoryChange = action === 'correct' ? { ...base, action, content } : {
+      ...base, action, deleteSources: deletion !== undefined, sourceFingerprint: deletion?.sourceFingerprint,
+    }
     saving.current = true
     setBusy(true)
     setError(null)
@@ -93,10 +123,12 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
         const persona = receipt.personaContainsContent ? '。角色设定里还有相同文字，可以在角色设置里修改。' : '。'
         setNotice((action === 'correct' ? '记忆已纠正，原来的值已收进「过去的记忆」' : `已忘记这条信息${scope}`) + persona)
         setSelection(null)
+        setDeletionReview(null)
       } else {
         const code = result?.code ?? ''
         setError(failureMessages[code] ?? '暂时无法确认操作结果，请重试。')
         if (['MEMORY_CLEANUP_FAILED', 'STALE_REVISION', 'NOT_FOUND'].includes(code)) setSelection(null)
+        if (code === 'SOURCE_PREVIEW_CHANGED') setDeletionReview('failed')
       }
     } catch {
       setError('暂时无法确认操作结果，请重试。')
@@ -132,6 +164,8 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
   const current = memories.filter((memory) => memory.status === 'active')
   const past = memories.filter((memory) => memory.status !== 'active')
   const shown = filter === 'active' ? current : past
+  const deletion = typeof deletionReview === 'object' ? deletionReview : null
+  const dialogBusy = busy || deletionReview === 'loading'
 
   return <section className={styles.page} aria-labelledby="memory-title">
     <header className={styles.header}>
@@ -183,14 +217,20 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
         </li>)}
       </ol>
     </div>
-    {selection ? <ConfirmationDialog title={selection.action === 'correct' ? '纠正这条记忆' : '忘记这条记忆？'}
-      onCancel={() => { if (!busy) setSelection(null) }} actions={<>
-        <button type="button" className={styles.button} disabled={busy} onClick={() => setSelection(null)}>取消</button>
+    {selection ? <ConfirmationDialog title={selection.action === 'correct' ? '纠正这条记忆' :
+      deletionReview ? '忘记并删除相关原文？' : '忘记这条记忆？'}
+      onCancel={() => { if (!dialogBusy) { setSelection(null); setDeletionReview(null) } }} actions={<>
+        <button type="button" className={styles.button} disabled={dialogBusy}
+          onClick={() => { setSelection(null); setDeletionReview(null) }}>取消</button>
         {selection.action === 'correct' ? <button type="button" className={styles.primary}
           disabled={busy || !draft.trim() || draft.trim() === selection.memory.content} onClick={() => void save()}>保存纠正</button>
+          : deletion ? <button type="button" className={styles.danger} disabled={busy}
+            onClick={() => void save(deletion)}>确认忘记并删除</button>
+          : deletionReview ? <button type="button" className={styles.button} disabled={dialogBusy}
+            onClick={() => void reviewDeletion()}>重新查看删除范围</button>
           : <>
             <button type="button" className={styles.button} disabled={busy} onClick={() => void save()}>忘记此信息（聊天原文仍保留）</button>
-            <button type="button" className={styles.danger} disabled={busy} onClick={() => void save(true)}>忘记并删除相关原文</button>
+            <button type="button" className={styles.danger} disabled={busy} onClick={() => void reviewDeletion()}>查看并删除相关原文…</button>
           </>}
       </>}>
       {selection.action === 'correct' ? <label className={styles.edit}>新的记忆内容
@@ -198,6 +238,16 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
       </label> : <>
         <p className={styles.target}>{selection.memory.content}</p>
         <p>同一信息的旧值也会忘记。相关原话将整条停止用于回复和整理，依赖这些原话的记忆也可能失效。</p>
+        {deletionReview === 'loading' ? <p role="status">正在读取将删除的原话…</p> : null}
+        {deletion ? <div className={styles.deletionPreview}>
+          <h3>即将删除的来源消息（{deletion.sources.length} 条）</h3>
+          {deletion.sources.length === 0 ? <p>没有关联原话，这次只会忘记资料。</p> : <ol aria-label="即将删除的来源消息">
+            {deletion.sources.map((source) => <li key={source.id}>
+              <time dateTime={new Date(source.createdAt).toISOString()}>{timeFormat.format(source.createdAt)}</time>
+              <p><strong>{sourceRoles[source.role] ?? '消息'} · </strong>{source.content}</p>
+            </li>)}
+          </ol>}
+        </div> : null}
         <p>选择删除原文会把对应消息从聊天记录移除。早先已导出的备份仍可能包含这些原话。</p>
         {selection.memory.scope === 'global' ? <p>这是共享资料，忘记后会影响可使用它的角色。</p> : null}
       </>}

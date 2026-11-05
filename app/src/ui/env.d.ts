@@ -45,6 +45,12 @@ interface Window {
       data?: import('../shared/memory-management').MemoryManagementOverview
       code?: string
     }>
+    /** 只读将删除的原话，用户确认后才提交修改。 */
+    previewMemoryDeletion: (target: import('../shared/memory-management').MemoryTarget) => Promise<{
+      ok: boolean
+      data?: import('../shared/memory-management').MemoryDeletionPreview
+      code?: string
+    }>
     /** 修改一条记忆，只有本地清理完成才返回成功。 */
     changeMemory: (change: import('../shared/memory-management').MemoryChange) => Promise<{
       ok: boolean

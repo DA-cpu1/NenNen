@@ -97,6 +97,12 @@ describe('后台服务认证', () => {
         memoryId: 'fixed-memory', expectedRevision: 1, deleteSources: false }
       const post = (body: object) => fetch(path, { method: 'POST', headers, body: JSON.stringify(body) })
       expect((await post({ ...change, conversationId: '伪造会话' })).status).toBe(400)
+      expect((await post({ ...change, deleteSources: true })).status).toBe(400)
+      const previewBody = { memoryId: change.memoryId, expectedRevision: change.expectedRevision }
+      const previewRequest = { method: 'POST', body: JSON.stringify(previewBody) }
+      expect((await fetch(`${path}/deletion-preview`, previewRequest)).status).toBe(401)
+      expect(await (await fetch(`${path}/deletion-preview`, { ...previewRequest, headers })).json())
+        .toMatchObject({ ok: true, sources: [], sourceFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) })
       let replied = false
       const response = post(change).then((result) => { replied = true; return result })
       await entered

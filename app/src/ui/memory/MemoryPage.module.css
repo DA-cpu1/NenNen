@@ -37,6 +37,12 @@
 .empty { margin: 16px 0; border: 1px dashed var(--border); border-radius: 10px; padding: 24px; color: var(--muted); }
 .empty h2 { margin: 0 0 7px; color: var(--ink); font-size: 15px; }
 .target { padding: 9px 12px; border-left: 2px solid #b9a9dc; background: var(--accent-soft-weak); }
+.deletionPreview { padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--accent-soft-weak); }
+.deletionPreview h3 { margin: 0 0 8px; font-size: 14px; }
+.deletionPreview ol { display: grid; gap: 6px; max-height: min(220px, 26vh); overflow: auto; margin: 0; padding: 0; list-style: none; }
+.deletionPreview li { padding: 8px 10px; background: var(--panel); border-radius: 6px; }
+.deletionPreview time { color: var(--muted); font-size: 12px; }
+.deletionPreview p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .edit { display: grid; gap: 8px; font-size: 13px; }
 .edit textarea { resize: vertical; border: 1px solid var(--border); border-radius: 7px; padding: 9px; color: var(--ink); line-height: 1.6; }
 .filters button:focus-visible, .sources summary:focus-visible, .button:focus-visible, .primary:focus-visible, .danger:focus-visible {
