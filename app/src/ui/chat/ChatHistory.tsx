@@ -3,7 +3,7 @@
  * 切页或重读后，旧请求回包不能覆盖新页面，所以每次读取都核对本次读取编号。
  */
 import { useEffect, useRef, useState } from 'react'
-import type { ChatHistoryPage } from '../../shared/chat-history'
+import type { ChatHistoryPage, ChatSourceLocation } from '../../shared/chat-history'
 import styles from './ChatHistory.module.css'
 
 /** 历史列表只需知道当前角色，不接收数据库连接或模型配置。 */
@@ -12,6 +12,9 @@ interface ChatHistoryProps {
   displayName: string
   /** 父层的刷新信号：发送/回合落定时 +1，列表重读最近一页。 */
   refreshKey?: number
+  source: ChatSourceLocation | null
+  onCloseSource: () => void
+  onReturnToMemory: () => void
 }
 
 /** 消息时间使用设备本地时区显示；库里仍保存统一的 UTC 毫秒。 */
@@ -22,7 +25,7 @@ const timeFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeSt
  * @param props 当前角色编号与显示名
  * @returns 只读消息列表、分页按钮与读取状态
  */
-export default function ChatHistory({ characterId, displayName, refreshKey }: ChatHistoryProps) {
+export default function ChatHistory({ characterId, displayName, refreshKey, source, onCloseSource, onReturnToMemory }: ChatHistoryProps) {
   const [page, setPage] = useState<ChatHistoryPage | null>(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -30,6 +33,7 @@ export default function ChatHistory({ characterId, displayName, refreshKey }: Ch
   const generation = useRef(0)
   const scrollArea = useRef<HTMLDivElement>(null)
   const scrollLatest = useRef(false)
+  const sourceRow = useRef<HTMLLIElement>(null)
 
   useEffect(() => {
     const current = ++generation.current
@@ -46,7 +50,9 @@ export default function ChatHistory({ characterId, displayName, refreshKey }: Ch
         if (!formal.ok) throw new Error(formal.code ?? 'READ_FAILED')
         const conversation = formal.data?.conversation
         if (!conversation || conversation.characterId !== characterId) throw new Error('CONVERSATION_MISMATCH')
-        const result = await api.getChatHistory(conversation.conversationId)
+        if (source && source.conversationId !== conversation.conversationId) throw new Error('CONVERSATION_MISMATCH')
+        // 「读取此顺序号之前」不包含边界本身，所以用原话顺序号加一直接读到它。
+        const result = await api.getChatHistory(conversation.conversationId, source ? source.seq + 1 : undefined)
         if (!result.ok) throw new Error(result.code ?? 'READ_FAILED')
         if (result.data?.history.characterId !== characterId) throw new Error('CONVERSATION_MISMATCH')
         if (generation.current !== current) return
@@ -62,11 +68,16 @@ export default function ChatHistory({ characterId, displayName, refreshKey }: Ch
     // 页面卸载后，旧回包即使晚到也不能再改动它的状态。
     // refreshKey 变化（发送或回合落定）同样整体重读，回到最近一页。
     return () => { generation.current++ }
-  }, [characterId, reloadAttempt, refreshKey])
+  }, [characterId, reloadAttempt, refreshKey, source])
 
   useEffect(() => {
     if (scrollLatest.current && scrollArea.current) {
-      scrollArea.current.scrollTop = scrollArea.current.scrollHeight
+      if (sourceRow.current) {
+        sourceRow.current.focus({ preventScroll: true })
+        sourceRow.current.scrollIntoView({ block: 'center' })
+      } else {
+        scrollArea.current.scrollTop = scrollArea.current.scrollHeight
+      }
       scrollLatest.current = false
     }
   }, [page])
@@ -92,9 +103,14 @@ export default function ChatHistory({ characterId, displayName, refreshKey }: Ch
     }
   }
 
-  return (
+  const sourceRemoved = !!(source && page && !busy && !error && !page.messages.some((message) => message.id === source.id))
+  return <>
+    {source ? <div className={styles.sourceBar}>
+      <span>原聊天位置</span>
+      <button type="button" onClick={onCloseSource}>返回最新聊天</button>
+    </div> : null}
     <div className={styles.history} ref={scrollArea} aria-busy={busy}>
-      {page?.hasMore && <button className={styles.more} type="button" disabled={busy}
+      {page?.hasMore && !sourceRemoved && <button className={styles.more} type="button" disabled={busy}
         onClick={() => void loadOlder()}>加载更早记录</button>}
       {busy && <p className={styles.notice} role="status">正在读取聊天记录…</p>}
       {!characterId && <p className={styles.notice} role="status">正在读取角色资料…</p>}
@@ -106,10 +122,18 @@ export default function ChatHistory({ characterId, displayName, refreshKey }: Ch
           else setReloadAttempt((value) => value + 1)
         }}>重试读取</button>
       </div>}
-      {!busy && !error && page?.messages.length === 0 &&
+      {sourceRemoved ? <div className={styles.notice} role="status">
+        <h2>原文已删除</h2>
+        <p>该来源消息已删除，无法再显示正文。</p>
+        <button type="button" onClick={onReturnToMemory}>返回记忆</button>
+      </div> : null}
+      {!busy && !error && !source && page?.messages.length === 0 &&
         <p className={styles.empty}>还没有聊天记录</p>}
       <ol className={styles.list} aria-label="聊天记录">
-        {page?.messages.map((message) => <li key={message.id}
+        {!sourceRemoved && page?.messages.map((message) => <li key={message.id}
+          ref={message.id === source?.id ? sourceRow : undefined}
+          tabIndex={message.id === source?.id ? -1 : undefined}
+          data-source={message.id === source?.id ? 'true' : undefined}
           className={message.role === 'user' ? styles.user : styles.character}>
           <div className={styles.meta}>
             <span>{message.role === 'user' ? '你' : displayName}{message.role === 'proactive' ? ' · 主动问候' : ''}</span>
@@ -124,5 +148,5 @@ export default function ChatHistory({ characterId, displayName, refreshKey }: Ch
         </li>)}
       </ol>
     </div>
-  )
+  </>
 }

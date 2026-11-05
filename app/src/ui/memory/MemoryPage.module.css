@@ -44,6 +44,7 @@
 .sources { min-width: 0; color: var(--muted); font-size: 12px; }
 .sources blockquote { margin: 6px 0; padding: 8px 10px; border-left: 2px solid var(--border); background: var(--bg); }
 .sources p { margin: 0 0 5px; color: var(--ink); line-height: 1.6; }
+.sources button { margin-top: 7px; }
 .button, .primary, .danger { border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px; background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
 .primary { background: #7560b1; border-color: #7560b1; color: white; }
 .danger { background: #fff2ed; border-color: #f0c7bc; color: #8b382e; }

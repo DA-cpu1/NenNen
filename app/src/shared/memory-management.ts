@@ -1,6 +1,7 @@
 /** 管理页和聊天工具共用的记忆操作格式，后台会再检查目标的归属。 */
 import { z } from 'zod'
 import type { memoryKinds } from './memory-tool'
+import type { ChatSourceLocation } from './chat-history'
 
 /** 对象编号和修订号必须一起提交，防止旧页面覆盖刚更新的记忆。 */
 export const memoryTargetSchema = z.strictObject({
@@ -41,7 +42,7 @@ export interface ManagedMemory {
   updatedAt: number
   origin: string
   supersedesId: string | null
-  sources: Array<{ id: string; content: string; createdAt: number; excluded: boolean }>
+  sources: Array<{ id: string; content: string; createdAt: number; excluded: boolean; location?: ChatSourceLocation }>
 }
 
 /** 管理页重开时仍能发现清理失败，并重试本地收尾。 */

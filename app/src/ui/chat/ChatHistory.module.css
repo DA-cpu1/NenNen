@@ -43,12 +43,15 @@
 }
 
 .user .text { border-radius: 14px 4px 14px 14px; background: var(--accent-soft-weak); }
+.list li[data-source='true'] .text { outline: 2px solid #7560b1; outline-offset: 2px; }
+.sourceBar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 20px; background: var(--accent-soft-weak); color: var(--muted); font-size: 13px; }
 .incomplete { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
 .notice, .empty { color: var(--muted); font-size: 13px; text-align: center; }
 .empty { padding: 80px 0; }
 .notice { margin: 10px 0 20px; }
 .more { display: block; margin: 0 auto 20px; }
-.more, .notice button {
+.more, .notice button, .sourceBar button {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 7px 12px;

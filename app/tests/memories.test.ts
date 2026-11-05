@@ -131,7 +131,8 @@ describe('纠正与忘记', () => {
     expect(listCurrentMemories(db, 'a', now + 2)).toMatchObject([{ content: change.content }])
     expect(listManagedMemories(db, 'a', now + 2)).toMatchObject([
       { status: 'active', content: change.content, supersedesId: old.id, updatedAt: now + 1, origin: 'user_edit' },
-      { status: 'superseded', content: initial.content, sources: [{ id: 'original' }], validFrom: now, updatedAt: now + 1 },
+      { status: 'superseded', content: initial.content, sources: [{ id: 'original',
+        location: { id: 'original', conversationId: 'normal', seq: 1 } }], validFrom: now, updatedAt: now + 1 },
     ])
   })
 

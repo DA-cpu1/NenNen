@@ -11,6 +11,9 @@ export const chatHistoryQuerySchema = z.strictObject({
 /** 服务校验后交给数据层的查询参数。 */
 export type ChatHistoryQuery = z.infer<typeof chatHistoryQuerySchema>
 
+/** 记忆来源在正式聊天中的位置。顺序号让旧消息能直接定位，不必逐页读取。 */
+export interface ChatSourceLocation { id: string; conversationId: string; seq: number }
+
 /** 历史列表里的消息；保留完成状态和原用户关联，以便展示半截回复与重试版本。 */
 export interface ChatMessage {
   id: string

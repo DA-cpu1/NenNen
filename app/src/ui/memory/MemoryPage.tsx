@@ -1,5 +1,6 @@
 /** 记忆页提供筛选、选中记录的详情，以及纠正或忘记操作。 */
 import { useEffect, useRef, useState } from 'react'
+import type { ChatSourceLocation } from '../../shared/chat-history'
 import type { ManagedMemory, MemoryChange, MemoryDeletionPreview, MemoryManagementOverview } from '../../shared/memory-management'
 import ConfirmationDialog from '../settings/ConfirmationDialog'
 import styles from './MemoryPage.module.css'
@@ -27,15 +28,17 @@ interface MemoryPageProps {
   characterId?: string
   characterName?: string
   onHistoryChanged: () => void
+  onOpenSource: (source: ChatSourceLocation) => void
 }
 
 /** 用替代关系串起新旧值，不靠文字猜测哪些记录属于同一次改动。 */
-function MemoryDetail({ memory, memories, privateScope, busy, onSelect }: {
+function MemoryDetail({ memory, memories, privateScope, busy, onSelect, onOpenSource }: {
   memory: ManagedMemory
   memories: ManagedMemory[]
   privateScope: string
   busy: boolean
   onSelect: (memory: ManagedMemory, action: Selection['action']) => void
+  onOpenSource: MemoryPageProps['onOpenSource']
 }) {
   const versions = new Map(memories.map((row) => [row.id, row]))
   const successors = new Map<string, ManagedMemory[]>()
@@ -73,6 +76,8 @@ function MemoryDetail({ memory, memories, privateScope, busy, onSelect }: {
         {memory.sources.map((source) => <blockquote key={source.id}>
           <p>{source.content}</p>
           <footer>{timeFormat.format(source.createdAt)}{source.excluded ? ' · 已停止用作聊天背景' : ''}</footer>
+          {source.location ? <button type="button" className={styles.button} disabled={busy}
+            onClick={() => { if (source.location) onOpenSource(source.location) }}>跳到原聊天</button> : null}
         </blockquote>)}
       </div> : <p className={styles.date}>无关联聊天原话</p>}
     </section>
@@ -98,7 +103,7 @@ function MemoryDetail({ memory, memories, privateScope, busy, onSelect }: {
  * @param props 当前角色用于显示；操作成功或待清理时通知聊天页重读历史
  * @returns 列表、来源和确认框
  */
-export default function MemoryPage({ characterId, characterName, onHistoryChanged }: MemoryPageProps) {
+export default function MemoryPage({ characterId, characterName, onHistoryChanged, onOpenSource }: MemoryPageProps) {
   const [overview, setOverview] = useState<MemoryManagementOverview | null>(null)
   const [filter, setFilter] = useState<typeof statusFilters[number]>('all')
   const [category, setCategory] = useState('all')
@@ -294,7 +299,8 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
             </button>
           </li>)}
         </ol>
-        <MemoryDetail memory={detail} memories={memories} privateScope={privateScope} busy={busy} onSelect={select} />
+        <MemoryDetail memory={detail} memories={memories} privateScope={privateScope} busy={busy}
+          onSelect={select} onOpenSource={onOpenSource} />
       </div> : null}
     </div>
     {selection ? <ConfirmationDialog title={selection.action === 'correct' ? '纠正这条记忆' :

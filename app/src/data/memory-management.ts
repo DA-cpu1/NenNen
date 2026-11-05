@@ -45,14 +45,18 @@ export function listManagedMemories(db: BetterSQLite3Database, characterId: stri
   const rows = db.select().from(memories).where(and(visibleTo(characterId), ne(memories.status, 'deleted')))
     .orderBy(desc(memories.validFrom), desc(memories.id)).all()
   const sources = db.select({ memoryId: memorySources.memoryId, id: messages.id, content: messages.content,
-    createdAt: messages.createdAt, excluded: messages.excludedFromContext })
+    createdAt: messages.createdAt, excluded: messages.excludedFromContext, seq: messages.seq,
+    conversationId: messages.conversationId, sourceCharacter: conversations.characterId, mode: conversations.mode })
     .from(memorySources).innerJoin(memories, eq(memorySources.memoryId, memories.id))
     .innerJoin(messages, eq(memorySources.messageId, messages.id))
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
     .where(and(visibleTo(characterId), ne(memories.status, 'deleted'))).orderBy(asc(messages.createdAt)).all()
   const byMemory = new Map<string, ManagedMemory['sources']>()
-  for (const { memoryId, excluded, ...source } of sources) {
+  for (const { memoryId, excluded, seq, conversationId, sourceCharacter, mode, ...source } of sources) {
     const entry = byMemory.get(memoryId) ?? []
-    entry.push({ ...source, excluded: excluded === 1 })
+    // 可定位的范围只限当前角色的正式聊天。共享资料不会因此开放其他角色的会话。
+    const location = sourceCharacter === characterId && mode === 'normal' ? { id: source.id, conversationId, seq } : undefined
+    entry.push({ ...source, excluded: excluded === 1, location })
     byMemory.set(memoryId, entry)
   }
   return rows.map((row) => ({

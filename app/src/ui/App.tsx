@@ -7,6 +7,7 @@
  * 数据一份来源，两页不会各拿各的旧账。
  */
 import { useCallback, useEffect, useState } from 'react'
+import type { ChatSourceLocation } from '../shared/chat-history'
 import type { CharacterOverview } from '../shared/data-types'
 import ChatPage from './chat/ChatPage'
 import MemoryPage from './memory/MemoryPage'
@@ -32,6 +33,7 @@ export default function App() {
   const [character, setCharacter] = useState<CharacterOverview | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [historyVersion, setHistoryVersion] = useState(0)
+  const [chatSource, setChatSource] = useState<ChatSourceLocation | null>(null)
 
   /** 取角色概览（经 preload 的 appApi 通道，主进程代查后台） */
   const reload = useCallback(async () => {
@@ -59,6 +61,7 @@ export default function App() {
 
   /** 侧栏、托盘和桌宠菜单走同一条路，避免某个入口绕过未保存确认。 */
   const navigate = useCallback((target: PageId) => {
+    setChatSource(null)
     if (page === 'settings' && target !== page) setLeaveTarget(target)
     else setPage(target)
   }, [page])
@@ -124,8 +127,10 @@ export default function App() {
       </nav>
       <main className={styles.body}>
         {/* 隐藏只改变可见性，不卸载输入区；返回聊天时仍能重试保存原结果。 */}
-        <div className={styles.pageSlot} hidden={page !== 'chat'}><ChatPage {...shared} historyVersion={historyVersion} /></div>
+        <div className={styles.pageSlot} hidden={page !== 'chat'}><ChatPage {...shared} historyVersion={historyVersion}
+          source={chatSource} onCloseSource={() => setChatSource(null)} onReturnToMemory={() => navigate('memory')} /></div>
         {page === 'memory' ? <MemoryPage characterId={character?.characterId} characterName={character?.name}
+          onOpenSource={(source) => { setChatSource(source); setPage('chat') }}
           onHistoryChanged={() => setHistoryVersion((version) => version + 1)} /> : null}
         {page === 'settings' && <SettingsPage {...shared}
           leaving={leaveTarget !== null} onLeave={completeLeave} onStay={cancelLeave} />}
