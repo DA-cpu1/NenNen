@@ -68,6 +68,18 @@ export function listManagedMemories(db: BetterSQLite3Database, characterId: stri
   }))
 }
 
+/**
+ * 只读删除标记的时间，不把正文、属性或来源编号交给页面。
+ * @param db 后台数据库连接
+ * @param characterId 后台选定的角色
+ * @returns 当前角色和共享资料的删除时间，由近到远
+ */
+export function listForgottenTimes(db: BetterSQLite3Database, characterId: string): number[] {
+  return db.select({ time: memories.updatedAt }).from(memories)
+    .where(and(visibleTo(characterId), eq(memories.status, 'deleted')))
+    .orderBy(desc(memories.updatedAt)).all().map(({ time }) => time)
+}
+
 /** 纠正写一条新记录，旧值仍可按时间查看。 */
 function correctMemory(db: BetterSQLite3Database, old: Memory, content: string, sourceId: string | undefined, now: number): Memory {
   db.update(memories).set({ status: 'superseded', revision: old.revision + 1, updatedAt: now })

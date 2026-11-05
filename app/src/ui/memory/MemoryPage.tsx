@@ -9,7 +9,7 @@ const kinds: Record<ManagedMemory['kind'], string> = {
   fact: '事实', preference: '偏好', episode: '共同经历', temporary: '近期状态', interaction_request: '相处方式',
 }
 const statuses = { active: '有效', superseded: '已替代', expired: '已过期' }
-const statusFilters = ['all', 'active', 'superseded', 'expired'] as const
+const statusFilters = ['all', 'active', 'superseded', 'expired', 'forgotten'] as const
 const timeFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
 const failureMessages: Record<string, string> = {
   STALE_REVISION: '这条记忆刚刚有变化，已重新读取。请核对后再操作。',
@@ -116,6 +116,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
   const [category, setCategory] = useState('all')
   const [query, setQuery] = useState('')
   const [detailId, setDetailId] = useState<string | null>(null)
+  const [forgottenIndex, setForgottenIndex] = useState(0)
   const [sharedView, setSharedView] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [createScope, setCreateScope] = useState<MemoryScope | null>(null)
@@ -333,8 +334,11 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
   }
 
   const memories = overview?.memories ?? []
+  const forgotten = overview?.forgottenAt ?? []
+  const selectedForgottenIndex = forgottenIndex < forgotten.length ? forgottenIndex : 0
+  const forgottenTime = forgotten[selectedForgottenIndex]
   const keyword = query.trim().toLocaleLowerCase('zh-CN')
-  const counts = { all: memories.length, active: 0, superseded: 0, expired: 0 }
+  const counts = { all: memories.length, active: 0, superseded: 0, expired: 0, forgotten: forgotten.length }
   const shown = memories.filter((memory) => {
     counts[memory.status]++
     return (filter === 'all' || memory.status === filter) &&
@@ -363,17 +367,17 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
         : '看看角色记下了什么。你可以查看原话、纠正旧信息，或让角色忘记一条记忆。'}</p>
     </header>
     {!sharedView ? <>
-    <div className={styles.search}>
+    {filter !== 'forgotten' ? <div className={styles.search}>
       <input type="search" aria-label="搜索记忆内容" placeholder="搜索记忆内容"
         value={query} onChange={(event) => setQuery(event.target.value)} />
       <select aria-label="记忆类别" value={category} onChange={(event) => setCategory(event.target.value)}>
         <option value="all">全部类别</option>
         {Object.entries(kinds).map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}
       </select>
-    </div>
+    </div> : null}
     <div className={styles.filters} role="group" aria-label="记忆状态">
       {statusFilters.map((status) => <button key={status} type="button" aria-pressed={filter === status} onClick={() => setFilter(status)}>
-        {status === 'all' ? '全部' : statuses[status]} <span>{counts[status]}</span>
+        {status === 'all' ? '全部' : status === 'forgotten' ? '已忘记' : statuses[status]} <span>{counts[status]}</span>
       </button>)}
       <button className={styles.refresh} type="button" disabled={loading || busy} onClick={() => { setError(null); void read() }}>刷新</button>
     </div>
@@ -401,7 +405,29 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
           </div>
         </li>)}
       </ol> : null}
-      {!sharedView && !loading && overview && shown.length === 0 ? <div className={styles.empty}>
+      {!sharedView && filter === 'forgotten' && !loading && overview && forgottenTime === undefined
+        ? <div className={styles.empty}><h2>还没有删除记录</h2><p>忘记资料后，这里只会留下操作时间。</p></div> : null}
+      {!sharedView && filter === 'forgotten' && forgottenTime !== undefined ? <div className={styles.workspace}>
+        <ol className={styles.list} aria-label="删除记录">
+          {forgotten.map((time, index) => <li key={`${time}-${index}`}>
+            <button type="button" className={styles.card} aria-pressed={selectedForgottenIndex === index}
+              onClick={() => setForgottenIndex(index)}>
+              <span className={styles.cardText}>已忘记的信息</span>
+              <time className={styles.date} dateTime={new Date(time).toISOString()}>{timeFormat.format(time)}</time>
+              <span className={styles.state} data-state="expired">正文已清理</span>
+            </button>
+          </li>)}
+        </ol>
+        <aside className={styles.detail} aria-labelledby="forgotten-detail-title">
+          <h2 id="forgotten-detail-title">删除记录</h2>
+          <p className={styles.content}>正文已清理</p>
+          <p className={styles.date}>这里只保留不含内容的删除标记和操作时间。</p>
+          <dl className={styles.metadata}>
+            <dt>删除时间</dt><dd><time dateTime={new Date(forgottenTime).toISOString()}>{timeFormat.format(forgottenTime)}</time></dd>
+          </dl>
+        </aside>
+      </div> : null}
+      {!sharedView && filter !== 'forgotten' && !loading && overview && shown.length === 0 ? <div className={styles.empty}>
         {memories.length === 0 ? <>
           <h2>还没有记忆</h2>
           <p>正式聊天里保存的记忆会出现在这里。</p>

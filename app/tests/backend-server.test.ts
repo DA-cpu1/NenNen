@@ -110,7 +110,7 @@ describe('后台服务认证', () => {
       expect(replied).toBe(false)
       expect(management.isBlocked(conversationId)).toBe(true)
       expect(management.isBlocked('other')).toBe(false)
-      expect(management.list()).toEqual({ memories: [], cleanupPending: true })
+      expect(management.list()).toEqual({ memories: [], forgottenAt: [expect.any(Number)], cleanupPending: true })
       fail(new Error('故障注入，后台不能转发这段原文'))
       expect(await (await response).json()).toEqual({ ok: false, code: 'MEMORY_CLEANUP_FAILED' })
       expect(management.isBlocked(conversationId)).toBe(true)

@@ -48,8 +48,8 @@ export interface ManagedMemory {
   sources: Array<{ id: string; content: string; createdAt: number; excluded: boolean; location?: ChatSourceLocation }>
 }
 
-/** 管理页重开时仍能发现清理失败，并重试本地收尾。 */
-export interface MemoryManagementOverview { memories: ManagedMemory[]; cleanupPending: boolean }
+/** 已忘记的记录只交给界面时间，清理失败时页面重开后也可继续收尾。 */
+export interface MemoryManagementOverview { memories: ManagedMemory[]; forgottenAt: number[]; cleanupPending: boolean }
 
 /** 只用编号和计数记录回执，重放操作时不会从回执读回已忘记正文。 */
 export const memoryChangeReceiptSchema = z.strictObject({

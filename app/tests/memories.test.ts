@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { listCurrentMemories, saveCharacterMemory, type SaveCharacterMemoryInput } from '../src/data/memories'
-import { listManagedMemories, mutateMemory, previewMemoryDeletion } from '../src/data/memory-management'
+import { listForgottenTimes, listManagedMemories, mutateMemory, previewMemoryDeletion } from '../src/data/memory-management'
 import { readGlobalMemoryEpoch } from '../src/data/epochs'
 import { saveUserMessage } from '../src/data/messages'
 import { runMigrations } from '../src/data/migrations'
@@ -169,6 +169,8 @@ describe('纠正与忘记', () => {
     }, now + 2)
     expect(result.receipt).toMatchObject({ affectedMemories: 3, removedSources: 0 })
     expect(listManagedMemories(db, 'a', now + 2)).toEqual([])
+    expect(listForgottenTimes(db, 'a')).toEqual([now + 2, now + 2, now + 2])
+    expect(listForgottenTimes(db, 'b')).toEqual([])
     expect(listCurrentMemories(db, 'b', now + 2)).toHaveLength(1)
     expect(db.select().from(conversations).where(eq(conversations.id, 'other')).get()?.contextEpoch).toBe(0)
     expect(db.select().from(contextExclusions).all().map((row) => row.messageId).sort()).toEqual(['new-name', 'original', 'reply'])

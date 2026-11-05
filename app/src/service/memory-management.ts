@@ -1,6 +1,7 @@
 /** 先保存记忆变更，再取消旧工作；等本地缓存清理完成才给成功回执。 */
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
-import { listManagedMemories, mutateMemory, previewMemoryDeletion, type MemoryMutation, type MemoryMutationContext } from '../data/memory-management'
+import { listForgottenTimes, listManagedMemories, mutateMemory, previewMemoryDeletion,
+  type MemoryMutation, type MemoryMutationContext } from '../data/memory-management'
 import { getFirstCharacter } from '../data/character-init'
 import { getFormalConversation } from '../data/conversations'
 import type { MemoryChange, MemoryChangeReceipt, MemoryTarget } from '../shared/memory-management'
@@ -61,8 +62,12 @@ export function createMemoryManagement(
   }
 
   return {
-    /** 管理页读取当前资料、旧值及来源，另外告知是否还有待清理事项。 */
-    list: () => ({ memories: listManagedMemories(db, activeCharacter().character.id, Date.now()), cleanupPending: blocked.size > 0 }),
+    /** 已忘记的资料只返回删除时间，其余资料可查看正文和来源。 */
+    list: () => {
+      const characterId = activeCharacter().character.id
+      return { memories: listManagedMemories(db, characterId, Date.now()), forgottenAt: listForgottenTimes(db, characterId),
+        cleanupPending: blocked.size > 0 }
+    },
     /** 只读确认清单，取消确认不会写入任何数据。 */
     previewDeletion: (target: MemoryTarget) => previewMemoryDeletion(db, activeCharacter().character.id, target),
     /** 只暂停受影响的会话。 */
