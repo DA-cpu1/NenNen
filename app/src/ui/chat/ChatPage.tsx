@@ -12,7 +12,11 @@ import styles from './ChatPage.module.css'
 import ChatHistory from './ChatHistory'
 import ChatComposer from './ChatComposer'
 
-/** 聊天页展示立绘与历史；记忆页修改原话后也要重读，输入区的草稿仍留在原处。 */
+/**
+ * 展示立绘与历史；记忆页修改原话后也要重读，输入草稿仍留在原处。
+ * @param props 共用角色资料、历史刷新信号和原话定位动作
+ * @returns 设计稿中的立绘与正式聊天两栏
+ */
 export default function ChatPage({ character, loadError, reload, historyVersion, source, onCloseSource, onReturnToMemory }:
   CharacterProps & {
     historyVersion: number
@@ -28,7 +32,7 @@ export default function ChatPage({ character, loadError, reload, historyVersion,
 
   return (
     <div className={styles.page}>
-      {/* 左：立绘区。淡紫圆环是设计稿的背景装饰（纯 CSS 画的圆） */}
+      {/* 背景圆环只做装饰，不拦住鼠标；角色图保持原比例，不裁头和脚。 */}
       <aside className={styles.art}>
         <div className={styles.ring} aria-hidden="true" />
         {portraitUrl ? (
@@ -36,12 +40,18 @@ export default function ChatPage({ character, loadError, reload, historyVersion,
         ) : (
           <div className={styles.portraitPlaceholder}>立绘待设置</div>
         )}
-        <p className={styles.artName}>{displayName || '　'}</p>
+        <div className={styles.artCaption}>
+          <p className={styles.artName}>{displayName || '　'}</p>
+          <p className={styles.artHint}>今天，也一起跨越结界。</p>
+        </div>
       </aside>
 
       {/* 右：正式历史；角色变化时用 key 重建列表，避免短暂显示旧角色的记录。 */}
       <section className={styles.chat}>
-        <header className={styles.header}>{displayName || '　'}</header>
+        <header className={styles.header}>
+          <h1>{displayName || '　'}</h1>
+          <p>接着上次的话题聊吧</p>
+        </header>
         {loadError ? <div className={styles.historyError} role="alert">
           <p>角色资料读取失败（{loadError}）</p>
           <button type="button" onClick={() => void reload()}>重试读取角色</button>
