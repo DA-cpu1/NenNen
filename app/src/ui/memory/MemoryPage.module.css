@@ -13,18 +13,35 @@
 .filters span { margin-left: 4px; font-variant-numeric: tabular-nums; }
 .filters .refresh { margin-left: auto; }
 .scroll { min-height: 0; flex: 1; overflow: auto; padding: 18px clamp(20px, 4vw, 38px) 28px; }
-.list { margin: 0; padding: 0; list-style: none; }
-.card { padding: 15px 18px; margin-bottom: 10px; border: 1px solid var(--border); border-left: 3px solid #b9a9dc; border-radius: 10px; background: var(--panel); }
-.meta, .cardFooter, .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.meta { color: var(--muted); font-size: 12px; }
-.meta time { margin-left: auto; }
-.kind { padding: 3px 8px; background: var(--accent-soft); color: var(--ink); border-radius: 5px; font-weight: 600; }
+.workspace { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.card { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px 8px; width: 100%; padding: 10px 12px;
+  border: 1px solid var(--border); border-left: 3px solid #b9a9dc; border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.card:hover, .card[aria-pressed='true'] { background: var(--accent-soft-weak); }
+.card[aria-pressed='true'] { border-color: #b6a7d8; border-left-color: #6953a3; }
+.cardText { grid-column: 1 / -1; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.cardScope { font-size: 12px; color: var(--muted); }
+.kind, .state { justify-self: start; padding: 3px 7px; border-radius: 5px; font-size: 12px; font-weight: 600; }
+.kind { color: #514079; background: var(--accent-soft-weak); }
+.state { color: #704b1d; background: #f8edd9; white-space: nowrap; }
+.state[data-state='active'] { color: #225b42; background: #e5f3ec; }
+.state[data-state='expired'] { color: #8b382e; background: #fff2ed; }
+.detail { padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.detailHeader, .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.detailHeader { justify-content: space-between; }
+.detail h2 { margin: 0; font-size: 16px; }
+.detail h3 { margin: 0 0 8px; font-size: 14px; }
+.detailSection { padding: 12px 0; border-top: 1px solid var(--border); }
+.metadata { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; font-size: 13px; }
+.metadata dt, .timeline time { color: var(--muted); }
+.metadata dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.timeline { margin: 0; padding-left: 16px; font-size: 12px; }
+.timeline li { padding-bottom: 6px; }
+.timeline p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .content { margin: 12px 0; font-size: 15px; line-height: 1.7; }
 .content, .target, .sources p { overflow-wrap: anywhere; white-space: pre-wrap; }
 .date { color: var(--muted); font-size: 12px; }
-.cardFooter { align-items: flex-start; justify-content: space-between; }
-.sources { flex: 1 1 250px; min-width: 0; color: var(--muted); font-size: 12px; }
-.sources summary { padding: 6px 0; cursor: pointer; }
+.sources { min-width: 0; color: var(--muted); font-size: 12px; }
 .sources blockquote { margin: 6px 0; padding: 8px 10px; border-left: 2px solid var(--border); background: var(--bg); }
 .sources p { margin: 0 0 5px; color: var(--ink); line-height: 1.6; }
 .button, .primary, .danger { border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px; background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
@@ -49,6 +66,6 @@
 .deletionPreview p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .edit { display: grid; gap: 8px; font-size: 13px; }
 .edit textarea { resize: vertical; border: 1px solid var(--border); border-radius: 7px; padding: 9px; color: var(--ink); line-height: 1.6; }
-.search :focus-visible, .filters button:focus-visible, .sources summary:focus-visible, .button:focus-visible, .primary:focus-visible, .danger:focus-visible {
+.search :focus-visible, .filters button:focus-visible, .card:focus-visible, .button:focus-visible, .primary:focus-visible, .danger:focus-visible {
   outline: 2px solid #7560b1; outline-offset: 2px;
 }

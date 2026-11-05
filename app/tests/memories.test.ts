@@ -130,8 +130,8 @@ describe('纠正与忘记', () => {
     expect(() => mutateMemory(db, { ...context, requestId: 'edit-2' }, change, now + 2)).toThrow('STALE_REVISION')
     expect(listCurrentMemories(db, 'a', now + 2)).toMatchObject([{ content: change.content }])
     expect(listManagedMemories(db, 'a', now + 2)).toMatchObject([
-      { status: 'active', content: change.content },
-      { status: 'superseded', content: initial.content, sources: [{ id: 'original' }], validFrom: now },
+      { status: 'active', content: change.content, supersedesId: old.id, updatedAt: now + 1, origin: 'user_edit' },
+      { status: 'superseded', content: initial.content, sources: [{ id: 'original' }], validFrom: now, updatedAt: now + 1 },
     ])
   })
 

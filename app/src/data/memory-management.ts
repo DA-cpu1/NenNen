@@ -59,7 +59,8 @@ export function listManagedMemories(db: BetterSQLite3Database, characterId: stri
     id: row.id, revision: row.revision, scope: row.scope, kind: row.kind, content: row.content,
     status: row.status === 'superseded' ? 'superseded'
       : row.status === 'expired' || (row.expiresAt !== null && row.expiresAt <= now) ? 'expired' : 'active',
-    validFrom: row.validFrom, expiresAt: row.expiresAt, sources: byMemory.get(row.id) ?? [],
+    validFrom: row.validFrom, expiresAt: row.expiresAt, updatedAt: row.updatedAt,
+    origin: row.origin, supersedesId: row.supersedesId, sources: byMemory.get(row.id) ?? [],
   }))
 }
 

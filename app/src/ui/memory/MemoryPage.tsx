@@ -1,4 +1,4 @@
-/** 记忆页显示当前与过去的资料，让用户核对来源并明确选择纠正或忘记范围。 */
+/** 记忆页提供筛选、选中记录的详情，以及纠正或忘记操作。 */
 import { useEffect, useRef, useState } from 'react'
 import type { ManagedMemory, MemoryChange, MemoryDeletionPreview, MemoryManagementOverview } from '../../shared/memory-management'
 import ConfirmationDialog from '../settings/ConfirmationDialog'
@@ -18,6 +18,7 @@ const failureMessages: Record<string, string> = {
   SOURCE_PREVIEW_CHANGED: '相关原话有变化，请重新查看删除范围。',
 }
 const sourceRoles: Record<string, string> = { user: '你', assistant: '角色', system: '系统' }
+const origins: Record<string, string> = { user_edit: '用户编辑', user_explicit: '用户明确交代', conversation_event: '聊天整理' }
 
 type Selection = { memory: ManagedMemory; action: 'correct' | 'forget' }
 type DeletionReview = 'loading' | 'failed' | MemoryDeletionPreview | null
@@ -26,6 +27,70 @@ interface MemoryPageProps {
   characterId?: string
   characterName?: string
   onHistoryChanged: () => void
+}
+
+/** 用替代关系串起新旧值，不靠文字猜测哪些记录属于同一次改动。 */
+function MemoryDetail({ memory, memories, privateScope, busy, onSelect }: {
+  memory: ManagedMemory
+  memories: ManagedMemory[]
+  privateScope: string
+  busy: boolean
+  onSelect: (memory: ManagedMemory, action: Selection['action']) => void
+}) {
+  const versions = new Map(memories.map((row) => [row.id, row]))
+  const successors = new Map<string, ManagedMemory[]>()
+  for (const row of memories) {
+    if (!row.supersedesId) continue
+    const newer = successors.get(row.supersedesId) ?? []
+    newer.push(row)
+    successors.set(row.supersedesId, newer)
+  }
+  const history = new Set<ManagedMemory>([memory])
+  // 往两个方向找，用户点中旧值时也看得见后续版本。已看过的记录只加入一次。
+  for (const row of history) {
+    const previous = row.supersedesId && versions.get(row.supersedesId)
+    if (previous) history.add(previous)
+    for (const newer of successors.get(row.id) ?? []) history.add(newer)
+  }
+  const previous = memory.supersedesId ? versions.get(memory.supersedesId) : undefined
+  return <aside className={styles.detail} aria-labelledby="memory-detail-title">
+    <header className={styles.detailHeader}>
+      <h2 id="memory-detail-title">记忆详情</h2>
+      <span className={styles.state} data-state={memory.status}>{statuses[memory.status]}</span>
+    </header>
+    <p className={styles.content}>{memory.content}</p>
+    <dl className={styles.metadata}>
+      <dt>使用范围</dt><dd>{memory.scope === 'global' ? '用户明确共享' : privateScope}</dd>
+      <dt>记录时间</dt><dd>{timeFormat.format(memory.validFrom)}</dd>
+      <dt>更新时间</dt><dd>{timeFormat.format(memory.updatedAt)}</dd>
+      <dt>记录方式</dt><dd>{origins[memory.origin] ?? '已保存'}</dd>
+      {previous ? <><dt>替代了</dt><dd>{previous.content}</dd></> : null}
+      {memory.expiresAt !== null ? <><dt>有效期至</dt><dd>{timeFormat.format(memory.expiresAt)}</dd></> : null}
+    </dl>
+    <section className={styles.detailSection}>
+      <h3>来源</h3>
+      {memory.sources.length ? <div className={styles.sources}>
+        {memory.sources.map((source) => <blockquote key={source.id}>
+          <p>{source.content}</p>
+          <footer>{timeFormat.format(source.createdAt)}{source.excluded ? ' · 已停止用作聊天背景' : ''}</footer>
+        </blockquote>)}
+      </div> : <p className={styles.date}>无关联聊天原话</p>}
+    </section>
+    <section className={styles.detailSection}>
+      <h3>历史变化</h3>
+      <ol className={styles.timeline}>
+        {[...history].sort((a, b) => b.validFrom - a.validFrom).map((row) => <li key={row.id}>
+          <time dateTime={new Date(row.validFrom).toISOString()}>{timeFormat.format(row.validFrom)}</time>
+          <p>{row.supersedesId ? '更新为' : '首次记录'} · {row.content}</p>
+        </li>)}
+      </ol>
+    </section>
+    <div className={styles.actions}>
+      {memory.status === 'active' ? <button type="button" className={styles.primary} disabled={busy}
+        onClick={() => onSelect(memory, 'correct')}>编辑纠正</button> : null}
+      <button type="button" className={styles.danger} disabled={busy} onClick={() => onSelect(memory, 'forget')}>忘记此信息…</button>
+    </div>
+  </aside>
 }
 
 /**
@@ -38,6 +103,7 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
   const [filter, setFilter] = useState<typeof statusFilters[number]>('all')
   const [category, setCategory] = useState('all')
   const [query, setQuery] = useState('')
+  const [detailId, setDetailId] = useState<string | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
   const [deletionReview, setDeletionReview] = useState<DeletionReview>(null)
   const [draft, setDraft] = useState('')
@@ -172,6 +238,8 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
       (category === 'all' || memory.kind === category) &&
       memory.content.toLocaleLowerCase('zh-CN').includes(keyword)
   })
+  const detail = shown.find((memory) => memory.id === detailId) ?? shown[0]
+  const privateScope = characterName ? `仅${characterName}可用` : '仅当前角色可用'
   const deletion = typeof deletionReview === 'object' ? deletionReview : null
   const dialogBusy = busy || deletionReview === 'loading'
 
@@ -215,32 +283,19 @@ export default function MemoryPage({ characterId, characterName, onHistoryChange
           </button>
         </>}
       </div> : null}
-      <ol className={styles.list}>
-        {shown.map((memory) => <li key={memory.id} className={styles.card}>
-          <div className={styles.meta}>
-            <span className={styles.kind}>{kinds[memory.kind]}</span>
-            <span>{statuses[memory.status]}</span>
-            {memory.scope === 'global' ? <span>共享资料</span> : null}
-            <time dateTime={new Date(memory.validFrom).toISOString()}>{timeFormat.format(memory.validFrom)}</time>
-          </div>
-          <p className={styles.content}>{memory.content}</p>
-          {memory.expiresAt !== null ? <p className={styles.date}>有效期至 {timeFormat.format(memory.expiresAt)}</p> : null}
-          <div className={styles.cardFooter}>
-            {memory.sources.length ? <details className={styles.sources}>
-              <summary>查看原话（{memory.sources.length}）</summary>
-              {memory.sources.map((source) => <blockquote key={source.id}>
-                <p>{source.content}</p>
-                <footer>{timeFormat.format(source.createdAt)}{source.excluded ? ' · 已停止用作聊天背景' : ''}</footer>
-              </blockquote>)}
-            </details> : <span className={styles.date}>无关联聊天原话</span>}
-            <div className={styles.actions}>
-              {memory.status === 'active' ? <button type="button" className={styles.button} disabled={busy}
-                onClick={() => select(memory, 'correct')}>纠正</button> : null}
-              <button type="button" className={styles.button} disabled={busy} onClick={() => select(memory, 'forget')}>忘记…</button>
-            </div>
-          </div>
-        </li>)}
-      </ol>
+      {detail ? <div className={styles.workspace}>
+        <ol className={styles.list} aria-label="记忆列表">
+          {shown.map((memory) => <li key={memory.id}>
+            <button type="button" className={styles.card} aria-pressed={detail.id === memory.id} onClick={() => setDetailId(memory.id)}>
+              <span className={styles.cardText}>{memory.content}</span>
+              <span className={styles.kind}>{kinds[memory.kind]}</span>
+              <span className={styles.cardScope}>{memory.scope === 'global' ? '共享资料' : privateScope}</span>
+              <span className={styles.state} data-state={memory.status}>{statuses[memory.status]}</span>
+            </button>
+          </li>)}
+        </ol>
+        <MemoryDetail memory={detail} memories={memories} privateScope={privateScope} busy={busy} onSelect={select} />
+      </div> : null}
     </div>
     {selection ? <ConfirmationDialog title={selection.action === 'correct' ? '纠正这条记忆' :
       deletionReview ? '忘记并删除相关原文？' : '忘记这条记忆？'}

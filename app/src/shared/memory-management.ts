@@ -38,6 +38,9 @@ export interface ManagedMemory {
   status: 'active' | 'superseded' | 'expired'
   validFrom: number
   expiresAt: number | null
+  updatedAt: number
+  origin: string
+  supersedesId: string | null
   sources: Array<{ id: string; content: string; createdAt: number; excluded: boolean }>
 }
 
