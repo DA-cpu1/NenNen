@@ -36,6 +36,19 @@ export const DEFAULT_MODEL_CONNECTION: ModelConnection = {
   outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS,
 }
 
+/**
+ * 读取 eve 启动时收到的公开配置；旧固定探针仍可单独指定本机地址。
+ * @param serialized 不含密钥的 JSON 配置，正式设置由业务后台明确传入
+ * @param legacyBaseUrl 旧探针的本机模拟服务地址
+ * @returns 通过格式和容量检查的配置；损坏时只抛固定错误码
+ */
+export function readRuntimeModelConnection(serialized?: string, legacyBaseUrl?: string): ModelConnection {
+  try {
+    return modelConnectionSchema.parse(serialized ? JSON.parse(serialized)
+      : { ...DEFAULT_MODEL_CONNECTION, baseUrl: legacyBaseUrl || DEFAULT_MODEL_CONNECTION.baseUrl })
+  } catch { throw new Error('E_MODEL_CONFIGURATION') }
+}
+
 /** 密钥禁止换行，防止一把密钥被管道误读成多条启动消息。 */
 export const modelApiKeySchema = z.string().trim().min(1).max(8192).regex(/^[^\x00-\x20\x7f]+$/)
 

@@ -4,7 +4,7 @@
  * 工具续轮保留本次新产生的 assistant/tool 消息，并重新计入工具说明和结果。
  */
 import type { LanguageModelMiddleware } from 'ai'
-import { checkModelInputBudget } from '../../src/agent/context-budget'
+import { checkModelInputBudget, type ModelInputLimits } from '../../src/agent/context-budget'
 import { decodeEveTurnEnvelope } from '../../src/shared/eve-turn-envelope'
 import { MODEL_CONTEXT_WINDOW_TOKENS, MODEL_OUTPUT_RESERVE_TOKENS } from '../../src/shared/model-limits'
 
@@ -30,9 +30,12 @@ function userText(message: ModelPrompt[number]): string | null {
 
 /**
  * 创建实际模型参数的关卡；SDK 的生成和流式路径都会调用 transformParams。
+ * @param probeLimits 固定连通探针使用的当前模型容量；正式回合读取后台信封
  * @returns 无用户数据缓存的 AI SDK middleware，参数检查失败时不发供应商请求
  */
-export function createCompanionContextMiddleware(): LanguageModelMiddleware {
+export function createCompanionContextMiddleware(probeLimits: ModelInputLimits = {
+  modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+}): LanguageModelMiddleware {
   return {
     transformParams: async ({ params }) => {
       for (let index = 0; index < params.prompt.length; index += 1) {
@@ -86,9 +89,7 @@ export function createCompanionContextMiddleware(): LanguageModelMiddleware {
       }
       const transformed = filterMemoryTools({ ...params })
       delete transformed.maxOutputTokens
-      checkModelInputBudget(transformed, {
-        modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS,
-      })
+      checkModelInputBudget(transformed, probeLimits)
       return transformed
     },
   }

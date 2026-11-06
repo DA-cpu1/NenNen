@@ -1,24 +1,22 @@
 /**
  * AI SDK 的本地模型连接配置和直连探针，供固定后台整理复用。
- * eve 运行探针另在作者目录创建模型；两处暂用同一供应商和模型配置，
- * 正式配置入口留待设置与运行层实现，界面和数据库不直接依赖供应商。
- * 智谱当前使用 OpenAI 兼容接口；其他供应商仍需各自验证。
+ * 正式聊天、试聊和后台整理都使用后台给出的公开配置，密钥只留在内存。
+ * 旧探针可以只传本机地址；自定义供应商是否支持工具仍要实际检查。
  */
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { generateText } from 'ai'
-
-/** T01 开发期临时写死的连接参数；正式版从设置页读、密钥走加密存储（T11） */
-const ZHIPU_BASE_URL = 'https://open.bigmodel.cn/api/paas/v4'
-const DEV_MODEL = 'glm-5.3-flash'
+import { DEFAULT_MODEL_CONNECTION, modelConnectionSchema, type ModelConnection } from '../shared/model-settings'
 
 /**
  * 用现有配置建立模型连接。密钥只留在调用进程内存中。
  * @param apiKey 配置提供的密钥
- * @param baseURL 供应商地址，固定检查可传本机模拟地址
+ * @param connection 公开模型配置；旧固定检查可只传本机模拟地址
  * @returns 可交给 AI SDK 的语言模型
  */
-export function createCompanionLanguageModel(apiKey: string, baseURL = ZHIPU_BASE_URL) {
-  return createOpenAICompatible({ name: 'zhipu', baseURL, apiKey })(DEV_MODEL)
+export function createCompanionLanguageModel(apiKey: string, connection: ModelConnection | string = DEFAULT_MODEL_CONNECTION) {
+  const checked = modelConnectionSchema.parse(typeof connection === 'string'
+    ? { ...DEFAULT_MODEL_CONNECTION, baseUrl: connection } : connection)
+  return createOpenAICompatible({ name: checked.provider, baseURL: checked.baseUrl, apiKey, includeUsage: true })(checked.model)
 }
 
 /** 一次模型调用的结果：回复文本 + 用量（用量给费用记录用，可能缺失） */

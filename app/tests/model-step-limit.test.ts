@@ -24,15 +24,18 @@ vi.mock('../agent/lib/stdin-secrets', () => ({
 
 let server: Server
 let providerCalls: number
+let receivedModels: string[]
 
 beforeEach(async () => {
   providerCalls = 0
+  receivedModels = []
   budget.value = { turnId: '', calls: 0 }
   server = createServer(async (request, response) => {
     providerCalls += 1
     let body = ''
     for await (const chunk of request) body += chunk
-    const input = JSON.parse(body) as { stream?: boolean }
+    const input = JSON.parse(body) as { stream?: boolean; model: string }
+    receivedModels.push(input.model)
     if (input.stream) {
       response.writeHead(200, { 'content-type': 'text/event-stream' })
       response.write('data: ' + JSON.stringify({
@@ -77,6 +80,13 @@ async function modelAtStep(stepIndex: number, turnId = 'fixed-turn') {
 const prompt = [{ role: 'user' as const, content: [{ type: 'text' as const, text: '请只回复两个字：收到' }] }]
 
 describe('供应商调用前的每轮生成上限', () => {
+  it('动态解析器把当前配置的模型名实际发给供应商', async () => {
+    vi.stubEnv('COMPANION_MODEL_CONFIG', JSON.stringify({ provider: 'openai-compatible',
+      model: 'custom-fixed-model', baseUrl: process.env.COMPANION_MODEL_BASE_URL,
+      contextWindowTokens: 32768, outputReserveTokens: 4096 }))
+    await (await modelAtStep(0)).doGenerate({ prompt })
+    expect(receivedModels).toEqual(['custom-fixed-model'])
+  })
   it('前三步共发出3次真实HTTP请求，第4步普通与流式均为 E_TURN_LIMIT、零新增请求', async () => {
     expect(MAX_MODEL_GENERATIONS_PER_TURN).toBe(MAX_MODEL_CALLS_PER_TURN)
     for (const stepIndex of [0, 1]) {

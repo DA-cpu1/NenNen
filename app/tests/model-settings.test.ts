@@ -2,13 +2,18 @@
 import { describe, expect, it } from 'vitest'
 import {
   applyModelSettingsSchema, DEFAULT_MODEL_CONNECTION, modelApiKeySchema,
-  modelConnectionSchema, saveModelSettingsSchema, storedModelSettingsSchema,
+  modelConnectionSchema, readRuntimeModelConnection, saveModelSettingsSchema, storedModelSettingsSchema,
 } from '../src/shared/model-settings'
 
 const reference = '550e8400-e29b-41d4-a716-446655440000'
 const settings = { connection: DEFAULT_MODEL_CONNECTION, credentialRef: reference, testStatus: 'untested' }
 
 describe('模型设置输入', () => {
+  it('运行期优先用完整配置，损坏时不回退到固定供应商', () => {
+    const custom = { ...DEFAULT_MODEL_CONNECTION, model: 'custom-model', baseUrl: 'https://example.com/v1' }
+    expect(readRuntimeModelConnection(JSON.stringify(custom), 'http://127.0.0.1:1234')).toEqual(custom)
+    expect(() => readRuntimeModelConnection('{bad-json')).toThrow('E_MODEL_CONFIGURATION')
+  })
   it('保留既有配置起点，并去掉地址末尾斜线', () => {
     expect(modelConnectionSchema.parse({ ...DEFAULT_MODEL_CONNECTION, baseUrl: `${DEFAULT_MODEL_CONNECTION.baseUrl}/` }))
       .toEqual(DEFAULT_MODEL_CONNECTION)

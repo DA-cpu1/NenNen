@@ -9,7 +9,7 @@ import { wrapLanguageModel } from 'ai'
 import { waitSecrets } from './lib/stdin-secrets'
 import { createCompanionContextMiddleware } from './lib/context-middleware'
 import { createModelStepLimitMiddleware } from './lib/model-step-limit'
-import { MODEL_CONTEXT_WINDOW_TOKENS } from '../src/shared/model-limits'
+import { readRuntimeModelConnection } from '../src/shared/model-settings'
 
 export default defineAgent({
   // 禁止复制自己启动子 Agent；本项目的记忆整理也不是第二个自由行动的 Agent。
@@ -23,20 +23,23 @@ export default defineAgent({
       'step.started': async (event) => {
         const { modelApiKey } = await waitSecrets()
         if (!modelApiKey) throw new Error('E_NO_MODEL_KEY')
+        const connection = readRuntimeModelConnection(process.env.COMPANION_MODEL_CONFIG, process.env.COMPANION_MODEL_BASE_URL)
         const provider = createOpenAICompatible({
-          name: 'zhipu',
-          // 测试可指定本机模拟接口；此环境变量只放公开地址，不放密钥或令牌。
-          baseURL: process.env.COMPANION_MODEL_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4',
+          name: connection.provider,
+          // 这里从环境读取的只有公开配置；模型密钥始终来自上面的内存管道。
+          baseURL: connection.baseUrl,
           apiKey: modelApiKey,
           includeUsage: true,
         })
         return {
           model: wrapLanguageModel({
-            model: provider('glm-5.3-flash'),
-            middleware: [createModelStepLimitMiddleware(event), createCompanionContextMiddleware()],
+            model: provider(connection.model),
+            middleware: [createModelStepLimitMiddleware(event), createCompanionContextMiddleware({
+              modelWindowTokens: connection.contextWindowTokens, outputReserveTokens: connection.outputReserveTokens,
+            })],
           }),
           // 与后台共用已核对的模型窗口；输入仍留回复空间，不另加应用小额度。
-          modelContextWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS,
+          modelContextWindowTokens: connection.contextWindowTokens,
         }
       },
     },
