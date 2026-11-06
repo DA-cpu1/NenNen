@@ -2,7 +2,7 @@
  * 主进程独占的模型凭据保管箱：磁盘只写系统加密后的字节。
  * 每次新凭据用独立编号，后台尚未保存新地址时也不会把旧编号指向新密钥。
  */
-import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { credentialReferenceSchema, modelApiKeySchema } from '../shared/model-settings'
 
@@ -101,7 +101,28 @@ export function createModelCredentialStore(dataDir: string, encryption: Credenti
     memory.delete(reference)
   }
 
-  return { save, read, storage, remove }
+  /**
+   * 配置确认保存后清理旧凭据，也能收掉上次保存中断留下的无主加密文件。
+   * @param keepReference 当前 SQLite 仍引用的编号；删除全部凭据时传 null
+   * @returns 全部应用管理的旧凭据清理完成后结束；失败保留错误供重试
+   */
+  async function removeUnused(keepReference: string | null): Promise<void> {
+    if (keepReference) filePath(keepReference)
+    let names: string[]
+    try { names = await readdir(directory) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') names = []
+      else throw new Error('E_CREDENTIAL_DELETE')
+    }
+    for (const name of names) {
+      if (!name.endsWith('.bin')) continue
+      const reference = name.slice(0, -4)
+      if (credentialReferenceSchema.safeParse(reference).success && reference !== keepReference) await remove(reference)
+    }
+    for (const reference of memory.keys()) if (reference !== keepReference) memory.delete(reference)
+  }
+
+  return { save, read, storage, remove, removeUnused }
 }
 
 export type ModelCredentialStore = ReturnType<typeof createModelCredentialStore>
