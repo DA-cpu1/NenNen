@@ -17,6 +17,8 @@ export interface VisibleAttempt {
 
 interface ChatComposerProps {
   enabled: boolean
+  /** 禁止新请求时说明原因，避免把缺少模型误说成缺少角色资料。 */
+  disabledHint?: string
   onTurnSettled: () => void
   /** 有草稿即走试聊入口，不携带正式会话编号。 */
   previewDraft?: PreviewTurnRequest['draft']
@@ -51,7 +53,7 @@ interface RetryPayload {
  * @param props 当前可用性、可选试聊草稿及刷新通知
  * @returns 发送区；没有后台通道时显示明确失败
  */
-export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onAttemptSettled, onBusyChange }: ChatComposerProps) {
+export default function ChatComposer({ enabled, disabledHint = '请先补齐角色资料…', onTurnSettled, previewDraft, onAttemptSettled, onBusyChange }: ChatComposerProps) {
   const [text, setText] = useState('')
   const [phase, setPhase] = useState<TurnPhase>('idle')
   const [streamText, setStreamText] = useState('')
@@ -176,7 +178,8 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
 
   /** 固定请求再异步读取，按钮变灰前的连续点击也只能送出一轮。 */
   async function startTurn(payload: RetryPayload): Promise<void> {
-    if (phaseRef.current !== 'idle' || !enabled) return
+    // 待补写的回复不再请求模型，删除凭据后也应该允许把原结果保存完整。
+    if (phaseRef.current !== 'idle' || (!enabled && !pendingSave.current)) return
     if (pendingSave.current && pendingSave.current.requestId !== payload.requestId) return
     const api = window.appApi
     if (!api?.onChatTurnEvent || !api.startChatTurn || !api.startPreviewTurn) {
@@ -254,11 +257,11 @@ export default function ChatComposer({ enabled, onTurnSettled, previewDraft, onA
         {errorCode === 'CANCEL_FAILED' ? '停止请求未确认，可再次停止' :
           pendingSave.current ? '本轮未完整保存，请先重试保存，再发送新消息' : failureHints[errorCode] ?? `回复未完成（${errorCode}）`}
       </span>}
-      {retry && !busy && <button type="button" className={styles.retry} disabled={!enabled}
+      {retry && !busy && <button type="button" className={styles.retry} disabled={!enabled && !pendingSave.current}
         onClick={() => void startTurn(retry)}>重试</button>}
     </div>}
     <div className={styles.row}>
-      <textarea className={styles.input} rows={3} value={text} placeholder={enabled ? '想说些什么？' : '请先补齐角色资料…'}
+      <textarea className={styles.input} rows={3} value={text} placeholder={enabled ? '想说些什么？' : disabledHint}
         disabled={!enabled} onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
           // 中文输入法确认候选词和 Shift＋Enter 都不发送，避免一句话没写完就被送出。

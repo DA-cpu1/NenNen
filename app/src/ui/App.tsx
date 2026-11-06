@@ -6,7 +6,7 @@
  * 设置页保存后调 reload() 刷新，聊天页跟着换新名字/新立绘——
  * 数据一份来源，两页不会各拿各的旧账。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChatSourceLocation } from '../shared/chat-history'
 import type { CharacterOverview } from '../shared/data-types'
 import { assetUrl } from '../shared/asset-url'
@@ -15,10 +15,11 @@ import MemoryPage from './memory/MemoryPage'
 import SettingsPage from './settings/SettingsPage'
 import ModelSettingsPage from './preferences/ModelSettingsPage'
 import { useModelSettings } from './preferences/useModelSettings'
+import OnboardingPage from './onboarding/OnboardingPage'
 import styles from './App.module.css'
 
 /** 页面标识：聊天页 / 记忆页 / 角色设置页 / 软件设置页 */
-export type PageId = 'chat' | 'memory' | 'settings' | 'preferences'
+export type PageId = 'chat' | 'memory' | 'settings' | 'preferences' | 'onboarding'
 
 /** 传给各页的角色概览与刷新函数（设置页保存成功后会调它） */
 export interface CharacterProps {
@@ -27,6 +28,8 @@ export interface CharacterProps {
   reload: () => Promise<CharacterOverview | null>
   /** 概览加载失败时的错误码（BACKEND_NOT_READY 等），成功后清空 */
   loadError: string | null
+  /** 未配置或能力检查未通过时，本地资料可读，新模型请求不可发送。 */
+  modelReady: boolean
 }
 
 /**
@@ -35,6 +38,7 @@ export interface CharacterProps {
  */
 export default function App() {
   const model = useModelSettings()
+  const onboardingOpened = useRef(false)
   const [page, setPage] = useState<PageId>('chat')
   const [leaveTarget, setLeaveTarget] = useState<PageId | null>(null)
   const [character, setCharacter] = useState<CharacterOverview | null>(null)
@@ -69,7 +73,7 @@ export default function App() {
   /** 侧栏、托盘和桌宠菜单走同一条路，避免某个入口绕过未保存确认。 */
   const navigate = useCallback((target: PageId) => {
     setChatSource(null)
-    if ((page === 'settings' || page === 'preferences') && target !== page) setLeaveTarget(target)
+    if ((page === 'settings' || page === 'preferences' || page === 'onboarding') && target !== page) setLeaveTarget(target)
     else setPage(target)
   }, [page])
 
@@ -86,6 +90,13 @@ export default function App() {
   }, [reload])
   // 启动时的第一次请求可能赶在后台就绪前；收到通知再读，不靠反复轮询。
   useEffect(() => window.appApi?.onCharacterChanged(() => void reload()), [reload])
+  // 只在明确读取到未完成标记后自动引导一次；重读通知不会把用户从其他页面拽回来。
+  useEffect(() => {
+    if (model.overview && !model.overview.onboardingCompleted && !onboardingOpened.current) {
+      onboardingOpened.current = true
+      setPage('onboarding')
+    }
+  }, [model.overview])
 
   // 托盘/桌宠菜单点「打开聊天/角色设置」：主进程把窗口亮出来的同时
   // 发来切页指令，这里跟着切（订阅函数返回「取消订阅」，交给 React 卸载时调）
@@ -95,7 +106,7 @@ export default function App() {
   )
 
   // 各页共用同一份角色资料，保存后一起刷新。
-  const shared: CharacterProps = { character, reload, loadError }
+  const shared: CharacterProps = { character, reload, loadError, modelReady: model.overview?.ready === true && !model.error }
   const sidebarImage = assetUrl(character?.desktopImagePath ?? character?.portraitImagePath)
 
   return (
@@ -103,8 +114,8 @@ export default function App() {
       <nav className={styles.rail} aria-label="应用页面">
         <button
           type="button"
-          className={page === 'chat' ? styles.railItemActive : styles.railItem}
-          aria-current={page === 'chat' ? 'page' : undefined}
+          className={page === 'chat' || page === 'onboarding' ? styles.railItemActive : styles.railItem}
+          aria-current={page === 'chat' || page === 'onboarding' ? 'page' : undefined}
           onClick={() => navigate('chat')}
         >
           {/* 简笔图标：一个聊天气泡 */}
@@ -146,14 +157,17 @@ export default function App() {
       <main className={styles.body}>
         {/* 隐藏只改变可见性，不卸载输入区；返回聊天时仍能重试保存原结果。 */}
         <div className={styles.pageSlot} hidden={page !== 'chat'}><ChatPage {...shared} historyVersion={historyVersion}
-          source={chatSource} onCloseSource={() => setChatSource(null)} onReturnToMemory={() => navigate('memory')} /></div>
+          source={chatSource} onCloseSource={() => setChatSource(null)} onReturnToMemory={() => navigate('memory')}
+          modelLoading={!model.overview && !model.error} onOpenModelSettings={() => navigate('preferences')} /></div>
         {page === 'memory' ? <MemoryPage characterId={character?.characterId} characterName={character?.name}
           onOpenSource={(source) => { setChatSource(source); setPage('chat') }}
           onHistoryChanged={() => setHistoryVersion((version) => version + 1)} /> : null}
         {page === 'settings' && <SettingsPage {...shared}
           leaving={leaveTarget !== null} onLeave={completeLeave} onStay={cancelLeave} />}
         {page === 'preferences' ? <ModelSettingsPage overview={model.overview} loadError={model.error} reload={model.reload}
-          character={character} leaving={leaveTarget !== null} onLeave={completeLeave} onStay={cancelLeave} /> : null}
+          character={character} leaving={leaveTarget !== null} onLeave={completeLeave} onStay={cancelLeave} onOpenOnboarding={() => navigate('onboarding')} /> : null}
+        {page === 'onboarding' && model.overview ? <OnboardingPage {...shared} overview={model.overview} modelError={model.error} reloadModel={model.reload}
+          leaving={leaveTarget !== null} onLeave={completeLeave} onStay={cancelLeave} onComplete={() => setPage('chat')} onOpenCharacter={() => navigate('settings')} /> : null}
       </main>
     </div>
   )

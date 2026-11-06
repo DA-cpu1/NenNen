@@ -20,6 +20,10 @@ export interface ModelSettingsPageProps {
   leaving: boolean
   onLeave: () => void
   onStay: () => void
+  /** 首次使用嵌入同一份表单，不复制一套保存逻辑。 */
+  compact?: boolean
+  onContinue?: () => void
+  onOpenOnboarding?: () => void
 }
 
 /**
@@ -116,11 +120,11 @@ function ModelConnectionForm(props: ModelSettingsPageProps & { overview: ModelSe
     : props.overview.credentialStorage === 'memory' ? '仅保存在本次内存中，退出后需重新填写'
       : props.overview.credentialStorage === 'unavailable' ? '已保存凭据暂不可读取，请重新填写' : '尚未配置 API 凭据'
 
-  return <div className={styles.layout}>
-    <nav className={styles.sections} aria-label="软件设置"><span className={styles.sectionActive}>◇<span>模型与连接</span></span></nav>
+  return <div className={props.compact ? `${styles.layout} ${styles.compact}` : styles.layout}>
+    {!props.compact ? <nav className={styles.sections} aria-label="软件设置"><span className={styles.sectionActive}>◇<span>模型与连接</span></span></nav> : null}
     <section className={styles.content} aria-label="模型与连接">
       <header className={styles.heading}><div><h1>模型与连接</h1><p>选择回复所用的模型，并安全保存凭据。</p></div>
-        {dirty ? <span className={styles.unsaved}>未保存</span> : null}</header>
+        {dirty ? <span className={styles.unsaved}>未保存</span> : props.onOpenOnboarding ? <button type="button" onClick={props.onOpenOnboarding}>首次使用引导</button> : null}</header>
       <form onSubmit={(event) => { event.preventDefault(); void save() }}>
         <fieldset disabled={busy !== null || blocked} className={styles.fields}>
           <section className={styles.card}><h2><span aria-hidden="true">◇</span>模型配置</h2>
@@ -160,10 +164,11 @@ function ModelConnectionForm(props: ModelSettingsPageProps & { overview: ModelSe
       {error || props.loadError || props.overview.code ? <p className={styles.error} role="alert">{error || modelSettingsMessage(props.loadError ?? props.overview.code)}</p> : null}
       {notice ? <p className={styles.notice} role="status">{notice}</p> : null}
       <div className={styles.actions}><button type="button" disabled={!dirty || busy !== null} onClick={discard}>取消修改</button>
-        {blocked ? <button type="button" onClick={() => void props.reload()}>重新读取</button> : null}</div>
+        {blocked ? <button type="button" onClick={() => void props.reload()}>重新读取</button> : null}
+        {props.onContinue ? <button type="button" className={styles.primary} disabled={!props.overview.ready || dirty || busy !== null} onClick={props.onContinue}>下一步：试聊预览</button> : null}</div>
     </section>
-    <aside className={styles.art} aria-label="陪伴角色">{portrait ? <img src={portrait} alt={`${props.character?.name}立绘`} /> : <span className={styles.avatar}>{props.character?.name.slice(0, 1) ?? '伴'}</span>}
-      <div><strong>{props.character?.name ?? '桌面陪伴'}</strong><p>准备好后，<br />接着上次的话题聊。</p></div></aside>
+    {!props.compact ? <aside className={styles.art} aria-label="陪伴角色">{portrait ? <img src={portrait} alt={`${props.character?.name}立绘`} /> : <span className={styles.avatar}>{props.character?.name.slice(0, 1) ?? '伴'}</span>}
+      <div><strong>{props.character?.name ?? '桌面陪伴'}</strong><p>准备好后，<br />接着上次的话题聊。</p></div></aside> : null}
     {deleteOpen ? <ConfirmationDialog title="删除 API 凭据？" onCancel={() => { if (!busy) setDeleteOpen(false) }}
       actions={<><button disabled={busy !== null} onClick={() => setDeleteOpen(false)}>取消</button>
         <button className={styles.danger} disabled={busy !== null} onClick={() => void remove()}>{busy === 'delete' ? '正在删除…' : '删除凭据'}</button></>}>

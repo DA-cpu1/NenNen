@@ -40,6 +40,7 @@
 .art p { font-size: 12px; line-height: 1.8; }
 .avatar { display: grid; place-items: center; width: 82px; height: 82px; border-radius: 50%; background: #fff9; color: var(--accent); font-size: 34px; }
 .empty { padding: 32px; }
+.layout.compact { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 /* 先收起装饰，再把次级导航移到上方，避免最小窗口中表单被压成几字一行。 */
 @media (max-width: 880px) { .layout { grid-template-columns: 112px minmax(0, 1fr); } .art { display: none; } }
 @media (max-width: 740px) { .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); } .sections { padding: 8px 14px; border-bottom: 1px solid var(--border); border-right: 0; } .sectionActive { display: inline-flex; padding: 8px; } .content { padding: 18px 14px; } .row { grid-template-columns: 76px minmax(0, 1fr); } }

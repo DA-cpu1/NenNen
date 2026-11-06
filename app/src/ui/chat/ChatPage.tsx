@@ -17,12 +17,14 @@ import ChatComposer from './ChatComposer'
  * @param props 共用角色资料、历史刷新信号和原话定位动作
  * @returns 设计稿中的立绘与正式聊天两栏
  */
-export default function ChatPage({ character, loadError, reload, historyVersion, source, onCloseSource, onReturnToMemory }:
+export default function ChatPage({ character, loadError, reload, historyVersion, source, onCloseSource, onReturnToMemory, modelReady, modelLoading, onOpenModelSettings }:
   CharacterProps & {
     historyVersion: number
     source: ChatSourceLocation | null
     onCloseSource: () => void
     onReturnToMemory: () => void
+    modelLoading: boolean
+    onOpenModelSettings: () => void
   }) {
   // 立绘路径 → app-asset URL；没设图片时为 null，显示占位块
   const portraitUrl = assetUrl(character?.portraitImagePath)
@@ -52,6 +54,9 @@ export default function ChatPage({ character, loadError, reload, historyVersion,
           <h1>{displayName || '　'}</h1>
           <p>接着上次的话题聊吧</p>
         </header>
+        {!modelReady ? <div className={styles.modelNotice} role="status"><div><strong>{modelLoading ? '正在读取模型配置…' : '模型尚未准备好'}</strong>
+          <p>本地聊天记录仍可查看，发送消息需要先配置模型并通过连接测试。</p></div>
+          <button type="button" onClick={onOpenModelSettings}>去模型与连接</button></div> : null}
         {loadError ? <div className={styles.historyError} role="alert">
           <p>角色资料读取失败（{loadError}）</p>
           <button type="button" onClick={() => void reload()}>重试读取角色</button>
@@ -59,7 +64,7 @@ export default function ChatPage({ character, loadError, reload, historyVersion,
           displayName={displayName} avatarUrl={assetUrl(character?.desktopImagePath ?? character?.portraitImagePath)}
           refreshKey={historyRefresh + historyVersion}
           source={source} onCloseSource={onCloseSource} onReturnToMemory={onReturnToMemory} />}
-        <ChatComposer enabled={!!character && !loadError}
+        <ChatComposer enabled={!!character && !loadError && modelReady} disabledHint={modelReady ? '请先补齐角色资料…' : '先配置模型，再开始聊天'}
           onTurnSettled={() => { onCloseSource(); setHistoryRefresh((value) => value + 1) }} />
       </section>
     </div>

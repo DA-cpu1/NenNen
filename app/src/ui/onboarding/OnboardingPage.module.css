@@ -1,0 +1,36 @@
+/** 图 13 的四步引导：角色位于左侧，步骤和当前内容位于右侧；小窗保留完整操作。 */
+.page { display: flex; flex: 1; min-width: 0; min-height: 0; background: #fcfdff; }
+.art { box-sizing: border-box; flex: 0 0 29%; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 24px; background: radial-gradient(ellipse at 40% 30%, #fff, #eae6ff); overflow: hidden; }
+.art img { width: 100%; max-height: 70%; object-fit: contain; }
+.art strong { font-size: 28px; margin-top: 18px; color: #454078; }
+.art p { font-size: 13px; line-height: 1.8; color: var(--muted); }
+.avatar { width: 100px; height: 100px; display: grid; place-items: center; border-radius: 50%; color: var(--accent); font-size: 42px; background: #fff9; }
+.main { display: flex; flex: 1; min-width: 0; flex-direction: column; }
+.progress { display: flex; justify-content: space-between; gap: 8px; list-style: none; padding: 22px 24px; margin: 0; border-bottom: 1px solid var(--border); font-size: 12px; color: #9299b2; }
+.progress li { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.progress li > span { display: grid; place-items: center; border: 1px solid #cbd0e7; border-radius: 50%; width: 22px; height: 22px; }
+.progress li.current { color: var(--accent); }
+.progress li.current > span { background: var(--accent); color: #fff; border-color: var(--accent); }
+.body { box-sizing: border-box; flex: 1; min-height: 0; overflow-y: auto; padding: 26px; }
+.modelBody { display: flex; flex: 1; min-height: 0; }
+.body h1 { font-size: 25px; margin: 0 0 10px; }
+.intro, .hint { font-size: 13px; line-height: 1.8; color: var(--muted); }
+.summary { border: 1px solid var(--border); border-radius: 8px; background: #fff; padding: 9px 17px; margin: 24px 0; font-size: 13px; }
+.summary > div { display: flex; gap: 18px; padding: 12px 0; border-bottom: 1px solid #eff2fa; }
+.summary > div:last-child { border: 0; }
+.summary dt { color: var(--muted); flex: 0 0 80px; }
+.summary dd { margin: 0; overflow-wrap: anywhere; }
+.pictures { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 18px 0; }
+.pictures button { display: flex; align-items: center; gap: 10px; text-align: left; min-width: 0; padding: 12px; }
+.pictures img { width: 42px; height: 70px; object-fit: contain; }
+.picturePlaceholder { display: grid; place-items: center; width: 42px; height: 60px; background: #f3f1ff; color: var(--accent); font-size: 24px; }
+.pictures strong { display: block; font-size: 13px; }
+.pictures small { display: block; color: var(--muted); margin-top: 5px; font-size: 11px; line-height: 1.6; }
+.footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 9px; padding: 16px 24px; border-top: 1px solid var(--border); }
+.page button { min-height: 36px; border: 1px solid #d5d9f0; background: #fff; color: var(--accent); padding: 8px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+.page button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.page button.link { background: transparent; border-color: transparent; }
+.page button:disabled { opacity: .5; cursor: default; }
+.error { color: var(--danger); font-size: 13px; padding: 0 24px; }
+@media (max-width: 900px) { .art { display: none; } }
+@media (max-width: 740px) { .progress { flex-wrap: wrap; justify-content: flex-start; gap: 8px 14px; padding: 12px 18px; } .body { padding: 20px 18px; } .pictures { grid-template-columns: 1fr; } .footer { padding: 12px 18px; } }

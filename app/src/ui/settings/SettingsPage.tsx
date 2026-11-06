@@ -35,7 +35,7 @@ export default function SettingsPage(props: SettingsProps) {
 }
 
 /** 资料就绪后的编辑器；草稿初值来自当前生效版本。 */
-function CharacterEditor({ character, reload, loadError, leaving, onLeave, onStay }: SettingsProps & { character: NonNullable<CharacterProps['character']> }) {
+function CharacterEditor({ character, reload, loadError, modelReady, leaving, onLeave, onStay }: SettingsProps & { character: NonNullable<CharacterProps['character']> }) {
   const [draft, setDraft] = useState(() => draftFromCharacter(character))
   const [savedDraft, setSavedDraft] = useState(() => draftFromCharacter(character))
   const [tab, setTab] = useState<'basic' | 'examples' | 'versions'>('basic')
@@ -199,7 +199,8 @@ function CharacterEditor({ character, reload, loadError, leaving, onLeave, onSta
         </article>)}
       </section>}
     </fieldset>
-    {previewOpen && <PreviewChat draft={draft} enabled={!blocked && !busy && !imageBusy}
+    {previewOpen && <PreviewChat draft={draft} enabled={!blocked && !busy && !imageBusy && modelReady}
+      disabledHint={!modelReady ? '请先在设置中配置模型并测试连接' : undefined}
       busy={previewBusy} onBusyChange={setPreviewBusy} onClose={() => setPreviewOpen(false)} />}
     <footer className={styles.footer}><p>保存生成新版本，从下一轮聊天生效。</p><div>
       <button type="button" className={styles.secondary} disabled={busy || imageBusy || blocked}

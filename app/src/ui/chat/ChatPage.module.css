@@ -109,6 +109,9 @@
 .historyError { flex: 1; padding: 24px; color: var(--danger); font-size: 13px; }
 
 /* 输入区（含实时回复条）由 ChatComposer.module.css 管理。 */
+.modelNotice { display: flex; align-items: center; gap: 12px; padding: 12px 18px; background: #f1efff; font-size: 12px; }
+.modelNotice p { margin: 5px 0 0; color: var(--muted); line-height: 1.6; }
+.modelNotice button { flex-shrink: 0; border: 1px solid #d3cdf9; background: #fff; color: var(--accent); border-radius: 6px; padding: 8px; cursor: pointer; font-size: 12px; }
 
 /* 小窗口给文字多留一点宽度，立绘仍完整显示。 */
 @media (max-width: 800px) {

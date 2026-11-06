@@ -12,10 +12,11 @@ function keepFormalHistory(): void {}
  * @param props 草稿、可用性、忙碌通知和关闭动作
  * @returns 独立的试聊面板
  */
-export default function PreviewChat({ draft, enabled, busy, onBusyChange, onClose }: {
+export default function PreviewChat({ draft, enabled, busy, disabledHint, onBusyChange, onClose }: {
   draft: CharacterDraft
   enabled: boolean
   busy: boolean
+  disabledHint?: string
   onBusyChange: (busy: boolean) => void
   onClose: () => void
 }) {
@@ -40,7 +41,7 @@ export default function PreviewChat({ draft, enabled, busy, onBusyChange, onClos
       </article>)}
     </div>
     {invalid && <p className={styles.hint}>{invalid}</p>}
-    <ChatComposer enabled={enabled && invalid === null} previewDraft={previewFromDraft(draft)}
+    <ChatComposer enabled={enabled && invalid === null} disabledHint={disabledHint} previewDraft={previewFromDraft(draft)}
       onTurnSettled={keepFormalHistory} onBusyChange={onBusyChange}
       onAttemptSettled={(attempt) => setAttempts((previous) => [...previous, attempt])} />
   </section>
