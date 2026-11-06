@@ -7,7 +7,7 @@ import type { ModelCredentialStore } from './model-credentials'
 import type { BridgeResult } from '../bridge/requests'
 import { saveModelSettingsSchema, type ModelConnectionTest, type ModelSettingsOverview, type StoredModelSettings } from '../shared/model-settings'
 
-interface BackendSnapshot { settings: StoredModelSettings | null; ready: boolean }
+interface BackendSnapshot { settings: StoredModelSettings | null; ready: boolean; onboardingCompleted: boolean }
 
 /**
  * 建立软件设置的主进程操作；不在创建时读文件或发模型请求。
@@ -26,7 +26,7 @@ export function createDesktopModelSettings(
 
   /** 网址只能是这里写死的本机设置端点，窗口不能指定任意后台地址。 */
   async function request<T = BackendSnapshot>(method: 'GET' | 'POST', body?: unknown,
-    path: '/model/settings' | '/model/test' | '/model/test/cancel' = '/model/settings'): Promise<BridgeResult<T>> {
+    path: '/model/settings' | '/model/test' | '/model/test/cancel' | '/onboarding/complete' = '/model/settings'): Promise<BridgeResult<T>> {
     const backend = getBackend()
     if (!backend) return { ok: false, code: 'BACKEND_NOT_READY' }
     try {
@@ -36,7 +36,8 @@ export function createDesktopModelSettings(
       })
       const result = await response.json() as BackendSnapshot & ModelConnectionTest & { ok: boolean; code?: string; cancelled?: boolean }
       if (!response.ok || !result.ok) return { ok: false, code: result.code ?? 'E_MODEL_UPDATE' }
-      const data = path === '/model/settings' ? { settings: result.settings, ready: result.ready }
+      const data = path === '/model/settings' || path === '/onboarding/complete'
+        ? { settings: result.settings, ready: result.ready, onboardingCompleted: result.onboardingCompleted }
         : path === '/model/test' ? { status: result.status, usage: result.usage } : { cancelled: result.cancelled }
       return { ok: true, data: data as T }
     } catch { return { ok: false, code: 'BACKEND_UNREACHABLE' } }
@@ -127,6 +128,11 @@ export function createDesktopModelSettings(
   }
 
   return { read, save, remove, restore,
+    /** 用户明确结束或跳过引导后保存标记；下次启动不反复弹出。 */
+    completeOnboarding: () => change(async () => {
+      const result = await request('POST', undefined, '/onboarding/complete')
+      return result.ok ? read() : result as BridgeResult<ModelSettingsOverview>
+    }),
     /** 手动测试独立于保存；回执丢失后可沿用编号读取既有结果。 */
     test: (requestId: string) => request<ModelConnectionTest>('POST', { requestId }, '/model/test').finally(notify),
     /** 用户明确点击取消后，请后台结束正在等待的测试。 */

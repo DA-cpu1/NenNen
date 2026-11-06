@@ -7,6 +7,7 @@ import { MODEL_CONTEXT_WINDOW_TOKENS, MODEL_OUTPUT_RESERVE_TOKENS } from './mode
 
 /** 同一模型的配置放在一个键里，避免只保存了一半地址就开始使用。 */
 export const MODEL_SETTINGS_KEY = 'modelConnection'
+export const INITIAL_SETUP_KEY = 'initialSetupCompleted'
 
 /** 地址只允许服务入口，禁止把密码或令牌塞进网址的账号、查询参数中。 */
 const serviceAddressSchema = z.string().trim().max(2048).refine((value) => {
@@ -79,6 +80,7 @@ export type ApplyModelSettings = z.infer<typeof applyModelSettingsSchema>
 
 /** 页面只拿到保管方式和就绪状态，不会收到已保存的密钥。 */
 export interface ModelSettingsOverview {
+  onboardingCompleted: boolean
   settings: StoredModelSettings | null
   ready: boolean
   credentialStorage: 'encrypted' | 'memory' | 'missing' | 'unavailable'

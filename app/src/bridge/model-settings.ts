@@ -26,4 +26,5 @@ export function registerModelSettingsBridge(
     return typeof requestId === 'string' ? controller.test(requestId) : { ok: false, code: 'INVALID_INPUT' }
   })
   ipcMain.handle('model:test-cancel', (event) => allowed(event) ? controller.cancelTest() : { ok: false, code: 'UNAUTHORIZED' })
+  ipcMain.handle('onboarding:complete', (event) => allowed(event) ? controller.completeOnboarding() : { ok: false, code: 'UNAUTHORIZED' })
 }

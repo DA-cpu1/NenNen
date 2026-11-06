@@ -35,6 +35,7 @@ interface Window {
     testModelConnection: (requestId: string) => Promise<import('../bridge/requests').BridgeResult<import('../shared/model-settings').ModelConnectionTest>>
     cancelModelConnectionTest: () => Promise<import('../bridge/requests').BridgeResult<{ cancelled: boolean }>>
     onModelSettingsChanged: (callback: () => void) => () => void
+    completeOnboarding: () => Promise<import('../bridge/requests').BridgeResult<import('../shared/model-settings').ModelSettingsOverview>>
     /** 读取唯一正式会话的编号，仍由后台决定它属于哪个角色。 */
     getFormalConversation: () => Promise<{
       ok: boolean

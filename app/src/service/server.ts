@@ -415,6 +415,12 @@ async function handleRequest(
     } catch (error) { sendMemoryError(res, error) }
     return
   }
+  if (req.method === 'POST' && req.url === '/onboarding/complete') {
+    if (!options.modelSettings) { sendJson(res, 503, { ok: false, code: 'AGENT_UNAVAILABLE' }); return }
+    try { sendJson(res, 200, { ok: true, ...options.modelSettings.completeOnboarding() }) }
+    catch { sendJson(res, 503, { ok: false, code: 'E_MODEL_SETTINGS_SAVE' }) }
+    return
+  }
   // 手动测试只收随机编号；模型、地址和密钥都由后台的当前配置决定。
   if (req.method === 'POST' && (req.url === '/model/test' || req.url === '/model/test/cancel')) {
     if (!options.modelSettings) { sendJson(res, 503, { ok: false, code: 'AGENT_UNAVAILABLE' }); return }

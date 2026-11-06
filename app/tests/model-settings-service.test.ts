@@ -24,6 +24,11 @@ function setup(testConnection?: Parameters<typeof createModelSettingsService>[0]
 }
 
 describe('后台模型设置生命周期', () => {
+  it('明确跳过引导只保存看过标记，不假称模型已配置', () => {
+    const { service } = setup()
+    expect(service.completeOnboarding()).toEqual({ settings: null, ready: false, onboardingCompleted: true })
+    expect(setup().service.overview().onboardingCompleted).toBe(true)
+  })
   it('测试实际通过后才可用，同一测试编号不会重复调用模型', async () => {
     const test = vi.fn(async () => ({ status: 'passed' as const, usage: { inputTokens: 17, outputTokens: 4 } }))
     const { service } = setup(test)
@@ -66,7 +71,7 @@ describe('后台模型设置生命周期', () => {
   })
   it('未配置时本地读取正常；保存不会把明文写进 SQLite，未经测试不可用', async () => {
     const { service } = setup()
-    expect(service.overview()).toEqual({ settings: null, ready: false })
+    expect(service.overview()).toEqual({ settings: null, ready: false, onboardingCompleted: false })
     expect(await service.apply(input)).toMatchObject({ ready: false, settings: input.settings })
     expect(JSON.stringify(readSetting(database.db, MODEL_SETTINGS_KEY))).not.toContain(input.apiKey)
   })

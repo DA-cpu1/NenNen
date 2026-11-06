@@ -7,7 +7,7 @@ import { readSetting, writeSetting } from '../data/settings'
 import { testModelConnection } from '../agent/model-connection-test'
 import {
   applyModelSettingsSchema, MODEL_SETTINGS_KEY, storedModelSettingsSchema,
-  MODEL_TEST_LEDGER_PREFIX, modelTestRequestSchema,
+  INITIAL_SETUP_KEY, MODEL_TEST_LEDGER_PREFIX, modelTestRequestSchema,
   type ApplyModelSettings, type ModelConnection, type ModelConnectionTest, type StoredModelSettings,
 } from '../shared/model-settings'
 
@@ -51,7 +51,7 @@ export function createModelSettingsService(deps: ModelSettingsDependencies) {
 
   /** 不含密钥的概览可经主进程交给界面。 */
   function overview() {
-    return { settings: read(), ready: isUsable() }
+    return { settings: read(), ready: isUsable(), onboardingCompleted: readSetting(deps.getDb()!, INITIAL_SETUP_KEY) === true }
   }
 
   /**
@@ -147,6 +147,8 @@ export function createModelSettingsService(deps: ModelSettingsDependencies) {
   }
 
   return { read, apply, overview, isUsable, test,
+    /** 引导可以明确跳过；这个标记只表示用户已看过，不冒充模型已配置。 */
+    completeOnboarding: () => { writeSetting(deps.getDb()!, INITIAL_SETUP_KEY, true); return overview() },
     /** 只发取消信号，测试请求自己保存实际终态，不能提前报告成功。 */
     cancelTest: () => { const running = testController !== undefined; testController?.abort(); return running },
     /** 回合记账和容量检查读取当前进程真正使用的公开配置。 */

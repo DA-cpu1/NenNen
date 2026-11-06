@@ -51,6 +51,7 @@ contextBridge.exposeInMainWorld('appApi', {
   deleteModelCredential: () => ipcRenderer.invoke('model:delete'),
   testModelConnection: (requestId: string) => ipcRenderer.invoke('model:test', requestId),
   cancelModelConnectionTest: () => ipcRenderer.invoke('model:test-cancel'),
+  completeOnboarding: () => ipcRenderer.invoke('onboarding:complete'),
   /** 保存和启动恢复后重新读状态；事件不携带设置或密钥。 */
   onModelSettingsChanged: (callback: () => void) => {
     const listener = () => callback()
