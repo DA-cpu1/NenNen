@@ -9,6 +9,7 @@ import { assetUrl } from '../../shared/asset-url'
 import ConfirmationDialog from '../settings/ConfirmationDialog'
 import { modelSettingsMessage } from './model-settings-messages'
 import ConnectionTestCard from './ConnectionTestCard'
+import CredentialDialog from './CredentialDialog'
 import styles from './ModelSettingsPage.module.css'
 
 /** 公共状态来自应用壳，离开动作也由应用壳统一处理。 */
@@ -59,9 +60,9 @@ function ModelConnectionForm(props: ModelSettingsPageProps & { overview: ModelSe
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [replaceOpen, setReplaceOpen] = useState(false)
   const operation = useRef(false)
   const requestId = useRef<string | null>(null)
-  const keyInput = useRef<HTMLInputElement>(null)
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved) || apiKey !== ''
   const hasCredential = !!props.overview.settings?.credentialRef
   const portrait = assetUrl(props.character?.portraitImagePath)
@@ -83,8 +84,12 @@ function ModelConnectionForm(props: ModelSettingsPageProps & { overview: ModelSe
     setDraft(saved); setApiKey(''); requestId.current = null; setError(''); setNotice('已取消修改。')
   }
 
-  /** 校验、保存并等待主进程确认；成功后清除窗口中的新密钥。 */
-  async function save(): Promise<boolean> {
+  /**
+   * 校验、保存并等待主进程确认；成功后清除窗口中的新密钥。
+   * @param replacement 更换弹窗的本次输入；省略时使用表单里的新密钥
+   * @returns 是否已确认保存，供保存并离开和关闭弹窗使用
+   */
+  async function save(replacement?: string): Promise<boolean> {
     if (operation.current || blocked || !window.appApi) return false
     const connection = modelConnectionSchema.safeParse({ ...draft,
       contextWindowTokens: Number(draft.contextWindowTokens), outputReserveTokens: Number(draft.outputReserveTokens) })
@@ -92,8 +97,9 @@ function ModelConnectionForm(props: ModelSettingsPageProps & { overview: ModelSe
     operation.current = true; setBusy('save'); setError(''); setNotice('')
     requestId.current ??= crypto.randomUUID()
     try {
+      const newKey = replacement ?? apiKey
       const result = await window.appApi.saveModelSettings({ requestId: requestId.current, connection: connection.data,
-        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) })
+        ...(newKey.trim() ? { apiKey: newKey.trim() } : {}) })
       if (!result.ok || !result.data) { setError(modelSettingsMessage(result.code)); await props.reload(); return false }
       const next = toDraft(result.data.settings!.connection)
       setDraft(next); setSaved(next); setApiKey(''); requestId.current = null
@@ -146,13 +152,15 @@ function ModelConnectionForm(props: ModelSettingsPageProps & { overview: ModelSe
           </section>
           <section className={styles.card}><h2><span aria-hidden="true">⚿</span>API 凭据</h2>
             <label className={styles.row}><span>API 密钥</span><span className={styles.keyField}>
-              <input ref={keyInput} type={showKey ? 'text' : 'password'} value={apiKey} autoComplete="off" spellCheck={false}
+              <input type={showKey ? 'text' : 'password'} value={apiKey} autoComplete="off" spellCheck={false}
                 placeholder={hasCredential ? '••••••••••••' : '请输入你的 API 密钥'} onChange={(event) => {
                   setApiKey(event.target.value); requestId.current = null; setError(''); setNotice('')
                 }} /><button type="button" onClick={() => setShowKey(!showKey)} aria-label={showKey ? '隐藏新输入的密钥' : '显示新输入的密钥'}>{showKey ? '隐藏' : '显示'}</button>
             </span></label>
             <p className={styles.storage}>{storageText}</p>
-            {hasCredential ? <div className={styles.actions}><button type="button" onClick={() => keyInput.current?.focus()}>更换凭据</button>
+            {hasCredential ? <div className={styles.actions}><button type="button" disabled={dirty} onClick={() => {
+              requestId.current = null; setError(''); setNotice(''); setReplaceOpen(true)
+            }}>更换凭据</button>
               <button type="button" className={styles.danger} onClick={() => setDeleteOpen(true)}>删除凭据</button></div> : null}
             <div className={styles.cardFooter}><p>凭据不会写入聊天、备份或日志。<br />已保存的密钥不会显示，留空可沿用。</p>
               <button type="submit" className={styles.primary}>{busy === 'save' ? '正在保存…' : '保存配置'}</button></div>
@@ -169,6 +177,8 @@ function ModelConnectionForm(props: ModelSettingsPageProps & { overview: ModelSe
     </section>
     {!props.compact ? <aside className={styles.art} aria-label="陪伴角色">{portrait ? <img src={portrait} alt={`${props.character?.name}立绘`} /> : <span className={styles.avatar}>{props.character?.name.slice(0, 1) ?? '伴'}</span>}
       <div><strong>{props.character?.name ?? '桌面陪伴'}</strong><p>准备好后，<br />接着上次的话题聊。</p></div></aside> : null}
+    {replaceOpen ? <CredentialDialog busy={busy !== null} error={error} onChange={() => { requestId.current = null; setError('') }}
+      onSave={save} onClose={() => setReplaceOpen(false)} /> : null}
     {deleteOpen ? <ConfirmationDialog title="删除 API 凭据？" onCancel={() => { if (!busy) setDeleteOpen(false) }}
       actions={<><button disabled={busy !== null} onClick={() => setDeleteOpen(false)}>取消</button>
         <button className={styles.danger} disabled={busy !== null} onClick={() => void remove()}>{busy === 'delete' ? '正在删除…' : '删除凭据'}</button></>}>
