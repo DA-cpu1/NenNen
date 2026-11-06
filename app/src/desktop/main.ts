@@ -7,8 +7,7 @@
  * - 透明桌宠窗：桌面 Q 版角色，右键菜单开聊天/开设置/缩放；
  * - 托盘：打开聊天 / 角色设置 / 退出。
  */
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, Tray } from 'electron'
-import { existsSync, readFileSync } from 'node:fs'
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, safeStorage, screen, Tray } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { startBackend, type BackendHandle } from './backend'
@@ -16,6 +15,9 @@ import { createQuitBarrier } from './quit-barrier'
 import { registerAppAssetProtocol, registerAppAssetSchemePrivileges } from './app-asset'
 import { registerBridgeRequests } from '../bridge/requests'
 import { registerChatStreamBridge } from '../bridge/chat-stream'
+import { registerModelSettingsBridge } from '../bridge/model-settings'
+import { createModelCredentialStore } from './model-credentials'
+import { createDesktopModelSettings, type DesktopModelSettings } from './model-settings-controller'
 import { registerCharacterImagePicking } from './character-images'
 import {
   chatWindowStateSchema,
@@ -25,20 +27,8 @@ import {
 import { clampPetBounds, defaultPetBounds, fitChatBounds, petImageSize, type WorkArea } from './pet-bounds'
 import { managedImagePathSchema } from '../shared/character-schema'
 
-/** 开发期的密钥文件位置（app/local.key，git 已挡住不进仓库）。
- * 打包后主程序住在 resources/app.asar/out/main 里，「往上两级」会指到
- * asar 档案内部——所以打包版改从 resources 目录读（测试时由验收脚本
- * 放置）。正式版改由设置页输入 + safeStorage 加密存储（T11），不再读明文文件 */
-const MODEL_KEY_FILE = app.isPackaged
-  ? join(process.resourcesPath, 'local.key')
-  : join(__dirname, '../../local.key')
-
-/** 读开发期密钥文件；不存在或为空就返回 undefined（= 未配置模型） */
-function readModelKey(): string | undefined {
-  if (!existsSync(MODEL_KEY_FILE)) return undefined
-  const key = readFileSync(MODEL_KEY_FILE, 'utf-8').trim()
-  return key || undefined
-}
+/** 凭据操作只由主进程持有，窗口只能看到公开设置和保管状态。 */
+let modelSettings: DesktopModelSettings | undefined
 
 /** 聊天主窗口的引用；点关闭只是收起（hide），托盘退出才销毁 */
 let chatWindow: BrowserWindow | undefined
@@ -622,97 +612,29 @@ if (!app.requestSingleInstanceLock()) {
   })
 
 /**
- * 雇后台进程并当场自测，共四步：
- * ① 恢复两个窗口的位置（T02 桌宠、T05 聊天窗）——放在自测之前：
- *    后台一报到就恢复，页面和位置都就绪后才允许初次显示；
- * ② 拿暗号打 /health 应接通（200），不拿暗号应被拒（401）；
- * ③ 打 /db/ping——先读共享记忆版本号、+1 写回、再读一次，两行数字进 stdout。
- *    打包版没有外部检查口，重启后「读回上一轮写入的值」只能从这里观察
- *    （持久化验收的观察窗）。版本号每次启动 +1 是贯通自测的已知行为，
- *    T04 定正式接口时收编或重置；
- * ④ 配了密钥就打 /agent/ping——经过 eve 完成一轮，验证两跳密钥管道和模型调用。
- * 日志只记状态码、耗时和用量数字——暗号、密钥、模型回复原文都不进日志（03 §7）
+ * 先启动不带密钥的本机服务，再恢复窗口和已保存配置。
+ * 启动不调用模型、不增加记忆版本号；连接测试只由用户明确点击。
+ * @returns 本机初始化完成；失败交给启动兜底显示窗口并记录固定码
  */
 async function startBackendWithSelfCheck(): Promise<void> {
-  const modelKey = readModelKey()
-  backendStarting = startBackend(modelKey, backendStartupAbort.signal)
+  backendStarting = startBackend(undefined, backendStartupAbort.signal)
   const handle = await backendStarting
   backend = handle
   if (quitting) { await handle.stop(); return }
-
-  // 两窗口位置恢复：只依赖后台服务本身，不依赖模型密钥。第一件事就做
-  // ——先落位再显示，后面的认证与模型自测不阻挡窗口出现。
   await restorePetImageSize(handle)
   await restorePetBounds(handle)
   await restoreChatWindowState(handle)
   notifyCharacterChanged()
   finishStartup()
 
-  const authHeader = { 'x-session-token': handle.token }
-  const withToken = await fetch(`http://127.0.0.1:${handle.port}/health`, {
-    headers: authHeader,
+  const restored = await modelSettings?.restore()
+  if (restored && !restored.ok) console.error('[模型] E_MODEL_RESTORE_FAILED')
+  // 这里只检查本机通道是否带认证，不发送模型请求，也不写用户数据库。
+  const authorized = await fetch(`http://127.0.0.1:${handle.port}/health`, {
+    headers: { 'x-session-token': handle.token },
   })
-  const withoutToken = await fetch(`http://127.0.0.1:${handle.port}/health`)
-  console.log(
-    `[后台] 端口 ${handle.port}；带令牌 ${withToken.status}（应 200）；未认证 ${withoutToken.status}（应 401）`,
-  )
-
-  // 数据库自测：读 → 写（+1）→ 再读。第二次读到的新值若与写回的一致，
-  // 说明读写都真实落了库。失败只记状态码，库报错原文不进日志
-  try {
-    const readStart = await fetch(`http://127.0.0.1:${handle.port}/db/ping`, { headers: authHeader })
-    const readStartBody = (await readStart.json()) as { ok: boolean; globalMemoryEpoch?: number; code?: string }
-    if (readStart.status !== 200 || !readStartBody.ok) {
-      console.error(`[数据库] 自测读失败：${readStartBody.code ?? readStart.status}`)
-    } else {
-      const startEpoch = readStartBody.globalMemoryEpoch ?? -1
-      const writeRes = await fetch(`http://127.0.0.1:${handle.port}/db/ping`, {
-        method: 'POST',
-        headers: authHeader,
-      })
-      const writeBody = (await writeRes.json()) as { ok: boolean; globalMemoryEpoch?: number; code?: string }
-      if (writeRes.status !== 200 || !writeBody.ok) {
-        console.error(`[数据库] 自测写失败：${writeBody.code ?? writeRes.status}`)
-      } else {
-        console.log(`[数据库] 自测 200；globalMemoryEpoch ${startEpoch} → ${writeBody.globalMemoryEpoch}`)
-      }
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'unknown'
-    console.error(`[数据库] 自测请求失败：${message}`)
-  }
-
-  // 两窗口位置恢复已挪到本函数开头（后台报到后第一件事）
-
-  if (!modelKey) {
-    console.log('[模型] app/local.key 不存在，跳过模型自测')
-    return
-  }
-  const started = Date.now()
-  try {
-    const res = await fetch(`http://127.0.0.1:${handle.port}/agent/ping`, {
-      headers: authHeader,
-    })
-    const body = (await res.json()) as {
-      ok: boolean
-      text?: string
-      usage?: { inputTokens?: number; outputTokens?: number } | null
-      code?: string
-      message?: string
-    }
-    const elapsed = Date.now() - started
-    if (res.status === 200 && body.ok) {
-      // 只记字符数和用量，不记回复原文（回复将来是聊天内容，不进日志）
-      console.log(
-        `[eve] 连通成功（${elapsed}ms）；回复 ${body.text?.length ?? 0} 字；用量 in=${body.usage?.inputTokens ?? '?'} out=${body.usage?.outputTokens ?? '?'}`,
-      )
-    } else {
-      console.error(`[模型] 自测失败（${elapsed}ms）：${body.code ?? res.status} ${body.message ?? ''}`)
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'unknown'
-    console.error(`[模型] 自测请求失败：${message}`)
-  }
+  const unauthorized = await fetch(`http://127.0.0.1:${handle.port}/health`)
+  if (authorized.status !== 200 || unauthorized.status !== 401) console.error('[后台] E_HEALTH_CHECK_FAILED')
 }
 
   // 桌宠界面发来的拖动信号（preload 放行的固定操作，只带信号不带数据）
@@ -729,6 +651,12 @@ async function startBackendWithSelfCheck(): Promise<void> {
   ipcMain.on('pet:menu', () => showPetMenu())
 
   app.whenReady().then(() => {
+    // 系统加密要在 app ready 后使用。解密结果只交给主进程控制器，不送回窗口。
+    modelSettings = createDesktopModelSettings(() => backend, createModelCredentialStore(app.getPath('userData'), {
+      isAvailable: () => safeStorage.isAsyncEncryptionAvailable(),
+      encrypt: (value) => safeStorage.encryptStringAsync(value),
+      decrypt: async (value) => (await safeStorage.decryptStringAsync(value)).result,
+    }), () => chatWindow?.webContents.send('model:changed'))
     startupTimer = setTimeout(() => {
       console.error('[窗口] E_STARTUP_STATE_TIMEOUT')
       finishStartup()
@@ -744,6 +672,8 @@ async function startBackendWithSelfCheck(): Promise<void> {
     // 传「取值函数」而不是句柄：注册时后台多半还没雇好，通道每次
     // 处理请求时现取，后台没就绪的空档会得到明确的 BACKEND_NOT_READY
     registerBridgeRequests(() => backend, () => chatWindow
+      ? { id: chatWindow.webContents.id, url: CHAT_PAGE_URL } : undefined)
+    registerModelSettingsBridge(modelSettings, () => chatWindow
       ? { id: chatWindow.webContents.id, url: CHAT_PAGE_URL } : undefined)
     // 流式聊天通道（T06⑪d）：同一套聊天页身份核对，多一个逐帧推送出口。
     registerChatStreamBridge(() => backend, () => chatWindow

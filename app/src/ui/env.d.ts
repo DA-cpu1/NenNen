@@ -27,6 +27,12 @@ interface Window {
   /** 应用数据代办通道（desktop/preload.ts 的 appApi；通道实现见
    *  bridge/requests.ts 与 desktop/character-images.ts） */
   appApi?: {
+    /** 模型设置的读取回包只包含公开资料和保管方式。 */
+    getModelSettings: () => Promise<import('../bridge/requests').BridgeResult<import('../shared/model-settings').ModelSettingsOverview>>
+    saveModelSettings: (body: import('../shared/model-settings').SaveModelSettings) =>
+      Promise<import('../bridge/requests').BridgeResult<import('../shared/model-settings').ModelSettingsOverview>>
+    deleteModelCredential: () => Promise<import('../bridge/requests').BridgeResult<import('../shared/model-settings').ModelSettingsOverview>>
+    onModelSettingsChanged: (callback: () => void) => () => void
     /** 读取唯一正式会话的编号，仍由后台决定它属于哪个角色。 */
     getFormalConversation: () => Promise<{
       ok: boolean

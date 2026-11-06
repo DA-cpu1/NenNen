@@ -10,6 +10,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ChatStreamMessage } from '../bridge/chat-stream'
 import type { MemoryChange, MemoryTarget } from '../shared/memory-management'
+import type { SaveModelSettings } from '../shared/model-settings'
 
 /** 拖动控制（页面里用 window.petDrag 访问） */
 contextBridge.exposeInMainWorld('petDrag', {
@@ -44,6 +45,16 @@ contextBridge.exposeInMainWorld('petChat', {
  * 参数形状见各通道的注册处（bridge/requests.ts、desktop/character-images.ts）。
  */
 contextBridge.exposeInMainWorld('appApi', {
+  /** 已存凭据只返回保管方式，不返回明文；新密钥只随用户保存操作发送。 */
+  getModelSettings: () => ipcRenderer.invoke('model:settings'),
+  saveModelSettings: (body: SaveModelSettings) => ipcRenderer.invoke('model:save', body),
+  deleteModelCredential: () => ipcRenderer.invoke('model:delete'),
+  /** 保存和启动恢复后重新读状态；事件不携带设置或密钥。 */
+  onModelSettingsChanged: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('model:changed', listener)
+    return () => ipcRenderer.removeListener('model:changed', listener)
+  },
   /** 查找当前角色唯一的正式会话；界面不接触框架凭据。 */
   getFormalConversation: () => ipcRenderer.invoke('chat:formal-conversation'),
   /** 按正式会话编号读一页历史；不接受任意后台网址。 */
