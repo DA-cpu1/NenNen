@@ -145,8 +145,9 @@ const provider = createServer(async (request, response) => {
     cleanInputChecked = ![memoryContent, correctedContent, correctionRequest, '我喜欢用水彩画植物。', '已收到半截']
       .some((old) => text.includes(old))
   }
-  // 正式回合可使用检索。探针没有要求立即记住任何内容，因此不能带写入工具。
-  assert.ok(offered.every((tool) => tool.function?.name === 'search_memories'))
+  // C15 已取消保存关键词门槛：正式回合可以自主选择保存，固定供应商仍只返回文字。
+  // 只放行检索和普通保存；纠正、忘记等修改工具没有本轮授权仍不能出现。
+  assert.ok(offered.every((tool) => ['search_memories', 'remember_explicit'].includes(tool.function?.name)))
   toolCount += offered.length
   response.writeHead(200, { 'content-type': 'text/event-stream' })
   for (const payload of [
@@ -356,8 +357,9 @@ try {
       const response = await fetch(`${url}/agent/ping`, {
         headers: { 'x-session-token': tokens[index] }, signal: AbortSignal.timeout(35_000),
       })
-      assert.equal(response.status, 200)
-      assert.deepEqual(await response.json(), { ok: true, text: '收到', usage: { inputTokens: 8, outputTokens: 2 } })
+      const pingResult = await response.json()
+      assert.equal(response.status, 200, JSON.stringify({ code: pingResult.code }))
+      assert.deepEqual(pingResult, { ok: true, text: '收到', usage: { inputTokens: 8, outputTokens: 2 } })
       // 每个实际请求都单独累计，避免少跑一步却误报整条链路通过。
       expectedCalls += 1
       assert.equal(calls, expectedCalls, '模拟模型请求数应与预期完全一致')
@@ -413,7 +415,10 @@ try {
       })
       assert.equal(chatResponse.status, 200)
       const chatEvents = await chatResponse.text()
-      assert.ok(chatEvents.includes('"type":"done"'))
+      assert.ok(chatEvents.includes('"type":"done"'), JSON.stringify({
+        eventTypes: [...chatEvents.matchAll(/"type":"([a-z-]+)"/g)].map((match) => match[1]),
+        errorCodes: [...chatEvents.matchAll(/"code":"([A-Z_]+)"/g)].map((match) => match[1]),
+      }))
       assert.ok(chatEvents.includes('"delta":"收到"'))
       expectedCalls += 1
       assert.equal(calls, expectedCalls)

@@ -284,6 +284,13 @@ try {
   assert.equal(report.logsContainFakeSecrets, false)
   await writeFile(join(fixture, 'result.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report))
+} catch (error) {
+  // 失败也保留可定位的状态与固定码，仍不写密钥、请求正文或框架原始输出。
+  await writeFile(join(fixture, 'failure.json'), JSON.stringify({ code: /^E_[A-Z_]+$/.test(error.message) ? error.message : 'E_PROBE_ASSERTION',
+    requests: requests.map((request) => ({ kind: request.kind, model: request.model, tools: request.tools })),
+    appCodes: [...new Set(appLogs.match(/E_[A-Z_]+/g) ?? [])] }, null, 2))
+  console.error(JSON.stringify({ fixture, code: 'E_NATIVE_MODEL_PROBE_FAILED' }))
+  throw error
 } finally {
   await application?.stop()
   provider.closeAllConnections()
