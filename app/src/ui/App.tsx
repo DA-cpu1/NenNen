@@ -18,7 +18,7 @@ import { useModelSettings } from './preferences/useModelSettings'
 import OnboardingPage from './onboarding/OnboardingPage'
 import styles from './App.module.css'
 
-/** 页面标识：聊天页 / 记忆页 / 角色设置页 / 软件设置页 */
+/** 页面标识：四个导航页面，以及不增加第五个导航入口的首次使用引导。 */
 export type PageId = 'chat' | 'memory' | 'settings' | 'preferences' | 'onboarding'
 
 /** 传给各页的角色概览与刷新函数（设置页保存成功后会调它） */
