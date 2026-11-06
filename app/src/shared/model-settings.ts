@@ -67,6 +67,10 @@ export const saveModelSettingsSchema = z.object({
 }).strict()
 export type SaveModelSettings = z.infer<typeof saveModelSettingsSchema>
 
+/** 手动测试也有独立编号，网络断开后的同编号重试不能重复产生用量。 */
+export const modelTestRequestSchema = z.object({ requestId: z.uuid() }).strict()
+export const MODEL_TEST_LEDGER_PREFIX = 'modelConnectionTest:'
+
 /** 这个内部消息只经带会话令牌的本机通道，绝不能原样返回界面或写日志。 */
 export const applyModelSettingsSchema = z.object({
   settings: storedModelSettingsSchema, apiKey: modelApiKeySchema.nullable(),
