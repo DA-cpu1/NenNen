@@ -11,7 +11,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import { callModelOnce, type ModelCallResult } from '../agent/model'
 import type { ModelSettingsService } from './model-settings'
-import { applyModelSettingsSchema } from '../shared/model-settings'
+import { applyModelSettingsSchema, modelTestRequestSchema } from '../shared/model-settings'
 import {
   chatWindowStateSchema,
   petWindowStateSchema,
@@ -413,6 +413,25 @@ async function handleRequest(
         sendJson(res, 200, { ok: true })
       } else sendJson(res, 405, { ok: false, code: 'INVALID_INPUT' })
     } catch (error) { sendMemoryError(res, error) }
+    return
+  }
+  // 手动测试只收随机编号；模型、地址和密钥都由后台的当前配置决定。
+  if (req.method === 'POST' && (req.url === '/model/test' || req.url === '/model/test/cancel')) {
+    if (!options.modelSettings) { sendJson(res, 503, { ok: false, code: 'AGENT_UNAVAILABLE' }); return }
+    try {
+      if (req.url.endsWith('/cancel')) {
+        sendJson(res, 200, { ok: true, cancelled: options.modelSettings.cancelTest() })
+      } else {
+        const checked = modelTestRequestSchema.safeParse(await readJsonBody(req))
+        if (!checked.success) { sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' }); return }
+        sendJson(res, 200, { ok: true, ...await options.modelSettings.test(checked.data.requestId, shutdownSignal) })
+      }
+    } catch (error) {
+      const allowed = new Set(['E_MODEL_BUSY', 'E_CREDENTIAL_MISSING', 'E_MODEL_TEST_CANCELLED', 'E_MODEL_TEST_TIMEOUT',
+        'E_MODEL_TEST_CONFLICT', 'E_MODEL_TEST_UNCERTAIN', 'E_MODEL_CONNECTION', 'E_MODEL_TEST_FAILED'])
+      const code = error instanceof Error && allowed.has(error.message) ? error.message : 'E_MODEL_TEST_FAILED'
+      sendJson(res, code === 'E_MODEL_BUSY' ? 409 : 502, { ok: false, code })
+    }
     return
   }
   // 模型设置只接受完整配置；每次更换都等待新进程接班后才回应。

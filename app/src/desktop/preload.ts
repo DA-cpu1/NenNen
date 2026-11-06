@@ -49,6 +49,8 @@ contextBridge.exposeInMainWorld('appApi', {
   getModelSettings: () => ipcRenderer.invoke('model:settings'),
   saveModelSettings: (body: SaveModelSettings) => ipcRenderer.invoke('model:save', body),
   deleteModelCredential: () => ipcRenderer.invoke('model:delete'),
+  testModelConnection: (requestId: string) => ipcRenderer.invoke('model:test', requestId),
+  cancelModelConnectionTest: () => ipcRenderer.invoke('model:test-cancel'),
   /** 保存和启动恢复后重新读状态；事件不携带设置或密钥。 */
   onModelSettingsChanged: (callback: () => void) => {
     const listener = () => callback()

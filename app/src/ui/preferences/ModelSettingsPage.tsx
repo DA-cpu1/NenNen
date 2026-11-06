@@ -8,6 +8,7 @@ import { DEFAULT_MODEL_CONNECTION, modelConnectionSchema, type ModelConnection, 
 import { assetUrl } from '../../shared/asset-url'
 import ConfirmationDialog from '../settings/ConfirmationDialog'
 import { modelSettingsMessage } from './model-settings-messages'
+import ConnectionTestCard from './ConnectionTestCard'
 import styles from './ModelSettingsPage.module.css'
 
 /** 公共状态来自应用壳，离开动作也由应用壳统一处理。 */
@@ -50,7 +51,7 @@ function ModelConnectionForm(props: ModelSettingsPageProps & { overview: ModelSe
   const [saved, setSaved] = useState(draft)
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
-  const [busy, setBusy] = useState<'save' | 'delete' | null>(null)
+  const [busy, setBusy] = useState<'save' | 'delete' | 'test' | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -154,9 +155,8 @@ function ModelConnectionForm(props: ModelSettingsPageProps & { overview: ModelSe
           </section>
         </fieldset>
       </form>
-      <section className={styles.card}><h2><span aria-hidden="true">↔</span>连接测试</h2>
-        <p className={styles.status}>{props.overview.ready ? '连接正常 · 支持工具调用' : hasCredential ? '配置已保存，尚未通过连接测试' : '尚未配置模型'}</p>
-        <p className={styles.hint}>模型回复和记忆整理会联网。连接测试也可能产生用量。</p></section>
+      <ConnectionTestCard overview={props.overview} blocked={dirty || blocked || busy === 'save' || busy === 'delete'} reload={props.reload}
+        onBusyChange={(running) => { setBusy(running ? 'test' : null); if (running) { setError(''); setNotice('') } }} />
       {error || props.loadError || props.overview.code ? <p className={styles.error} role="alert">{error || modelSettingsMessage(props.loadError ?? props.overview.code)}</p> : null}
       {notice ? <p className={styles.notice} role="status">{notice}</p> : null}
       <div className={styles.actions}><button type="button" disabled={!dirty || busy !== null} onClick={discard}>取消修改</button>

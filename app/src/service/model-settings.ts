@@ -114,7 +114,8 @@ export function createModelSettingsService(deps: ModelSettingsDependencies) {
     })
     const controller = new AbortController()
     testController = controller
-    const signal = AbortSignal.any([shutdownSignal, controller.signal, AbortSignal.timeout(30_000)])
+    const timeout = AbortSignal.timeout(30_000)
+    const signal = AbortSignal.any([shutdownSignal, controller.signal, timeout])
     const connection = activeConnection
     const apiKey = activeKey
     const promise = (async () => {
@@ -129,7 +130,7 @@ export function createModelSettingsService(deps: ModelSettingsDependencies) {
         })
         return result
       } catch (error) {
-        const code = signal.aborted ? 'E_MODEL_TEST_CANCELLED'
+        const code = timeout.aborted ? 'E_MODEL_TEST_TIMEOUT' : signal.aborted ? 'E_MODEL_TEST_CANCELLED'
           : error instanceof Error && error.message === 'E_MODEL_CONNECTION' ? 'E_MODEL_CONNECTION' : 'E_MODEL_TEST_FAILED'
         db.transaction(() => {
           writeSetting(db, MODEL_SETTINGS_KEY, { ...settings, testStatus: signal.aborted ? 'untested' : 'failed' })

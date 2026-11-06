@@ -28,6 +28,8 @@
 .layout button:disabled, .fields:disabled { opacity: .58; cursor: default; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .status { font-size: 13px; padding: 11px; background: var(--accent-soft-weak); border-radius: 5px; }
+.warning { font-size: 13px; padding: 11px; background: #fff4de; color: #94621a; border-radius: 5px; }
+.testActions { display: flex; flex-wrap: wrap; gap: 8px; }
 .error, .notice { font-size: 13px; line-height: 1.7; padding: 11px 13px; border-radius: 6px; overflow-wrap: anywhere; }
 .error { color: var(--danger); background: #fff1f4; }
 .notice { color: #22694d; background: #eaf7ef; }

@@ -21,4 +21,9 @@ export function registerModelSettingsBridge(
   ipcMain.handle('model:settings', (event) => allowed(event) ? controller.read() : { ok: false, code: 'UNAUTHORIZED' })
   ipcMain.handle('model:save', (event, body: unknown) => allowed(event) ? controller.save(body) : { ok: false, code: 'UNAUTHORIZED' })
   ipcMain.handle('model:delete', (event) => allowed(event) ? controller.remove() : { ok: false, code: 'UNAUTHORIZED' })
+  ipcMain.handle('model:test', (event, requestId: unknown) => {
+    if (!allowed(event)) return { ok: false, code: 'UNAUTHORIZED' }
+    return typeof requestId === 'string' ? controller.test(requestId) : { ok: false, code: 'INVALID_INPUT' }
+  })
+  ipcMain.handle('model:test-cancel', (event) => allowed(event) ? controller.cancelTest() : { ok: false, code: 'UNAUTHORIZED' })
 }

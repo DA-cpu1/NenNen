@@ -16,7 +16,7 @@ describe('模型设置窗口权限', () => {
     const frame = { url: 'file:///trusted/index.html' }
     const event = { sender: { id: 7, mainFrame: frame }, senderFrame: frame }
     expect(await handlers.get('model:settings')!(event)).toMatchObject({ ok: true })
-    for (const name of ['model:settings', 'model:save', 'model:delete']) {
+    for (const name of ['model:settings', 'model:save', 'model:delete', 'model:test', 'model:test-cancel']) {
       for (const bad of [{ ...event, sender: { id: 8, mainFrame: frame } },
         { ...event, senderFrame: { url: frame.url } },
         { sender: { id: 7, mainFrame: { url: 'https://external.example.com' } }, senderFrame: { url: 'https://external.example.com' } }]) {

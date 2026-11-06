@@ -118,6 +118,7 @@ function main(): void {
     isChatBusy: () => chatTurns.activeCount() > 0,
     isRuntimeReady: () => eve !== undefined,
     replaceRuntime: (connection, key) => queueRuntimeWork(() => replaceModelRuntime(connection, key)),
+    onReady: () => memoryWorker?.wake(),
   })
   options.modelSettings = modelSettings
   options.memoryTools = {

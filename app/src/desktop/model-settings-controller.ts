@@ -5,7 +5,7 @@
 import type { BackendHandle } from './backend'
 import type { ModelCredentialStore } from './model-credentials'
 import type { BridgeResult } from '../bridge/requests'
-import { saveModelSettingsSchema, type ModelSettingsOverview, type StoredModelSettings } from '../shared/model-settings'
+import { saveModelSettingsSchema, type ModelConnectionTest, type ModelSettingsOverview, type StoredModelSettings } from '../shared/model-settings'
 
 interface BackendSnapshot { settings: StoredModelSettings | null; ready: boolean }
 
@@ -25,17 +25,20 @@ export function createDesktopModelSettings(
   let credentialError: string | undefined
 
   /** 网址只能是这里写死的本机设置端点，窗口不能指定任意后台地址。 */
-  async function request(method: 'GET' | 'POST', body?: unknown): Promise<BridgeResult<BackendSnapshot>> {
+  async function request<T = BackendSnapshot>(method: 'GET' | 'POST', body?: unknown,
+    path: '/model/settings' | '/model/test' | '/model/test/cancel' = '/model/settings'): Promise<BridgeResult<T>> {
     const backend = getBackend()
     if (!backend) return { ok: false, code: 'BACKEND_NOT_READY' }
     try {
-      const response = await fetch(`http://127.0.0.1:${backend.port}/model/settings`, {
+      const response = await fetch(`http://127.0.0.1:${backend.port}${path}`, {
         method, headers: { 'content-type': 'application/json', 'x-session-token': backend.token },
-        body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(30_000),
+        body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(35_000),
       })
-      const result = await response.json() as BackendSnapshot & { ok: boolean; code?: string }
+      const result = await response.json() as BackendSnapshot & ModelConnectionTest & { ok: boolean; code?: string; cancelled?: boolean }
       if (!response.ok || !result.ok) return { ok: false, code: result.code ?? 'E_MODEL_UPDATE' }
-      return { ok: true, data: { settings: result.settings, ready: result.ready } }
+      const data = path === '/model/settings' ? { settings: result.settings, ready: result.ready }
+        : path === '/model/test' ? { status: result.status, usage: result.usage } : { cancelled: result.cancelled }
+      return { ok: true, data: data as T }
     } catch { return { ok: false, code: 'BACKEND_UNREACHABLE' } }
   }
 
@@ -123,7 +126,12 @@ export function createDesktopModelSettings(
     })
   }
 
-  return { read, save, remove, restore }
+  return { read, save, remove, restore,
+    /** 手动测试独立于保存；回执丢失后可沿用编号读取既有结果。 */
+    test: (requestId: string) => request<ModelConnectionTest>('POST', { requestId }, '/model/test').finally(notify),
+    /** 用户明确点击取消后，请后台结束正在等待的测试。 */
+    cancelTest: () => request<{ cancelled: boolean }>('POST', undefined, '/model/test/cancel'),
+  }
 }
 
 export type DesktopModelSettings = ReturnType<typeof createDesktopModelSettings>
