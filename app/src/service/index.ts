@@ -26,6 +26,8 @@ import { getFormalConversation } from '../data/conversations'
 import { readChatHistory } from '../data/chat-history'
 import { createChatTurnService } from './chat-turns'
 import { createMemoryManagement } from './memory-management'
+import { createModelSettingsService } from './model-settings'
+import type { ModelConnection } from '../shared/model-settings'
 import { MODEL_CONTEXT_WINDOW_TOKENS, MODEL_OUTPUT_RESERVE_TOKENS } from '../shared/model-limits'
 import { recoverInterruptedTurns } from '../agent/turn-runner'
 import { RIKKA_SAMPLE } from '../shared/character-sample'
@@ -93,8 +95,14 @@ function main(): void {
   // 运行期换密钥（整个换 eve 进程）立即生效，不锁住旧句柄。
   const chatTurns = createChatTurnService({
     getDb: () => database?.db,
-    getEve: () => eve,
+    // 旧固定探针无正式配置；正式配置须通过工具能力检查才允许发消息。
+    getEve: () => !modelSettings.read() || modelSettings.isUsable() ? eve : undefined,
     limits: { modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS },
+    getModelConfiguration: () => {
+      const connection = modelSettings.getConnection()
+      return connection ? { model: connection.model, provider: connection.provider,
+        limits: { modelWindowTokens: connection.contextWindowTokens, outputReserveTokens: connection.outputReserveTokens } } : undefined
+    },
     wakeMemoryJobs: () => memoryWorker?.wake(),
     isContextBlocked: (conversationId) => memoryManagement?.isBlocked(conversationId) ?? false,
     changeMemory: (conversationId, messageId, change) => {
@@ -105,6 +113,13 @@ function main(): void {
   options.startChatTurn = chatTurns.startTurn
   options.startPreviewTurn = chatTurns.startPreviewTurn
   options.cancelChatTurn = chatTurns.cancelTurn
+  const modelSettings = createModelSettingsService({
+    getDb: () => database?.db,
+    isChatBusy: () => chatTurns.activeCount() > 0,
+    isRuntimeReady: () => eve !== undefined,
+    replaceRuntime: (connection, key) => queueRuntimeWork(() => replaceModelRuntime(connection, key)),
+  })
+  options.modelSettings = modelSettings
   options.memoryTools = {
     getTokens: () => [...(eve ? [eve] : []), ...retiringEve].map((handle) => handle.token),
     execute: chatTurns.executeMemoryTool,
@@ -141,10 +156,11 @@ function main(): void {
   }
 
   /** 用指定密钥起一个 eve。失败向外抛，由调用方决定善后。 */
-  async function startEveWith(key: string): Promise<EveHandle> {
+  async function startEveWith(key: string, connection?: ModelConnection): Promise<EveHandle> {
     return startEve({
       appDir: APP_DIR,
       modelApiKey: key,
+      modelConnection: connection,
       // 只传公开测试地址；自动检查让请求落到本机假供应商，避免误花钱
       modelBaseUrl: process.env.COMPANION_MODEL_BASE_URL || undefined,
       memoryToolPort: server?.port,
@@ -182,7 +198,8 @@ function main(): void {
       recoverInterruptedTurns(database.db)
       database.db.update(conversations).set({ runtimeSessionId: null }).run()
       database.checkpoint()
-      memoryWorker = createMemoryWorker(database.db, () => memoryModel)
+      memoryWorker = createMemoryWorker(database.db,
+        () => !modelSettings.read() || modelSettings.isUsable() ? memoryModel : undefined)
       memoryManagement = createMemoryManagement(database.db, (ids) => {
         chatTurns.invalidateContexts(ids)
         memoryWorker?.invalidate(ids)
@@ -291,7 +308,7 @@ function main(): void {
     const previous = eve
     const key = options.modelApiKey
     if (previous && key && !closing) {
-      const replacement = await startEveWith(key)
+      const replacement = await startEveWith(key, modelSettings.getConnection())
       if (closing) await replacement.stop()
       else {
         retiringEve.add(previous)
@@ -331,6 +348,25 @@ function main(): void {
     eve = replacement
     options.modelApiKey = newKey
     memoryModel = createCompanionLanguageModel(newKey, process.env.COMPANION_MODEL_BASE_URL || undefined)
+    memoryWorker?.wake()
+  }
+
+  /** 正式配置整体换班；新进程失败时旧句柄已撤下，后续请求得到不可用状态。 */
+  async function replaceModelRuntime(connection: ModelConnection, key: string | null): Promise<void> {
+    if (closing) throw new Error('E_BACKEND_STOPPING')
+    const previous = eve
+    eve = undefined
+    options.modelApiKey = undefined
+    memoryModel = undefined
+    memoryWorker?.cancelCurrent()
+    await previous?.stop()
+    if (closing) throw new Error('E_BACKEND_STOPPING')
+    if (key === null) return
+    const replacement = await startEveWith(key, connection)
+    if (closing) { await replacement.stop(); throw new Error('E_BACKEND_STOPPING') }
+    eve = replacement
+    options.modelApiKey = key
+    memoryModel = createCompanionLanguageModel(key, connection)
     memoryWorker?.wake()
   }
 

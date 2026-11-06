@@ -10,6 +10,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { timingSafeEqual } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import { callModelOnce, type ModelCallResult } from '../agent/model'
+import type { ModelSettingsService } from './model-settings'
+import { applyModelSettingsSchema } from '../shared/model-settings'
 import {
   chatWindowStateSchema,
   petWindowStateSchema,
@@ -60,6 +62,8 @@ export interface FormalConversationInfo {
 
 /** 启动选项：模型密钥 + 可替换的模型调用函数（测试塞假的，不真花钱） */
 export interface BackendOptions {
+  /** 正式模型设置；读取时不包含密钥，更换时只接主进程的认证通道。 */
+  modelSettings?: ModelSettingsService
   /** 模型密钥；没有就只起基础服务，/model/ping 返回 NO_KEY */
   modelApiKey?: string
   /** 模型调用函数；默认用真的。测试注入假实现，避免真的调付费接口 */
@@ -411,6 +415,24 @@ async function handleRequest(
     } catch (error) { sendMemoryError(res, error) }
     return
   }
+  // 模型设置只接受完整配置；每次更换都等待新进程接班后才回应。
+  if (req.url === '/model/settings' && (req.method === 'GET' || req.method === 'POST')) {
+    if (!options.modelSettings) { sendJson(res, 503, { ok: false, code: 'AGENT_UNAVAILABLE' }); return }
+    try {
+      if (req.method === 'GET') {
+        sendJson(res, 200, { ok: true, ...options.modelSettings.overview() })
+      } else {
+        const checked = applyModelSettingsSchema.safeParse(await readJsonBody(req, 16_384))
+        if (!checked.success) { sendJson(res, 400, { ok: false, code: 'INVALID_INPUT' }); return }
+        sendJson(res, 200, { ok: true, ...await options.modelSettings.apply(checked.data) })
+      }
+    } catch (error) {
+      const allowed = new Set(['E_MODEL_BUSY', 'E_MODEL_SETTINGS_READ', 'E_MODEL_SETTINGS_SAVE', 'E_MODEL_UPDATE', 'E_DB_NOT_OPEN'])
+      const code = error instanceof Error && allowed.has(error.message) ? error.message : 'INVALID_INPUT'
+      sendJson(res, code === 'E_MODEL_BUSY' ? 409 : code === 'INVALID_INPUT' ? 400 : 503, { ok: false, code })
+    }
+    return
+  }
   // 基础健康检查：主进程开机后拿它自测通道
   if (req.method === 'GET' && req.url === '/health') {
     sendJson(res, 200, { ok: true })
@@ -418,6 +440,8 @@ async function handleRequest(
   }
   // 模型自测：真的调一次模型（固定短提示词），验证密钥管道和供应商连通
   if (req.method === 'GET' && req.url === '/model/ping') {
+    // 旧探针只认识固定供应商，正式配置不得把自定义密钥误发到旧地址。
+    if (options.modelSettings?.read()) { sendJson(res, 409, { ok: false, code: 'E_LEGACY_PROBE_DISABLED' }); return }
     const apiKey = options.modelApiKey
     if (!apiKey) {
       sendJson(res, 503, { ok: false, code: 'NO_KEY' })
@@ -461,6 +485,7 @@ async function handleRequest(
   // 运行期换密钥（03 §3「重新配置」通道）：收 POST + JSON { apiKey }。
   // 密钥经「已通过会话令牌认证的本地通道」进来，同样不进日志
   if (req.method === 'POST' && req.url === '/model/key') {
+    if (options.modelSettings?.read()) { sendJson(res, 409, { ok: false, code: 'E_LEGACY_PROBE_DISABLED' }); return }
     let apiKey: unknown
     try {
       const body = (await readJsonBody(req)) as { apiKey?: unknown }

@@ -30,7 +30,7 @@ import {
  */
 export const COMMON_RULES_TEXT = COMMON_FACT_RULES
 
-/** 依 08 的 T01 基线记账用名称；换模型入口在 T11。 */
+/** 旧固定探针的基线；正式入口通过 getModelConfiguration 读取当前配置。 */
 const MODEL_NAME = 'glm-5.3-flash'
 const PROVIDER_NAME = 'zhipu'
 
@@ -41,6 +41,8 @@ export interface ChatTurnServiceDeps {
   getEve: () => EveHandle | undefined
   /** 模型窗口与输出预留；测试可注入小窗口制造预算失败。 */
   limits: ModelInputLimits
+  /** 每次开始回合时取一份配置，记账名称与输入容量必须和实际模型一致。 */
+  getModelConfiguration?: () => { model: string; provider: string; limits: ModelInputLimits } | undefined
   /** 正式聊天保存原话或结束回复后，请后台重查整理触发条件。 */
   wakeMemoryJobs?: () => void
   /** 旧缓存还在清理时，受影响会话暂停发送。其他会话仍可使用自己的资料。 */
@@ -399,11 +401,12 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
 
     startTurn: (request) => {
       const { db, eve, savedMessageId, characterId, pendingWrite } = beginTurn(request.conversationId, request.requestId, request.content, 'normal')
+      const configured = deps.getModelConfiguration?.() ?? { model: MODEL_NAME, provider: PROVIDER_NAME, limits: deps.limits }
       const events = registerTurn(request.conversationId, characterId, savedMessageId, eve,
         (turn) => pendingWrite ? replayWrite(db, pendingWrite) : runFormalTurn(db, eve!, {
           conversationId: request.conversationId, userMessageId: savedMessageId,
-          commonRules: COMMON_RULES_TEXT, limits: deps.limits,
-          model: MODEL_NAME, provider: PROVIDER_NAME,
+          commonRules: COMMON_RULES_TEXT, limits: configured.limits,
+          model: configured.model, provider: configured.provider,
           registerToolSession: (session) => {
             turn.toolSession = { ...session, executions: 0, seenMemories: new Map() }
             return () => { delete turn.toolSession }
@@ -430,14 +433,15 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
         return { conversation, started: beginTurn(conversation.id, request.requestId, request.content, 'preview') }
       })
       const { db, eve, savedMessageId, characterId, pendingWrite } = started
+      const configured = deps.getModelConfiguration?.() ?? { model: MODEL_NAME, provider: PROVIDER_NAME, limits: deps.limits }
       return {
         userMessageId: savedMessageId,
         conversationId: conversation.id,
         events: registerTurn(conversation.id, characterId, savedMessageId, eve,
           (turn) => pendingWrite ? replayWrite(db, pendingWrite) : runPreviewTurn(db, eve!, {
             conversationId: conversation.id, userMessageId: savedMessageId,
-            commonRules: COMMON_RULES_TEXT, draft, limits: deps.limits,
-            model: MODEL_NAME, provider: PROVIDER_NAME,
+            commonRules: COMMON_RULES_TEXT, draft, limits: configured.limits,
+            model: configured.model, provider: configured.provider,
           }, turn.controller.signal)),
       }
     },
