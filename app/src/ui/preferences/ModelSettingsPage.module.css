@@ -1,0 +1,43 @@
+/** 模型设置沿用图 07 的双层导航、白色卡片和淡紫角色栏，窄窗口保留表单宽度。 */
+.layout { display: grid; grid-template-columns: 124px minmax(0, 1fr) 20%; flex: 1; min-width: 0; height: 100%; }
+.sections { padding: 18px 8px; border-right: 1px solid var(--border); background: #fafbff; }
+.sectionActive { display: flex; align-items: center; gap: 8px; padding: 12px 7px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 600; }
+.content { overflow-y: auto; min-width: 0; padding: 22px 20px 28px; }
+.heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 20px; }
+.heading h1, .empty h1 { margin: 0; font-size: 25px; letter-spacing: -.5px; }
+.heading p { color: var(--muted); margin: 5px 0 0; font-size: 13px; }
+.unsaved { color: #a86918; font-size: 12px; white-space: nowrap; }
+.fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.card { border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: 17px; margin-bottom: 14px; min-width: 0; }
+.card h2 { display: flex; align-items: center; gap: 9px; margin: 0 0 16px; font-size: 16px; }
+.card h2 > span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: var(--accent-soft-weak); color: var(--accent); font-size: 21px; }
+.row { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 13px; font-size: 13px; }
+.row input, .row select { box-sizing: border-box; width: 100%; min-width: 0; height: 36px; padding: 6px 9px; border: 1px solid #ced5f1; border-radius: 5px; background: #fff; color: var(--ink); font-size: 13px; }
+.row input::placeholder { color: #9299b2; }
+.capacity { margin-top: 18px; font-size: 12px; color: var(--muted); }
+.capacity summary { cursor: pointer; color: var(--accent); }
+.capacity p { line-height: 1.6; }
+.keyField { display: flex; min-width: 0; gap: 5px; align-items: center; }
+.keyField input { flex: 1; }
+.storage { color: #277458; font-size: 12px; margin: 11px 0 13px; overflow-wrap: anywhere; }
+.cardFooter { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 18px; padding-top: 13px; border-top: 1px solid #eff1fa; }
+.cardFooter p, .hint { font-size: 12px; color: var(--muted); line-height: 1.65; margin: 0; }
+.layout button, .empty button { border: 1px solid #ced5f1; border-radius: 6px; padding: 8px 12px; min-height: 36px; background: #fff; color: var(--accent); font-size: 12px; cursor: pointer; }
+.layout button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; white-space: nowrap; }
+.layout button.danger { color: var(--danger); border-color: #ecc2cd; }
+.layout button:disabled, .fields:disabled { opacity: .58; cursor: default; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.status { font-size: 13px; padding: 11px; background: var(--accent-soft-weak); border-radius: 5px; }
+.error, .notice { font-size: 13px; line-height: 1.7; padding: 11px 13px; border-radius: 6px; overflow-wrap: anywhere; }
+.error { color: var(--danger); background: #fff1f4; }
+.notice { color: #22694d; background: #eaf7ef; }
+.art { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; overflow: hidden; background: radial-gradient(ellipse at 40% 35%, #fff 0, #eeeaff 70%, #e1e7ff 100%); border-left: 1px solid var(--border); }
+.art img { width: 100%; max-height: 75%; object-fit: contain; }
+.art > div { align-self: stretch; padding: 20px; color: #514b87; }
+.art strong { font-size: 26px; }
+.art p { font-size: 12px; line-height: 1.8; }
+.avatar { display: grid; place-items: center; width: 82px; height: 82px; border-radius: 50%; background: #fff9; color: var(--accent); font-size: 34px; }
+.empty { padding: 32px; }
+/* 先收起装饰，再把次级导航移到上方，避免最小窗口中表单被压成几字一行。 */
+@media (max-width: 880px) { .layout { grid-template-columns: 112px minmax(0, 1fr); } .art { display: none; } }
+@media (max-width: 740px) { .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); } .sections { padding: 8px 14px; border-bottom: 1px solid var(--border); border-right: 0; } .sectionActive { display: inline-flex; padding: 8px; } .content { padding: 18px 14px; } .row { grid-template-columns: 76px minmax(0, 1fr); } }

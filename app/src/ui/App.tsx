@@ -1,5 +1,5 @@
 /**
- * 聊天窗的「壳」：左边是各页共用的导航（聊天 / 角色设置 / 记忆），
+ * 聊天窗的「壳」：左边是各页共用的导航（聊天 / 角色设置 / 记忆 / 设置），
  * 右边是当前页。聊天页切到设置后仍保留，避免丢掉未保存文字和重试编号。
  *
  * 角色概览（名字、图片路径、人设版本）在这里统一取一次、传给各页：
@@ -13,10 +13,12 @@ import { assetUrl } from '../shared/asset-url'
 import ChatPage from './chat/ChatPage'
 import MemoryPage from './memory/MemoryPage'
 import SettingsPage from './settings/SettingsPage'
+import ModelSettingsPage from './preferences/ModelSettingsPage'
+import { useModelSettings } from './preferences/useModelSettings'
 import styles from './App.module.css'
 
-/** 页面标识：聊天页 / 记忆页 / 角色设置页 */
-export type PageId = 'chat' | 'memory' | 'settings'
+/** 页面标识：聊天页 / 记忆页 / 角色设置页 / 软件设置页 */
+export type PageId = 'chat' | 'memory' | 'settings' | 'preferences'
 
 /** 传给各页的角色概览与刷新函数（设置页保存成功后会调它） */
 export interface CharacterProps {
@@ -32,6 +34,7 @@ export interface CharacterProps {
  * @returns 共用侧栏和当前页面；切页只改变选中项，不再换一套导航。
  */
 export default function App() {
+  const model = useModelSettings()
   const [page, setPage] = useState<PageId>('chat')
   const [leaveTarget, setLeaveTarget] = useState<PageId | null>(null)
   const [character, setCharacter] = useState<CharacterOverview | null>(null)
@@ -66,7 +69,7 @@ export default function App() {
   /** 侧栏、托盘和桌宠菜单走同一条路，避免某个入口绕过未保存确认。 */
   const navigate = useCallback((target: PageId) => {
     setChatSource(null)
-    if (page === 'settings' && target !== page) setLeaveTarget(target)
+    if ((page === 'settings' || page === 'preferences') && target !== page) setLeaveTarget(target)
     else setPage(target)
   }, [page])
 
@@ -131,6 +134,10 @@ export default function App() {
           </svg>
           <span>记忆</span>
         </button>
+        <button type="button" className={page === 'preferences' ? styles.railItemActive : styles.railItem}
+          aria-current={page === 'preferences' ? 'page' : undefined} onClick={() => navigate('preferences')}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M9 4v6m6 4v6" /></svg><span>设置</span>
+        </button>
         {character ? <div className={styles.railCharacter}>
           {sidebarImage ? <img src={sidebarImage} alt="" /> : <span aria-hidden="true">{character.name.slice(0, 1)}</span>}
           <strong>{character.name}</strong>
@@ -145,6 +152,8 @@ export default function App() {
           onHistoryChanged={() => setHistoryVersion((version) => version + 1)} /> : null}
         {page === 'settings' && <SettingsPage {...shared}
           leaving={leaveTarget !== null} onLeave={completeLeave} onStay={cancelLeave} />}
+        {page === 'preferences' ? <ModelSettingsPage overview={model.overview} loadError={model.error} reload={model.reload}
+          character={character} leaving={leaveTarget !== null} onLeave={completeLeave} onStay={cancelLeave} /> : null}
       </main>
     </div>
   )
