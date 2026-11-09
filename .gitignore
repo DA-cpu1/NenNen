@@ -22,3 +22,7 @@ out/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# 本地技能目录与工作区数据，不随项目分发
+.agents/skills/
+.workbuddy-ai/
