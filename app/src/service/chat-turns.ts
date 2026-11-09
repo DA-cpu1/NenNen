@@ -18,7 +18,7 @@ import { finalizeTurnWrite, type PendingTurnWrite, type TurnEvent, type TurnOutc
 import { COMMON_FACT_RULES } from '../shared/character-sample'
 import { searchMemories } from '../memory/search'
 import type { MemoryToolRequest, MemoryToolResult } from '../shared/memory-tool'
-import { rememberExplicit } from './remember-explicit'
+import { rememberExplicit, type PendingMemoryReview } from './remember-explicit'
 import type { AppliedMemoryChange, ChatMemoryChange } from './memory-management'
 import {
   resolvePreviewDraft, type ChatTurnRequest, type PreviewTurnRequest, type SseTurnEvent,
@@ -100,7 +100,11 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
     events?: AsyncGenerator<SseTurnEvent>
     completed: Promise<void>
     finish: () => void
-    toolSession?: ActiveToolSession & { executions: number; seenMemories: Map<string, number> }
+    toolSession?: ActiveToolSession & {
+      executions: number
+      seenMemories: Map<string, number>
+      memoryReviews: Map<string, PendingMemoryReview>
+    }
     /** 已落库的操作回执，与角色回复是否完成分开。 */
     memoryStatus?: 'memory-saved' | 'memory-already-saved'
     memoryChange?: AppliedMemoryChange
@@ -337,7 +341,8 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
           if (!session.rememberAllowed) {
             return { ok: false, code: 'SOURCE_NOT_ALLOWED', message: '这轮没有立即记忆请求。', retryable: false }
           }
-          const result = rememberExplicit(db, { conversationId, userMessageId: reply.replyToId }, request.input, Date.now())
+          const result = rememberExplicit(db, { conversationId, userMessageId: reply.replyToId },
+            request.input, Date.now(), session.memoryReviews)
           if (result.ok && 'status' in result && turn.memoryStatus !== 'memory-saved') {
             turn.memoryStatus = result.status === 'saved' ? 'memory-saved' : 'memory-already-saved'
           }
@@ -408,7 +413,7 @@ export function createChatTurnService(deps: ChatTurnServiceDeps): ChatTurnServic
           commonRules: COMMON_RULES_TEXT, limits: configured.limits,
           model: configured.model, provider: configured.provider,
           registerToolSession: (session) => {
-            turn.toolSession = { ...session, executions: 0, seenMemories: new Map() }
+            turn.toolSession = { ...session, executions: 0, seenMemories: new Map(), memoryReviews: new Map() }
             return () => { delete turn.toolSession }
           },
         }, turn.controller.signal), deps.wakeMemoryJobs)

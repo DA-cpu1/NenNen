@@ -19,6 +19,8 @@ export interface SaveCharacterMemoryInput {
   sourceMessageIds: readonly string[]
   expiresAt: number | null
   replacement?: { id: string; revision: number }
+  /** 模型已看过并选定的旧条。程序仍须核对它的归属、时效和修订号。 */
+  reuse?: { id: string; revision: number }
   now: number
 }
 
@@ -69,6 +71,12 @@ export function listCurrentMemories(db: BetterSQLite3Database, characterId: stri
   )).orderBy(desc(memories.validFrom), desc(memories.id)).all()
 }
 
+/** 在当前写入内补来源。重复收到同一对编号时，SQLite 沿用原关系。 */
+function linkMemorySources(db: BetterSQLite3Database, memoryId: string, sourceIds: readonly string[]): void {
+  db.insert(memorySources).values(sourceIds.map((messageId) => ({ memoryId, messageId })))
+    .onConflictDoNothing({ target: [memorySources.memoryId, memorySources.messageId] }).run()
+}
+
 /**
  * 写入一条私有记忆。事务让新值、旧状态、原话来源和版本号一起成功或一起撤回。
  * @param db 后台数据库连接，也可由外层整理事务传入
@@ -76,10 +84,11 @@ export function listCurrentMemories(db: BetterSQLite3Database, characterId: stri
  * @returns 写入后的记忆、重复请求已有的记忆，或具体拒绝原因
  */
 export function saveCharacterMemory(db: BetterSQLite3Database, input: SaveCharacterMemoryInput): SaveMemoryResult {
-  const { now, kind, origin, expiresAt, replacement } = input
+  const { now, kind, origin, expiresAt, replacement, reuse } = input
   const content = input.content.trim()
   const memoryKey = input.memoryKey?.trim() ?? null
-  if (!content || memoryKey === '' || (expiresAt !== null && (!Number.isSafeInteger(expiresAt) || expiresAt <= now))) {
+  if (!content || memoryKey === '' || (replacement && reuse) ||
+      (expiresAt !== null && (!Number.isSafeInteger(expiresAt) || expiresAt <= now))) {
     return { status: 'INVALID_INPUT' }
   }
 
@@ -98,6 +107,16 @@ export function saveCharacterMemory(db: BetterSQLite3Database, input: SaveCharac
       return { status: 'SOURCE_NOT_ALLOWED' }
     }
 
+    if (reuse) {
+      const old = tx.select().from(memories).where(and(eq(memories.id, reuse.id), eq(memories.scope, 'character'),
+        eq(memories.characterId, conversation.characterId), eq(memories.status, 'active'),
+        eq(memories.revision, reuse.revision), eq(memories.kind, kind), lte(memories.validFrom, now),
+        or(isNull(memories.expiresAt), gt(memories.expiresAt, now)))).get()
+      if (!old || (memoryKey !== null && old.memoryKey !== memoryKey)) return { status: 'STALE_REVISION' }
+      linkMemorySources(tx, old.id, sourceIds)
+      return { status: 'already_saved', memory: old }
+    }
+
     const matching = tx.select().from(memories).where(and(
       eq(memories.scope, 'character'), eq(memories.characterId, conversation.characterId), eq(memories.status, 'active'),
       memoryKey === null ? isNull(memories.memoryKey) : eq(memories.memoryKey, memoryKey),
@@ -114,9 +133,7 @@ export function saveCharacterMemory(db: BetterSQLite3Database, input: SaveCharac
     const exact = findExactMemory(tx, matching.filter((row) => row.validFrom <= now &&
       (row.expiresAt === null || row.expiresAt > now)), input)
     if (exact) {
-      // 原话可以有多条。同一对编号已经登记时，SQLite 会沿用原关系。
-      tx.insert(memorySources).values(sourceIds.map((messageId) => ({ memoryId: exact.id, messageId })))
-        .onConflictDoNothing({ target: [memorySources.memoryId, memorySources.messageId] }).run()
+      linkMemorySources(tx, exact.id, sourceIds)
       return { status: 'already_saved', memory: exact }
     }
     if (active && !expired && !replacement) return { status: 'STALE_REVISION' }
@@ -131,7 +148,7 @@ export function saveCharacterMemory(db: BetterSQLite3Database, input: SaveCharac
       kind, memoryKey, content, origin, validFrom: now, expiresAt,
       supersedesId: replacement?.id ?? null, createdAt: now, updatedAt: now,
     }).returning().get()
-    tx.insert(memorySources).values(sourceIds.map((messageId) => ({ memoryId: memory.id, messageId }))).run()
+    linkMemorySources(tx, memory.id, sourceIds)
     bumpCharacterMemoryEpoch(tx, conversation.characterId)
     return { status: 'saved', memory }
   })

@@ -1,6 +1,7 @@
 /** 约定 eve 向本机业务后台查询或保存记忆时的消息格式，模型只填写工具参数。 */
 import { z } from 'zod'
 import type { MemoryMatch } from '../memory/search'
+import type { MemoryReviewCandidate } from '../memory/review-candidates'
 import { memoryContentSchema, memoryTargetSchema } from './memory-management'
 
 /** 只有在本机后台有正在运行的正式回合时，才使用这个内部路径。 */
@@ -15,13 +16,32 @@ export const searchMemoriesInputSchema = z.strictObject({
   limit: z.number().int().min(1).max(8).optional(),
 })
 
-/** 立即记忆只接受短记录和当前用户原话编号；是否值得保存由模型按工具说明判断。 */
-export const rememberExplicitInputSchema = z.strictObject({
+const proposalFields = {
   content: z.string().trim().min(1).max(400),
   kind: z.enum(memoryKinds),
   memoryKey: z.string().trim().regex(/^[a-z][a-z0-9_]{0,79}$/).optional(),
   sourceMessageId: z.string().min(1).max(200),
-})
+}
+const reviewId = z.string().min(1).max(200)
+const memoryId = z.string().min(1).max(200)
+
+/** 确认只接待确认编号和已展示的旧条编号，不能把初次提议的正文或来源换掉。 */
+export const rememberActionSchema = z.discriminatedUnion('action', [
+  z.strictObject({ action: z.literal('propose').optional(), ...proposalFields }),
+  z.strictObject({ action: z.literal('add'), reviewId }),
+  z.strictObject({ action: z.literal('reuse'), reviewId, memoryId }),
+])
+
+/** 保持给模型的参数最外层是对象，再按动作检查必填和互斥字段。 */
+export const rememberExplicitInputSchema = z.strictObject({
+  action: z.enum(['propose', 'add', 'reuse']).optional(),
+  content: proposalFields.content.optional(),
+  kind: proposalFields.kind.optional(),
+  memoryKey: proposalFields.memoryKey,
+  sourceMessageId: proposalFields.sourceMessageId.optional(),
+  reviewId: reviewId.optional(),
+  memoryId: memoryId.optional(),
+}).refine((input) => rememberActionSchema.safeParse(input).success, '保存动作的参数不完整或含有多余字段。')
 
 /** 纠正、忘记必须指向先查到的修订，并带上实际触发操作的用户消息。 */
 export const correctMemoryInputSchema = memoryTargetSchema.extend({
@@ -50,6 +70,7 @@ export type RememberReceipt = z.infer<typeof rememberReceiptSchema>
 export type MemoryToolResult =
   | { ok: true; memories: MemoryMatch[] }
   | ({ ok: true } & RememberReceipt)
+  | { ok: true; state: 'needs_review'; reviewId: string; sourceCreatedAt: number; candidates: MemoryReviewCandidate[] }
   | { ok: false; code: 'NOT_FOUND' | 'CANCELLED' | 'BUDGET_EXCEEDED' | 'STORAGE_UNAVAILABLE' |
       'INVALID_INPUT' | 'SOURCE_NOT_ALLOWED' | 'STALE_REVISION' | 'AMBIGUOUS' | 'MEMORY_CLEANUP_PENDING';
       message: string; retryable: boolean }

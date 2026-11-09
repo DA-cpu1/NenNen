@@ -7,9 +7,11 @@ import { desc, eq } from 'drizzle-orm'
 import { openCompanionDatabase, type CompanionDb } from '../src/data/db'
 import { runMigrations } from '../src/data/migrations'
 import { initializeFirstCharacter } from '../src/data/character-init'
-import { agentRuns, characters, characterVersions, companionSettings, conversations, memories, messages, toolOperations } from '../src/data/tables'
+import { agentRuns, characters, characterVersions, companionSettings, conversations, memories, memorySources, messages, toolOperations } from '../src/data/tables'
 import { createChatTurnService } from '../src/service/chat-turns'
 import { mutateMemory } from '../src/data/memory-management'
+import { saveCharacterMemory } from '../src/data/memories'
+import { saveUserMessage } from '../src/data/messages'
 import { createMemoryManagement } from '../src/service/memory-management'
 import type { EveHandle } from '../src/agent/eve-process'
 import type { SseTurnEvent } from '../src/shared/chat-turn'
@@ -276,6 +278,54 @@ describe('聊天回合服务（T06⑪c1）', () => {
     expect((await reading).value).toEqual({ type: 'tool-status', status: 'memory-saved' })
     expect(await collect(formal.events)).toEqual([{ type: 'cancelled' }])
     expect(db.select().from(memories).all()).toHaveLength(1)
+  })
+
+  it.each(['reuse', 'add', 'stale'] as const)('即时记忆复核候选后处理 %s', async (decision) => {
+    const { db } = companion
+    const source = saveUserMessage(db, { conversationId, requestId: 'old-cola', content: '我喜欢喝无糖可乐。' }).message
+    const prior = { conversationId, kind: 'preference', memoryKey: null, content: '用户喜欢喝无糖可乐',
+      origin: 'user_explicit', sourceMessageIds: [source.id], expiresAt: null, now: Date.now() } as const
+    const old = saveCharacterMemory(db, prior)
+    if (!('memory' in old)) throw new Error('固定资料保存失败')
+    let begin!: () => void
+    const sending = new Promise<void>((resolve) => { begin = resolve })
+    fake.send.mockImplementation(async () => { begin(); return fakeResponse([], true).response })
+    const turns = service()
+    const content = decision === 'reuse' ? '用户爱喝无糖可乐' : '用户喜欢收藏可乐罐'
+    const formal = turns.startTurn({ conversationId, requestId: 'review-cola', content })
+    await formal.events.next()
+    const reading = formal.events.next()
+    await sending
+    const tool = { sessionId: 'eve-1', tool: 'remember_explicit' } as const
+    const result = turns.executeMemoryTool({ ...tool, input: {
+      action: 'propose', kind: 'preference', content, sourceMessageId: formal.userMessageId,
+    } })
+    if (!result.ok || !('state' in result)) throw new Error('没有收到候选')
+    expect(result.candidates).toMatchObject([{ id: old.memory.id, content: prior.content }])
+    expect(db.select().from(toolOperations).all()).toEqual([])
+    expect(db.select().from(memorySources).all()).toHaveLength(1)
+    const { reviewId } = result
+    if (decision === 'reuse') {
+      expect(turns.executeMemoryTool({ ...tool, input: { action: 'reuse', reviewId, memoryId: '编造的编号' } }))
+        .toMatchObject({ ok: false, code: 'STALE_REVISION' })
+      const confirmation = { ...tool, input: { action: 'reuse', reviewId, memoryId: old.memory.id } } as const
+      const receipt = { ok: true, status: 'already_saved', memoryId: old.memory.id, revision: old.memory.revision }
+      expect(turns.executeMemoryTool(confirmation)).toEqual(receipt)
+      expect(turns.executeMemoryTool(confirmation)).toEqual(receipt)
+      expect(db.select().from(memories).all()).toEqual([old.memory])
+      expect(db.select().from(memorySources).all()).toEqual(expect.arrayContaining([
+        { memoryId: old.memory.id, messageId: formal.userMessageId },
+      ]))
+    } else {
+      if (decision === 'stale') saveCharacterMemory(db, { ...prior, content: '收藏空罐是用户的爱好' })
+      const confirmation = turns.executeMemoryTool({ ...tool, input: { action: 'add', reviewId } })
+      expect(confirmation).toMatchObject(decision === 'stale'
+        ? { ok: false, code: 'STALE_REVISION' } : { ok: true, status: 'saved' })
+      expect(db.select().from(memories).where(eq(memories.content, content)).all()).toHaveLength(decision === 'add' ? 1 : 0)
+    }
+    turns.cancelTurn(conversationId)
+    await reading
+    await collect(formal.events)
   })
   it('退出等待已开始回合取消落库，停止后拒绝正式和试聊新请求，重复stop复用', async () => {
     const { response } = fakeResponse([appended('退出前的半截'), messageDone('退出前的半截')], true)
