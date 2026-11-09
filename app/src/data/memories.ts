@@ -27,6 +27,33 @@ export type SaveMemoryResult =
   | { status: 'saved' | 'already_saved'; memory: Memory }
   | { status: 'INVALID_INPUT' | 'SOURCE_NOT_ALLOWED' | 'STALE_REVISION' }
 
+/** 只统一字符的等价写法和空白，保留标点、大小写和原本保存的正文。 */
+function comparableContent(content: string): string {
+  return content.normalize('NFC').trim().replace(/\s+/gu, ' ')
+}
+
+/**
+ * 找出可直接复用的同文记录。短期状态和经历要有同一批原话作为依据。
+ * @param db 后台数据库连接
+ * @param rows 已按角色、属性键和有效期选出的旧记录
+ * @param input 拟保存的事实和原话
+ * @returns 可直接复用的旧记录，找不到时返回 undefined
+ */
+export function findExactMemory(
+  db: BetterSQLite3Database, rows: readonly Memory[],
+  input: Pick<SaveCharacterMemoryInput, 'kind' | 'content' | 'expiresAt' | 'sourceMessageIds'>,
+): Memory | undefined {
+  const content = comparableContent(input.content)
+  return rows.find((row) => {
+    if (row.kind !== input.kind || row.expiresAt !== input.expiresAt || comparableContent(row.content) !== content) return false
+    if (row.expiresAt === null && row.kind !== 'episode' && row.kind !== 'temporary') return true
+    // 两天都说「今天很累」也可能整理成同一句话。只有这些原话已经登记过，才能直接确认。
+    const linked = db.select({ id: memorySources.messageId }).from(memorySources)
+      .where(eq(memorySources.memoryId, row.id)).all()
+    return input.sourceMessageIds.every((id) => linked.some((source) => source.id === id))
+  })
+}
+
 /**
  * 读取一个角色能使用的当前记忆。共享记录可见，其他角色的私有记录不可见。
  * @param db 后台数据库连接
@@ -71,21 +98,26 @@ export function saveCharacterMemory(db: BetterSQLite3Database, input: SaveCharac
       return { status: 'SOURCE_NOT_ALLOWED' }
     }
 
-    const active = tx.select().from(memories).where(and(
+    const matching = tx.select().from(memories).where(and(
       eq(memories.scope, 'character'), eq(memories.characterId, conversation.characterId), eq(memories.status, 'active'),
       memoryKey === null ? isNull(memories.memoryKey) : eq(memories.memoryKey, memoryKey),
       replacement ? eq(memories.id, replacement.id) : undefined,
       memoryKey === null && !replacement
-        ? and(eq(memories.kind, kind), eq(memories.content, content), or(isNull(memories.expiresAt), gt(memories.expiresAt, now)))
+        ? and(eq(memories.kind, kind), expiresAt === null ? isNull(memories.expiresAt) : eq(memories.expiresAt, expiresAt))
         : undefined,
-    )).get()
+    )).orderBy(desc(memories.validFrom), desc(memories.id)).all()
+    const active = memoryKey !== null || replacement ? matching[0] : undefined
     const expired = active?.expiresAt != null && active.expiresAt <= now
     if (replacement && (!active || expired || active.id !== replacement.id || active.revision !== replacement.revision)) {
       return { status: 'STALE_REVISION' }
     }
-    if (active && !expired && active.content === content && active.kind === kind &&
-        (!replacement || active.expiresAt === expiresAt)) {
-      return { status: 'already_saved', memory: active }
+    const exact = findExactMemory(tx, matching.filter((row) => row.validFrom <= now &&
+      (row.expiresAt === null || row.expiresAt > now)), input)
+    if (exact) {
+      // 原话可以有多条。同一对编号已经登记时，SQLite 会沿用原关系。
+      tx.insert(memorySources).values(sourceIds.map((messageId) => ({ memoryId: exact.id, messageId })))
+        .onConflictDoNothing({ target: [memorySources.memoryId, memorySources.messageId] }).run()
+      return { status: 'already_saved', memory: exact }
     }
     if (active && !expired && !replacement) return { status: 'STALE_REVISION' }
 

@@ -54,6 +54,34 @@ describe('记忆读写', () => {
     expect(saveCharacterMemory(companion.db, input).status).toBe('saved')
     expect(saveCharacterMemory(companion.db, input).status).toBe('already_saved')
     expect(saveCharacterMemory(companion.db, { ...input, content: '谈过动画电影' }).status).toBe('saved')
+    expect(saveCharacterMemory(companion.db, { ...input, sourceMessageIds: ['new-name'] }).status).toBe('saved')
+  })
+
+  it('稳定偏好同文时保留旧条，并让忘记覆盖每次已登记的复述', () => {
+    const { db } = companion
+    const input = { ...initial, memoryKey: null, content: '用户喜欢 Café' }
+    const first = saveCharacterMemory(db, input)
+    expect(first.status).toBe('saved')
+    if (!('memory' in first)) throw new Error('测试资料保存失败')
+    const repeat = { ...input, content: '用户喜欢  Cafe\u0301', sourceMessageIds: ['new-name'] }
+    for (let retry = 0; retry < 2; retry += 1) {
+      expect(saveCharacterMemory(db, repeat)).toEqual({ ...first, status: 'already_saved' })
+    }
+    expect(listCurrentMemories(db, 'a', now)).toEqual([first.memory])
+    expect(db.select().from(memorySources).all()).toHaveLength(2)
+    mutateMemory(db, { conversationId: 'normal', requestId: 'forget-1' }, {
+      action: 'forget', memoryId: first.memory.id, expectedRevision: first.memory.revision, deleteSources: false,
+    }, now + 1)
+    expect(db.select().from(contextExclusions).all().map((row) => row.messageId))
+      .toEqual(expect.arrayContaining(['original', 'new-name']))
+  })
+
+  it('不同原话的同文短期状态可分别保存', () => {
+    const input = { ...initial, kind: 'temporary' as const, memoryKey: null, content: '今天加班很累', expiresAt: now + 100 }
+    expect(saveCharacterMemory(companion.db, input).status).toBe('saved')
+    expect(saveCharacterMemory(companion.db, input).status).toBe('already_saved')
+    expect(saveCharacterMemory(companion.db, { ...input, sourceMessageIds: ['new-name'], expiresAt: now + 200 }).status)
+      .toBe('saved')
   })
 
   it('只读本角色和共享资料，在到期那一刻隐藏仍标作有效的旧值', () => {

@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
-import { saveCharacterMemory } from '../data/memories'
+import { findExactMemory, saveCharacterMemory } from '../data/memories'
 import { conversations, memories, messages } from '../data/tables'
 import { beginToolOperation, buildOperationKey, completeToolOperation, failToolOperation } from '../data/tool-ops'
 import { rememberReceiptSchema, type MemoryToolResult, type RememberExplicitInput, type RememberReceipt } from '../shared/memory-tool'
@@ -43,7 +43,9 @@ export function rememberExplicit(
       if (!receipt.success) return unavailable
       const current = tx.select().from(memories).where(eq(memories.id, receipt.data.memoryId)).get()
       if (!current || current.characterId !== conversation.characterId || current.status !== 'active' ||
-          (current.expiresAt !== null && current.expiresAt <= now) || current.kind !== input.kind || current.content !== input.content) return stale
+          (current.expiresAt !== null && current.expiresAt <= now) || !findExactMemory(tx, [current], {
+            ...input, sourceMessageIds: [source.id], expiresAt: current.expiresAt,
+          })) return stale
       return { ...receipt.data, ok: true, status: 'already_saved' }
     }
     const saved = saveCharacterMemory(tx, {
