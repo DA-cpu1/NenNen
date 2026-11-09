@@ -84,6 +84,23 @@ describe('记忆读写', () => {
       .toBe('saved')
   })
 
+  it('带属性键的短期状态复述时沿用旧条并补登记原话', () => {
+    const input = {
+      ...initial, kind: 'temporary' as const, memoryKey: 'recent_fever', content: '用户发烧已经好了', expiresAt: now + 100,
+    }
+    const first = saveCharacterMemory(companion.db, input)
+    expect(first.status).toBe('saved')
+    if (!('memory' in first)) throw new Error('测试资料保存失败')
+    // 隔天又说一次：原话换了、到期时间也跟着变，但「最近发烧」这个位置还是同一条。
+    expect(saveCharacterMemory(companion.db, {
+      ...input, sourceMessageIds: ['new-name'], expiresAt: now + 200, now: now + 50,
+    })).toEqual({ ...first, status: 'already_saved' })
+    expect(companion.db.select().from(memories).all()).toEqual([first.memory])
+    expect(companion.db.select().from(memorySources).all()).toHaveLength(2)
+    // 复述不续期：旧条仍按第一次说的原话到期，到期后才允许写新值。
+    expect(companion.db.select().from(memories).get()?.expiresAt).toBe(now + 100)
+  })
+
   it('只读本角色和共享资料，在到期那一刻隐藏仍标作有效的旧值', () => {
     const { db } = companion
     saveCharacterMemory(db, { ...initial, expiresAt: now + 1 })

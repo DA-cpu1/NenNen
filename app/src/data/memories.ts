@@ -35,7 +35,8 @@ function comparableContent(content: string): string {
 }
 
 /**
- * 找出可直接复用的同文记录。短期状态和经历要有同一批原话作为依据。
+ * 找出可直接复用的同文记录。有属性键的只看键和正文；无键的短期状态和经历
+ * 还要有同一批原话作依据，免得把两天的「今天很累」合成一条。
  * @param db 后台数据库连接
  * @param rows 已按角色、属性键和有效期选出的旧记录
  * @param input 拟保存的事实和原话
@@ -47,7 +48,11 @@ export function findExactMemory(
 ): Memory | undefined {
   const content = comparableContent(input.content)
   return rows.find((row) => {
-    if (row.kind !== input.kind || row.expiresAt !== input.expiresAt || comparableContent(row.content) !== content) return false
+    if (row.kind !== input.kind || comparableContent(row.content) !== content) return false
+    // 有属性键的记录只占一个位置，键和正文都一样就是同一件事：到期时间会随复述的
+    // 原话往后挪，来源也只会多一条，都不该让它变成第二次写入。
+    if (row.memoryKey !== null) return true
+    if (row.expiresAt !== input.expiresAt) return false
     if (row.expiresAt === null && row.kind !== 'episode' && row.kind !== 'temporary') return true
     // 两天都说「今天很累」也可能整理成同一句话。只有这些原话已经登记过，才能直接确认。
     const linked = db.select({ id: memorySources.messageId }).from(memorySources)
