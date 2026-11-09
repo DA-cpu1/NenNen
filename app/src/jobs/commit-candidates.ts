@@ -1,16 +1,18 @@
 /** 在一个事务内重新核对来源和版本，写入候选并推进整理书签。 */
 import { and, eq, gte } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
-import { saveCharacterMemory } from '../data/memories'
+import { findExactMemory, listCurrentMemories, saveCharacterMemory } from '../data/memories'
 import { conversations, memories, memoryJobs, memorySources, messages } from '../data/tables'
-import { candidatesSchema, type MemoryCandidate } from './extract-candidates'
+import { findMemoryReviewCandidates } from '../memory/review-candidates'
+import { candidatesSchema, type MemoryAddReview, type MemoryCandidate } from './extract-candidates'
 import { readMemoryJobWork, type MemoryJobWork } from './memory-jobs'
 
 const dayMs = 24 * 60 * 60 * 1_000
 class InvalidCandidates extends Error {}
 
-/** 提交结果区分旧任务、可重试的候选错误和已经办完的批次。 */
+/** 提交结果区分待补判、旧任务、可重试错误和已经办完的批次。 */
 export type CommitMemoryResult = { status: 'completed'; saved: number } |
+  { status: 'needs_review'; reviews: MemoryAddReview[] } |
   { status: 'already_completed' | 'stale' | 'invalid_candidates' }
 
 /** 核对模型点名的旧记录属于同一角色、仍是当时的版本，且原话没有比新候选更新。 */
@@ -37,7 +39,7 @@ function readReplacement(
  * @param candidates 模型返回的候选数组，提交入口会再检查格式
  * @param revisions 实际给模型看的旧记忆编号与修订号
  * @param now 落库时间，测试可固定
- * @returns 实际提交、重复、失效或格式及来源错误
+ * @returns 实际提交、待补判、重复、失效或格式及来源错误
  */
 export function commitMemoryCandidates(
   db: BetterSQLite3Database, work: MemoryJobWork, candidates: unknown,
@@ -57,9 +59,8 @@ export function commitMemoryCandidates(
       const parsed = candidatesSchema.safeParse({ candidates })
       if (!parsed.success) throw new InvalidCandidates()
       const allowedSources = new Map(current.batch.sources.map((source) => [source.id, source]))
-      let saved = 0
-      for (const candidate of parsed.data.candidates) {
-        if (candidate.action === 'skip') continue
+      const changes = parsed.data.candidates.flatMap((candidate, index) => {
+        if (candidate.action === 'skip') return []
         let newestSourceAt = 0
         let newestSourceSeq = 0
         for (const sourceId of candidate.sourceMessageIds) {
@@ -68,6 +69,26 @@ export function commitMemoryCandidates(
           newestSourceAt = Math.max(newestSourceAt, source.createdAt)
           newestSourceSeq = Math.max(newestSourceSeq, source.seq)
         }
+        const expiresAt = candidate.action === 'reuse' ? null
+          : candidate.expiresAt ?? (candidate.kind === 'temporary' ? newestSourceAt + dayMs : null)
+        if (expiresAt !== null && expiresAt <= newestSourceAt) throw new InvalidCandidates()
+        return [{ index, candidate, newestSourceAt, newestSourceSeq, expiresAt }]
+      })
+
+      // 整批先查再写。只要有一项需要补判，其他项和整理书签也留在原处。
+      const active = listCurrentMemories(tx, current.characterId, now).filter((row) => row.scope === 'character')
+      const reviews: MemoryAddReview[] = []
+      for (const { index, candidate, expiresAt } of changes) {
+        if (candidate.action !== 'add' || (expiresAt !== null && expiresAt <= now)) continue
+        const sameKey = active.filter((row) => row.memoryKey === candidate.memoryKey)
+        if (findExactMemory(tx, sameKey, { ...candidate, expiresAt })) continue
+        const previous = findMemoryReviewCandidates(tx, active, candidate)
+        if (previous.some((old) => revisions.get(old.id) !== old.revision)) reviews.push({ index, previous })
+      }
+      if (reviews.length > 0) return { status: 'needs_review', reviews }
+
+      let saved = 0
+      for (const { candidate, newestSourceAt, newestSourceSeq, expiresAt } of changes) {
         if (candidate.action === 'reuse') {
           // 模型只能选它实际看过的旧条，类别、正文和时效以 SQLite 里的旧条为准。
           const old = tx.select().from(memories).where(eq(memories.id, candidate.memoryId)).get()
@@ -80,8 +101,6 @@ export function commitMemoryCandidates(
           if (reused.status !== 'already_saved') throw new InvalidCandidates()
           continue
         }
-        const expiresAt = candidate.expiresAt ?? (candidate.kind === 'temporary' ? newestSourceAt + dayMs : null)
-        if (expiresAt !== null && expiresAt <= newestSourceAt) throw new InvalidCandidates()
         const replacement = candidate.action === 'replace'
           ? readReplacement(tx, current, candidate, revisions, newestSourceSeq, newestSourceAt, now) : undefined
         // 例如昨天说「今天很累」，即使后来才处理，也不能当成今天的状态。

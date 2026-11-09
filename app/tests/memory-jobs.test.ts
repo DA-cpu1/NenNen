@@ -11,6 +11,7 @@ import { saveUserMessage } from '../src/data/messages'
 import { saveCharacterMemory } from '../src/data/memories'
 import { mutateMemory, previewMemoryDeletion } from '../src/data/memory-management'
 import { runMigrations } from '../src/data/migrations'
+import { writeSetting } from '../src/data/settings'
 import { agentRuns, conversations, memories, memoryJobs, memorySources, messages } from '../src/data/tables'
 import { beginMemoryAttempt, finishMemoryAttempt, recoverExpiredMemoryJobs } from '../src/jobs/memory-budget'
 import { claimMemoryJob, readMemoryJobWork, registerMemoryJob } from '../src/jobs/memory-jobs'
@@ -115,6 +116,76 @@ describe('整理模型预算', () => {
 afterEach(() => companion.close())
 
 describe('整理单次执行', () => {
+  it.each(['复用', '独立新事实', '未展示编号', '额度不足', '补判时忘记'] as const)('遗漏旧条的整理候选先补判：%s', async (outcome) => {
+    const startAt = now + 300_000
+    vi.useFakeTimers({ now: startAt })
+    try {
+      const { db } = companion
+      const oldSource = saveUserMessage(db, { conversationId, requestId: 'old-drink', content: '我喜欢喝无糖可乐。', now }).message
+      const old = saveCharacterMemory(db, { conversationId, kind: 'preference', memoryKey: null,
+        content: '用户喜欢喝无糖可乐', origin: 'user_explicit', sourceMessageIds: [oldSource.id], expiresAt: null, now })
+      if (!('memory' in old)) throw new Error('缺少旧资料')
+      db.update(conversations).set({ lastProcessedSeq: oldSource.seq }).where(eq(conversations.id, conversationId)).run()
+      const source = saveUserMessage(db, { conversationId, requestId: 'repeat-drink',
+        content: outcome === '独立新事实' ? '我拿这款做实验。' : '我平常就喝这款。', now }).message
+      const later = saveUserMessage(db, { conversationId, requestId: 'other-fact', content: '我会弹琴。', now }).message
+      if (outcome === '额度不足') writeSetting(db, 'memory.daily-limits', { requests: 1, tokens: 40_000 })
+      const started = beginMemoryAttempt(db, registerMemoryJob(db, conversationId, startAt)!.id, testModel, startAt)
+      if (started.status !== 'ready') throw new Error('未领取任务')
+      expect(started.attempt.prepared.previousRevisions.size).toBe(0)
+
+      const proposedContent = outcome === '独立新事实' ? '用户喜欢用无糖可乐做实验' : '用户爱喝无糖可乐'
+      const draft = [
+        { ...candidate(later.id), content: '用户会弹琴', memoryKey: null },
+        { ...candidate(source.id), kind: 'preference', content: proposedContent, memoryKey: null },
+      ]
+      let calls = 0
+      let duringReview: { cursor: number | undefined; rows: number; prompt: string } | undefined
+      const model = new MockLanguageModelV4({ doGenerate: async ({ prompt }) => {
+        calls += 1
+        if (calls === 2) {
+          duringReview = { cursor: db.select().from(conversations).get()?.lastProcessedSeq,
+            rows: db.select().from(memories).all().length, prompt: JSON.stringify(prompt) }
+          if (outcome === '补判时忘记') mutateMemory(db, { conversationId, requestId: 'forget-during-review' }, {
+            action: 'forget', memoryId: old.memory.id, expectedRevision: old.memory.revision, deleteSources: false,
+          }, startAt)
+        }
+        const decision = outcome === '独立新事实' ? { index: 1, action: 'add' }
+          : { index: 1, action: 'reuse', memoryId: outcome === '未展示编号' ? 'forged' : old.memory.id }
+        const payload = calls === 1 ? { candidates: draft } : { decisions: [decision] }
+        return { content: [{ type: 'text', text: JSON.stringify(payload) }],
+          finishReason: { unified: 'stop', raw: undefined }, usage: {
+            inputTokens: { total: 10, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 5, text: undefined, reasoning: undefined },
+          }, warnings: [] }
+      } })
+      await runMemoryAttempt(db, started.attempt, model, new AbortController().signal)
+      const runs = db.select().from(agentRuns).all()
+      expect(runs[0]).toMatchObject({ status: 'completed', inputTokens: 10, outputTokens: 5 })
+      if (outcome === '额度不足') {
+        expect(calls).toBe(1)
+        expect(runs).toHaveLength(1)
+        expect(db.select().from(memoryJobs).get()).toMatchObject({ status: 'pending', leaseUntil: null,
+          availableAt: new Date(startAt).setHours(24, 0, 0, 0) })
+      } else {
+        expect(calls).toBe(2)
+        expect(duringReview).toMatchObject({ cursor: oldSource.seq, rows: 1, prompt: expect.stringContaining(old.memory.id) })
+        expect(duringReview?.prompt).toContain(proposedContent)
+        expect(duringReview?.prompt).not.toContain('用户会弹琴')
+        expect(runs[1]).toMatchObject({ id: started.attempt.runId + '-review', inputTokens: 10, outputTokens: 5 })
+      }
+      const saved = outcome === '复用' || outcome === '独立新事实'
+      expect(db.select().from(conversations).get()?.lastProcessedSeq).toBe(saved ? later.seq : oldSource.seq)
+      expect(db.select().from(memories).all()).toHaveLength(outcome === '独立新事实' ? 3 : saved ? 2 : 1)
+      expect(db.select().from(memorySources).where(eq(memorySources.memoryId, old.memory.id)).all()
+        .some(({ messageId }) => messageId === source.id)).toBe(outcome === '复用')
+      if (outcome === '未展示编号') expect(runs[1]).toMatchObject({ status: 'failed', errorCode: 'E_INVALID_CANDIDATES' })
+      if (outcome === '补判时忘记') expect(runs[1]).toMatchObject({ status: 'cancelled', errorCode: 'E_MEMORY_STALE' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it.each(['排队', '调用前', '提交时'])('A13 在%s忘记来源，旧批次不能写回', async (phase) => {
     const { db } = companion
     const source = message('old-source')
