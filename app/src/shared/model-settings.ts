@@ -18,11 +18,22 @@ const serviceAddressSchema = z.string().trim().max(2048).refine((value) => {
   } catch { return false }
 }, '请填写不含账号、查询参数和片段的 HTTP 服务地址').transform((value) => value.replace(/\/+$/, ''))
 
+/** 思考档位：两家服务商都用 reasoning_effort 的 low/high/max。 */
+export const reasoningEffortSchema = z.enum(['low', 'high', 'max'])
+export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>
+
 /** 这里只支持已安装的 OpenAI 兼容适配器；供应商名字用于区分配置和用量记录。 */
 export const modelConnectionSchema = z.object({
   provider: z.enum(['zhipu', 'deepseek', 'openai-compatible']),
   model: z.string().trim().min(1).max(200).regex(/^[^\s\x00-\x1f]+$/),
   baseUrl: serviceAddressSchema,
+  // 显示名称只用于界面；旧配置没有这个字段，读取时按预设推导。
+  displayName: z.string().trim().min(1).max(60).optional(),
+  // 空值表示交给服务商默认值；温度上限按 OpenAI 兼容接口的通用范围。
+  temperature: z.number().min(0).max(2).nullable().optional(),
+  topP: z.number().min(0).max(1).nullable().optional(),
+  // 思考开关和档位分开存：关掉思考时保留档位，下次打开不用重选。
+  reasoning: z.object({ enabled: z.boolean(), effort: reasoningEffortSchema.nullable() }).strict().optional(),
   // 模型窗口是一次输入和输出的总容量；回复预留是在放历史前先留出的空位。
   contextWindowTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   outputReserveTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
@@ -44,6 +55,47 @@ export const DEEPSEEK_MODEL_CONNECTION: ModelConnection = {
 }
 
 type ModelService = Pick<ModelConnection, 'provider' | 'baseUrl'>
+
+/**
+ * 是否指向 DeepSeek 服务：供应商选了 DeepSeek，或自定义配置直接填官方地址。
+ * 两种写法的参数规则一样（温度、top_p、思考开关都按 DeepSeek 的限制处理）。
+ * @param connection 当前配置
+ * @returns 是否按 DeepSeek 的协议发送参数
+ */
+export function isDeepSeekService(connection: ModelService): boolean {
+  if (connection.provider === 'deepseek') return true
+  try { return new URL(connection.baseUrl).origin === new URL(DEEPSEEK_MODEL_CONNECTION.baseUrl).origin }
+  catch { return false }
+}
+
+/**
+ * 智谱 GLM-5.3 系列强制思考：传 disabled 会直接报错，界面必须锁成开启。
+ * @param connection 当前配置
+ * @returns 是否属于不能关闭思考的模型
+ */
+export function isThinkingForced(connection: Pick<ModelConnection, 'provider' | 'model'>): boolean {
+  return connection.provider === 'zhipu' && /^glm-5\.3/i.test(connection.model)
+}
+
+/**
+ * 这份配置实际是否开启思考；旧配置没有 reasoning 字段时按服务商默认值判断。
+ * @param connection 当前配置
+ * @returns 发送请求时是否启用思考
+ */
+export function reasoningEnabledFor(connection: Pick<ModelConnection, 'provider' | 'model' | 'reasoning'>): boolean {
+  return isThinkingForced(connection) || connection.reasoning?.enabled === true
+}
+
+/**
+ * 后台整理任务用的配置：DeepSeek 临时关闭思考，避免结构化输出被思考拖慢、加价。
+ * 智谱 GLM-5.3 关不掉，只能保持原样。
+ * @param connection 正式聊天保存的配置
+ * @returns 适合记忆整理等后台任务的配置
+ */
+export function withoutReasoning(connection: ModelConnection): ModelConnection {
+  if (!isDeepSeekService(connection)) return connection
+  return { ...connection, reasoning: { enabled: false, effort: null } }
+}
 
 /**
  * 看本次配置能否沿用原服务的密钥。改模型名可以沿用，换供应商或地址就要重填。

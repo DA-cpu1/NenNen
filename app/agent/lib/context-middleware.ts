@@ -51,9 +51,18 @@ export function createCompanionContextMiddleware(probeLimits: ModelInputLimits =
         const removed = new Set<number>()
         for (let groupIndex = 0; ; groupIndex += 1) {
           const prompt: ModelPrompt = envelope.prompt.filter((_message, position) => !removed.has(position))
-            .map((message) => message.role === 'system'
-              ? { role: 'system', content: message.content }
-              : { role: message.role, content: [{ type: 'text', text: message.content }] })
+            .map((message) => {
+              if (message.role === 'system') return { role: 'system' as const, content: message.content }
+              if (message.role === 'assistant') {
+                return { role: 'assistant' as const, content: [
+                  // 助手消息先把思考内容放回去：DeepSeek 带工具时要求原样回传 reasoning_content，
+                  // 少了这一段，下一轮请求会被供应商直接拒绝。
+                  ...(message.reasoning ? [{ type: 'reasoning' as const, text: message.reasoning }] : []),
+                  { type: 'text' as const, text: message.content },
+                ] }
+              }
+              return { role: 'user' as const, content: [{ type: 'text' as const, text: message.content }] }
+            })
           if (envelope.rememberSourceMessageId) {
             // 放在应用规则段，编号只给工具定位，用户原话仍单独在最后一条消息。
             prompt[0] = { role: 'system', content: envelope.prompt[0].content +

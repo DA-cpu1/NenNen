@@ -43,8 +43,12 @@ type FakeEvent = { type: string; data?: Record<string, unknown> }
 function appended(delta: string): FakeEvent {
   return { type: 'message.appended', data: { messageDelta: delta, sequence: 1, stepIndex: 0, turnId: 't1' } }
 }
-function messageDone(text: string): FakeEvent {
-  return { type: 'message.completed', data: { finishReason: 'stop', message: text, sequence: 2, stepIndex: 0, turnId: 't1' } }
+function messageDone(text: string, stepIndex = 0): FakeEvent {
+  return { type: 'message.completed', data: { finishReason: 'stop', message: text, sequence: 2, stepIndex, turnId: 't1' } }
+}
+/** 一步结束时供应商给出的完整思考内容。 */
+function reasoningDone(reasoning: string, stepIndex = 0): FakeEvent {
+  return { type: 'reasoning.completed', data: { reasoning, sequence: 1, stepIndex, turnId: 't1' } }
 }
 function stepStarted(index: number): FakeEvent {
   return { type: 'step.started', data: { modelId: 'fixed-model', sequence: 0, stepIndex: index, turnId: 't1' } }
@@ -115,6 +119,19 @@ describe('eve 回合事件消费（T06⑪a）', () => {
     }))
     expect(events).toEqual([{ type: 'text', delta: '暂时没有保存。' }, { type: 'done', replyId }])
     expect(replyRow().content).toBe('暂时没有保存。')
+  })
+
+  it('思考内容随最终回复入库，只取产生最终文字的那一步', async () => {
+    const { response } = fakeResponse([
+      stepStarted(0), reasoningDone('先想想要不要调工具。', 0),
+      { type: 'message.completed', data: { message: '我先查一下。', finishReason: 'tool-calls', stepIndex: 0, sequence: 2, turnId: 't1' } },
+      stepStarted(1), reasoningDone('查到结果了，可以回答。', 1), appended('答案'), messageDone('答案', 1), turnCompleted(),
+    ])
+    await drive(consumeEveTurn(companion.db, {
+      response, replyId, runId, estimatedInputTokens: 100, waitForToolDecision: true,
+    }))
+    // 工具中间步骤的思考不能混进最终助手消息，否则跨轮回传的内容和正文对不上。
+    expect(replyRow()).toMatchObject({ content: '答案', reasoningContent: '查到结果了，可以回答。' })
   })
 
   it('流式增量逐步入库，完成时按步骤用量精确记账', async () => {

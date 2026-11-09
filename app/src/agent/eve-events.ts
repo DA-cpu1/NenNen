@@ -37,6 +37,8 @@ export interface PendingTurnWrite {
   runId: string
   status: TurnOutcome['status']
   finalText: string
+  /** 最终回复对应步骤的思考内容；没有思考或供应商不返回时省略。 */
+  reasoning?: string
   usage: FinishAgentRunInput['usage']
   errorCode?: string
 }
@@ -55,7 +57,8 @@ export function finalizeTurnWrite(
   let saveErrorCode = 'E_REPLY_SAVE_FAILED'
   try {
     db.transaction((tx) => {
-      updateAssistantReply(tx, { messageId: write.replyId, content: write.finalText, status: write.status })
+      updateAssistantReply(tx, { messageId: write.replyId, content: write.finalText, status: write.status,
+        reasoningContent: write.reasoning })
       saveErrorCode = 'E_RUN_SAVE_FAILED'
       finishAgentRun(tx, {
         runId: write.runId, status: write.status, usage: write.usage,
@@ -116,6 +119,10 @@ export async function* consumeEveTurn(
   // 会话级用量是权威口径（含子代理消耗）；步骤级只在没有会话级时兜底求和。
   let sessionUsage: { inputTokens: number; outputTokens: number } | undefined
   let stepUsage = { inputTokens: 0, outputTokens: 0 }
+  // 思考内容按步骤暂存：一次回合可能先思考再调工具、再思考再回答，
+  // 跨轮只需要最终回答那一步的 reasoning_content，中间步骤不混进助手消息。
+  const reasoningByStep = new Map<number, string>()
+  let lastTextStep: number | undefined
   let terminal: TurnOutcome['status'] | undefined
   let errorCode: string | undefined
   let streamingWriteFailed = false
@@ -153,6 +160,14 @@ export async function* consumeEveTurn(
         if (terminal !== undefined && (event.type === 'message.appended' || event.type === 'message.completed')) continue
         // data 是 eve 给每类事件规定的载荷位置；switch 按事件名逐类翻译。
         switch (event.type) {
+          case 'reasoning.appended':
+            // 增量先拼起来，等 completed 到了再用权威全文覆盖。
+            reasoningByStep.set(event.data.stepIndex,
+              (reasoningByStep.get(event.data.stepIndex) ?? '') + event.data.reasoningDelta)
+            break
+          case 'reasoning.completed':
+            reasoningByStep.set(event.data.stepIndex, event.data.reasoning)
+            break
           case 'message.appended':
             streamingText += event.data.messageDelta
             if (!input.waitForToolDecision) {
@@ -165,6 +180,8 @@ export async function* consumeEveTurn(
             // eve 的结束原因区分「接下来调工具」与最终角色回复。前者没有可靠保存结果。
             if (input.waitForToolDecision && event.data.finishReason === 'tool-calls') break
             settledText += event.data.message
+            // 记住产生可见文字的最后一步，结束时只取这一步的思考内容。
+            if (event.data.message) lastTextStep = event.data.stepIndex
             persistStreaming()
             if (input.waitForToolDecision && event.data.message) yield { type: 'text', delta: event.data.message }
             break
@@ -212,7 +229,7 @@ export async function* consumeEveTurn(
             }
             break
           default:
-            // 其余事件（推理增量、工具输入等）首版不展示，也不写入数据库。
+            // 其余事件（工具输入等）首版不展示；思考内容已在上面单独收集。
             break
         }
       }
@@ -253,6 +270,8 @@ export async function* consumeEveTurn(
   // 即使中途有一段没存进去，这里仍用完整文字补写；只有真正写成才报告完成。
   const finalized = finalizeTurnWrite(db, {
     replyId: input.replyId, runId: input.runId, status: terminal, finalText,
+    // 没有思考事件（供应商不返回）时保持 undefined，数据库里留空。
+    reasoning: lastTextStep === undefined ? undefined : reasoningByStep.get(lastTextStep),
     usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, estimated: usageEstimated },
     errorCode,
   })

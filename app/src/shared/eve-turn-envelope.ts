@@ -10,6 +10,8 @@ const envelopeSchema = z.strictObject({
   version: z.literal(1),
   prompt: z.array(z.strictObject({
     role: z.enum(['system', 'user', 'assistant']), content: z.string(),
+    /** 助手回复的思考内容；带工具的思考模式跨轮必须原样回传，旧信封没有这项。 */
+    reasoning: z.string().optional(),
   })).min(3),
   modelWindowTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   maxOutputTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),

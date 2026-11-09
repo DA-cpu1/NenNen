@@ -203,30 +203,39 @@ try {
   await app.visible('保存配置')
   await app.input('document.querySelector("select")', deepSeek ? 'deepseek' : 'openai-compatible')
   if (deepSeek) {
-    await app.visible('请求会关闭深度思考。')
-    for (const [label, value] of [['模型', model], ['服务地址', 'https://api.deepseek.com'],
+    // 直接检查开关，确认预设默认关闭思考，同时允许用户打开。
+    await waitFor(() => app.evaluate('document.querySelector(\'[role="switch"][aria-checked="false"]:enabled\') !== null'),
+      'E_DEEPSEEK_THINKING_DEFAULT')
+    for (const [label, value] of [['模型 ID', model], ['API 地址', 'https://api.deepseek.com'],
       ['模型总容量', '1000000'], ['回复预留', '8192']]) {
       assert.equal(await app.evaluate(`${app.byLabel(label)}.value`), value)
     }
     await app.screenshot('deepseek-preset')
   } else {
-    for (const [label, value] of [['模型', model], ['模型总容量', '262144'], ['回复预留', '32768']]) {
+    for (const [label, value] of [['模型 ID', model], ['模型总容量', '262144'], ['回复预留', '32768']]) {
       await app.input(app.byLabel(label), value)
     }
   }
-  await app.input(app.byLabel('服务地址'), baseUrl)
-  await app.input(app.byLabel('API 密钥'), firstKey)
+  await app.input(app.byLabel('API 地址'), baseUrl)
+  await app.input('document.querySelector("#model-api-key")', firstKey)
+  await app.screenshot('settings-draft')
   await app.click('保存配置')
   await waitFor(() => app.state().then((value) => value?.credentialStorage === 'encrypted'), 'E_ENCRYPTED_SAVE')
   await waitFor(() => app.evaluate('[...document.querySelectorAll("button")].some(button => button.textContent === "测试连接" && !button.disabled)'), 'E_TEST_BUTTON_READY')
   assert.equal(requests.length, 0, '保存配置不应请求模型')
   await app.click('测试连接')
   await waitFor(() => app.state().then((value) => value?.ready), 'E_TOOL_TEST')
+  await app.screenshot('settings-saved')
+  await app.evaluate('[...document.querySelectorAll("h2")].find(h => h.textContent === "回复参数")?.scrollIntoView({ block: "start" })')
+  await delay(400)
+  await app.screenshot('settings-params')
   await app.click('下一步：试聊预览')
   await app.visible('试聊当前草稿')
   // 试聊按钮通过真实界面操作，不能绕过 preview 的服务层隔离。
   await app.input('document.querySelector("[aria-label=试聊输入框]")', '固定试聊问候')
   await app.click('发送', 'document.querySelector("[aria-label=草稿试聊]")')
+  await delay(1200)
+  await app.screenshot('preview-sent')
   await app.visible('固定回复：收到。')
   await waitFor(() => app.evaluate('[...document.querySelectorAll("button")].some(button => button.textContent === "下一步：开始相处" && !button.disabled)'), 'E_PREVIEW_FINISHED')
   await app.screenshot('preview')
@@ -275,11 +284,11 @@ try {
   assert.equal((await send('我们聊过的水彩画植物呢？')).status, 'done')
   assert(requests.at(-1).usedMemory)
   await app.click('设置', 'document.querySelector("nav[aria-label=应用页面]")')
-  await app.visible('更换凭据')
+  await app.visible('更换')
   const savedConnection = (await app.state()).settings.connection
   const beforeServiceChange = requests.length
   await app.input('document.querySelector("select")', 'zhipu')
-  await app.input(app.byLabel('服务地址'), baseUrl + '/other-service')
+  await app.input(app.byLabel('API 地址'), baseUrl + '/other-service')
   await app.visible('填写新服务的 API 密钥后再保存。')
   await app.click('保存配置')
   await app.visible('服务地址或供应商已更改，请重新填写对应的 API 密钥。')
@@ -288,7 +297,7 @@ try {
   await waitFor(() => app.evaluate('[...document.querySelectorAll("button")].some(button => button.textContent === "取消修改" && !button.disabled)'), 'E_REJECTED_SAVE_FINISHED')
   await app.click('取消修改')
   await app.visible('已取消修改。')
-  await app.click('更换凭据')
+  await app.click('更换')
   await app.visible('新 API 密钥')
   await app.input('document.querySelector("dialog input")', secondKey)
   await app.screenshot('replace-credential')
@@ -306,7 +315,7 @@ try {
     assert(!bytes.includes(Buffer.from(firstKey)) && !bytes.includes(Buffer.from(secondKey)))
   }
   await app.screenshot('configured')
-  await app.evaluate('document.querySelector("[aria-label=模型连接测试]").scrollIntoView({ block: "center" })')
+  await app.evaluate('document.querySelector("footer").scrollIntoView({ block: "end" })')
   await app.screenshot('configured-connection')
   for (const state of ['unsupported', 'failed']) {
     mode = state

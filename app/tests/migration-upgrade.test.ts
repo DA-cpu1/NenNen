@@ -68,7 +68,7 @@ describe('最小旧库升级样例（T04 步骤⑧）', () => {
     const records = upgraded.sqlite
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as Array<{ version: number }>
-    expect(records.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    expect(records.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
 
     // 旧数据一行不丢：老用户的版本号还是 3，没有被初始化逻辑重置成 0
     const state = upgraded.db.select().from(appState).where(eq(appState.id, 1)).get()
@@ -323,7 +323,7 @@ INSERT INTO no_such_table VALUES (1);
     const fixed = db.sqlite
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as Array<{ version: number }>
-    expect(fixed.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    expect(fixed.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
 
     db.close()
   })

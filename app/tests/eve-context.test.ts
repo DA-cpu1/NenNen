@@ -15,7 +15,7 @@ type ModelCallOptions = Parameters<ReturnType<typeof wrapLanguageModel>['doGener
 
 /** 只读取本步要核对的请求字段；这些固定测试资料不包含用户的正式聊天。 */
 interface ProviderRequest {
-  messages: Array<{ role: string; content: unknown; tool_calls?: unknown[]; tool_call_id?: string }>
+  messages: Array<{ role: string; content: unknown; reasoning_content?: string; tool_calls?: unknown[]; tool_call_id?: string }>
   max_tokens?: number
   max_completion_tokens?: number
   stream?: boolean
@@ -165,6 +165,23 @@ describe('eve 信封与实际供应商输入（T06⑩b）', () => {
       { role: 'user', content: '现在的问题' },
     ])
     expect(requests[0].max_tokens).toBe(1_000)
+  })
+
+  it('助手历史的思考内容会随信封还原成 reasoning_content', async () => {
+    const packed = encodeEveTurnEnvelope({
+      prompt: [
+        { role: 'system', content: '共同规则' }, { role: 'system', content: '完整人设' },
+        { role: 'user', content: '第一问' },
+        { role: 'assistant', content: '第一答', reasoning: '先想一下再答。' },
+        { role: 'user', content: '第二问' },
+      ],
+      modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+    })
+    await model.doGenerate({ prompt: [userMessage(packed)] })
+    expect(requests).toHaveLength(1)
+    // 这是 DeepSeek 带工具思考模式的硬要求：历史助手消息必须带回 reasoning_content。
+    expect(requests[0].messages.find((message) => message.role === 'assistant')?.reasoning_content)
+      .toBe('先想一下再答。')
   })
 
   it('流式路径同样还原信封并把输出上限送进真实请求', async () => {

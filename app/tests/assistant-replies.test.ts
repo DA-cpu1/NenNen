@@ -47,6 +47,21 @@ describe('角色回复保存与状态（T06③）', () => {
     expect(completed).toMatchObject({ content: '晚上好。', status: 'completed' })
   })
 
+  it('最终保存写入思考内容，重放同一结果不会重复改写', () => {
+    const reply = createAssistantReply(companion.db, { userMessageId, now })
+    const input = { messageId: reply.id, content: '晚上好。', status: 'completed' as const,
+      reasoningContent: '先判断时间，再问候。', now }
+    expect(updateAssistantReply(companion.db, input)).toMatchObject({
+      content: '晚上好。', status: 'completed', reasoningContent: '先判断时间，再问候。',
+    })
+    expect(updateAssistantReply(companion.db, { ...input, now: now + 1 })).toMatchObject({
+      reasoningContent: '先判断时间，再问候。',
+    })
+    // 同一段正文却换了思考内容，说明不是同一次结果，不能当成重放悄悄覆盖。
+    expect(() => updateAssistantReply(companion.db, { ...input, reasoningContent: '另一段思考' }))
+      .toThrow('E_REPLY_ALREADY_FINISHED')
+  })
+
   it.each(['failed', 'cancelled'] as const)('%s 保留已经显示的半截文字', (status) => {
     const reply = createAssistantReply(companion.db, { userMessageId, now })
     updateAssistantReply(companion.db, {

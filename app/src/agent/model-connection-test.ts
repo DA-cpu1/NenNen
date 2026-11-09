@@ -5,7 +5,7 @@
 import { APICallError, generateText, tool, ToolChoiceViolationError } from 'ai'
 import { z } from 'zod'
 import { createCompanionLanguageModel } from './model'
-import type { ModelConnection, ModelConnectionTest } from '../shared/model-settings'
+import { isDeepSeekService, type ModelConnection, type ModelConnectionTest } from '../shared/model-settings'
 
 /**
  * 发一次明确的工具能力测试；密钥只交给当前适配器的内存配置。
@@ -16,9 +16,15 @@ import type { ModelConnection, ModelConnectionTest } from '../shared/model-setti
  */
 export async function testModelConnection(connection: ModelConnection, apiKey: string, signal: AbortSignal): Promise<ModelConnectionTest> {
   try {
+    // DeepSeek 的思考模式会拒绝「强制指定工具」的检查（T11 实测）。
+    // 所以测试时临时关闭思考，只验证地址、密钥、模型和工具能力；
+    // 正式聊天仍按用户保存的思考设置发送，不会偷偷改掉用户的配置。
+    const tested = isDeepSeekService(connection)
+      ? { ...connection, reasoning: { enabled: false, effort: null } }
+      : connection
     const inputSchema = z.object({ confirmation: z.literal('ok') }).strict()
     const result = await generateText({
-      model: createCompanionLanguageModel(apiKey, connection),
+      model: createCompanionLanguageModel(apiKey, tested),
       prompt: '这是软件连接测试。请调用 connection_check 工具，confirmation 填写 ok。',
       tools: { connection_check: tool({ description: '确认可以返回工具调用，不修改任何用户资料。',
         inputSchema }) },

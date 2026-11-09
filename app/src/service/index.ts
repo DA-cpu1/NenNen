@@ -28,6 +28,7 @@ import { createChatTurnService } from './chat-turns'
 import { createMemoryManagement } from './memory-management'
 import { createModelSettingsService } from './model-settings'
 import type { ModelConnection } from '../shared/model-settings'
+import { withoutReasoning } from '../shared/model-settings'
 import { MODEL_CONTEXT_WINDOW_TOKENS, MODEL_OUTPUT_RESERVE_TOKENS } from '../shared/model-limits'
 import { recoverInterruptedTurns } from '../agent/turn-runner'
 import { RIKKA_SAMPLE } from '../shared/character-sample'
@@ -367,7 +368,8 @@ function main(): void {
     if (closing) { await replacement.stop(); throw new Error('E_BACKEND_STOPPING') }
     eve = replacement
     options.modelApiKey = key
-    memoryModel = createCompanionLanguageModel(key, connection)
+    // 记忆整理只做结构化抽取，不需要思考；DeepSeek 关闭思考可少等待、少花输出费用。
+    memoryModel = createCompanionLanguageModel(key, withoutReasoning(connection))
     memoryWorker?.wake()
   }
 

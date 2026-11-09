@@ -46,7 +46,7 @@ describe('基础设置', () => {
 })
 
 describe('迁移执行', () => {
-  it('全新库执行迁移：版本登记 10 条，app_state 初始单行', () => {
+  it('全新库执行迁移：版本登记 11 条，app_state 初始单行', () => {
     runMigrations(companion.sqlite)
     const records = companion.sqlite
       .prepare('SELECT version FROM schema_migrations')
@@ -62,6 +62,7 @@ describe('迁移执行', () => {
       { version: 8 },
       { version: 9 },
       { version: 10 },
+      { version: 11 },
     ])
     const rows = companion.db.select().from(appState).all()
     expect(rows).toEqual([{ id: 1, globalMemoryEpoch: 0 }])
@@ -72,7 +73,7 @@ describe('迁移执行', () => {
     const count = companion.sqlite
       .prepare('SELECT COUNT(*) AS n FROM schema_migrations')
       .get() as { n: number }
-    expect(count.n).toBe(10)
+    expect(count.n).toBe(11)
   })
 
   it('重开同一数据库文件后再跑迁移仍不重复', () => {
@@ -82,7 +83,7 @@ describe('迁移执行', () => {
       const count = second.sqlite
         .prepare('SELECT COUNT(*) AS n FROM schema_migrations')
         .get() as { n: number }
-      expect(count.n).toBe(10)
+      expect(count.n).toBe(11)
     } finally {
       second.close()
     }

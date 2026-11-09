@@ -99,6 +99,8 @@ export interface UpdateAssistantReplyInput {
   messageId: string
   content: string
   status: AssistantReplyStatus
+  /** 思考内容只在最终保存时传入；进行中的流式更新不碰这一列。 */
+  reasoningContent?: string
   now?: number
 }
 
@@ -151,10 +153,16 @@ export function updateAssistantReply(db: BetterSQLite3Database, input: UpdateAss
     )).get()
     if (!reply) throw new Error('E_REPLY_NOT_FOUND')
     if (reply.status !== 'pending' && reply.status !== 'streaming') {
-      if (reply.status === input.status && reply.content === input.content) return reply
+      // 重放同一份结果时，正文和思考内容都要一致，避免旧结果覆盖新的思考。
+      if (reply.status === input.status && reply.content === input.content
+        && (input.reasoningContent === undefined || reply.reasoningContent === input.reasoningContent)) return reply
       throw new Error('E_REPLY_ALREADY_FINISHED')
     }
-    const updated = tx.update(messages).set({ content: input.content, status: input.status })
+    // 只有明确传入思考内容时才写这一列；流式更新保持原值，不会被空字符串抹掉。
+    const patch = input.reasoningContent === undefined
+      ? { content: input.content, status: input.status }
+      : { content: input.content, status: input.status, reasoningContent: input.reasoningContent }
+    const updated = tx.update(messages).set(patch)
       .where(eq(messages.id, reply.id)).returning().get()!
     tx.update(conversations).set({ lastMessageAt: input.now ?? Date.now() })
       .where(eq(conversations.id, reply.conversationId)).run()

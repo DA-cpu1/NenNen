@@ -30,7 +30,7 @@ type TurnPhase = 'idle' | 'sending' | 'stopping'
 
 /** 固定失败码对应可执行的建议；未知失败保留固定码，方便定位，不显示供应商原始报错。 */
 const failureHints: Record<string, string> = {
-  E_CONTEXT_BUDGET_EXCEEDED: '本轮内容超过输入预算，请缩短消息或人设后再发送。',
+  E_CONTEXT_BUDGET_EXCEEDED: '本轮内容超过输入预算：请调大模型总容量或减小回复预留，也可缩短消息或人设后再发送。',
   AGENT_UNAVAILABLE: '模型尚未连接，请先检查模型配置后重试。',
   TURN_IN_PROGRESS: '这个角色仍在回复，请等回复结束或先停止。',
   E_TURN_TIMEOUT: '本轮等待已超过90秒，回复已停止，可以重试。',

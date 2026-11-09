@@ -21,6 +21,8 @@ export interface ModelInputLimits {
 export interface ContextPromptMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
+  /** 助手回复的思考内容；旧消息没有这一段，预算统计会一起算进去。 */
+  reasoning?: string
 }
 
 /** 返回估算口径和最终上限，不能把它登记成供应商报告的精确用量。 */
@@ -93,6 +95,8 @@ function buildPrompt(
   for (const message of history) prompt.push({
     role: message.role === 'user' ? 'user' : 'assistant',
     content: message.role === 'proactive' ? '【主动消息】\n' + message.content : message.content,
+    // 只有助手回复带思考内容；用户消息和旧消息没有这一段。
+    ...(message.role === 'assistant' && message.reasoning ? { reasoning: message.reasoning } : {}),
   })
   prompt.push({ role: 'user', content: context.currentMessage.content })
   return prompt

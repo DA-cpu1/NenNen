@@ -26,6 +26,8 @@ export interface ContextMessage {
   seq: number
   role: 'user' | 'assistant' | 'proactive'
   content: string
+  /** 助手回复的思考内容；带工具的思考模式跨轮需要原样回传，旧消息为空。 */
+  reasoning?: string
   replyToId: string | null
   createdAt: number
 }
@@ -79,7 +81,8 @@ function isUsable(message: typeof messages.$inferSelect): boolean {
 function toContextMessage(message: typeof messages.$inferSelect): ContextMessage {
   return {
     id: message.id, seq: message.seq, role: message.role as ContextMessage['role'],
-    content: message.content, replyToId: message.replyToId, createdAt: message.createdAt,
+    content: message.content, reasoning: message.reasoningContent ?? undefined,
+    replyToId: message.replyToId, createdAt: message.createdAt,
   }
 }
 

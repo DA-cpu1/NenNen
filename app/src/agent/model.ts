@@ -5,10 +5,14 @@
  */
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { generateText } from 'ai'
-import { DEEPSEEK_MODEL_CONNECTION, DEFAULT_MODEL_CONNECTION, modelConnectionSchema, type ModelConnection } from '../shared/model-settings'
+import {
+  DEFAULT_MODEL_CONNECTION, isDeepSeekService, modelConnectionSchema,
+  reasoningEnabledFor, type ModelConnection,
+} from '../shared/model-settings'
 
 /**
  * 用现有配置建立模型连接。密钥只留在调用进程内存中。
+ * 温度、Top P、思考开关和档位都在这里统一写进请求体，保证连接测试、聊天和试聊发同一套参数。
  * @param apiKey 配置提供的密钥
  * @param connection 公开模型配置；旧固定检查可只传本机模拟地址
  * @returns 可交给 AI SDK 的语言模型
@@ -17,14 +21,31 @@ export function createCompanionLanguageModel(apiKey: string, connection: ModelCo
   const checked = modelConnectionSchema.parse(typeof connection === 'string'
     ? { ...DEFAULT_MODEL_CONNECTION, baseUrl: connection } : connection)
   // 自定义配置也可能直接填 DeepSeek 官方地址。origin 比较协议、主机和端口，不比较路径。
-  const isDeepSeek = checked.provider === 'deepseek' || new URL(checked.baseUrl).origin === DEEPSEEK_MODEL_CONNECTION.baseUrl
+  const deepSeek = isDeepSeekService(checked)
+  const zhipu = checked.provider === 'zhipu'
+  const thinkingEnabled = reasoningEnabledFor(checked)
+  // DeepSeek 思考模式下温度不生效（官方文档：设置也不会报错，但没有作用）。
+  // 与其发出去让用户以为生效，不如不发，和界面上的「由模型决定」保持一致。
+  const temperatureIgnored = deepSeek && thinkingEnabled
   return createOpenAICompatible({
     name: checked.provider,
     baseURL: checked.baseUrl,
     apiKey,
     includeUsage: true,
-    // 请求体就是发给供应商的那包资料。DeepSeek 默认思考，思考模式下会拒绝测试指定的工具。
-    transformRequestBody: isDeepSeek ? (body) => ({ ...body, thinking: { type: 'disabled' } }) : undefined,
+    // 请求体就是发给供应商的那包资料，最后一步统一改写成用户保存的参数。
+    transformRequestBody: (body) => {
+      const next: Record<string, unknown> = { ...body }
+      // DeepSeek 无论开关都显式发送 thinking，避免默认思考导致行为和界面不一致。
+      // 智谱只在保存过思考设置时发送：GLM-5.3 只能 enabled，旧配置不带这个字段时交给服务商默认值。
+      if (deepSeek || (zhipu && checked.reasoning !== undefined)) {
+        next.thinking = { type: thinkingEnabled ? 'enabled' : 'disabled' }
+      }
+      // 档位只在思考开启时发送；「跟随模型」用空值表示，不写进请求体。
+      if (thinkingEnabled && checked.reasoning?.effort) next.reasoning_effort = checked.reasoning.effort
+      if (!temperatureIgnored && checked.temperature != null) next.temperature = checked.temperature
+      if (checked.topP != null) next.top_p = checked.topP
+      return next
+    },
   })(checked.model)
 }
 

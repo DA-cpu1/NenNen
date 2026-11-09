@@ -144,6 +144,10 @@ export const messages = sqliteTable('messages', {
   role: text('role').notNull(),
   /** 消息正文 */
   content: text('content').notNull(),
+  /** 助手回复时的思考内容（DeepSeek/智谱的 reasoning_content）。
+   *  带工具的思考模式要求下一轮把历史思考原样回传，所以必须和正文一起存；
+   *  用户消息和主动消息没有这一段，保持为空 */
+  reasoningContent: text('reasoning_content'),
   /** 完成状态：pending 等待中 / streaming 生成中 / completed 完成 /
    *  cancelled 已取消 / failed 失败（流式回复中断时就停在中间状态） */
   status: text('status').notNull(),

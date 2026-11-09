@@ -29,8 +29,22 @@ describe('模型设置输入', () => {
     expect(modelConnectionSchema.safeParse({ ...DEFAULT_MODEL_CONNECTION, outputReserveTokens: 1_000_000 }).success).toBe(false)
     expect(modelConnectionSchema.safeParse({ ...DEFAULT_MODEL_CONNECTION, contextWindowTokens: 0 }).success).toBe(false)
   })
-  it('密钥只能出现在单独的保存请求，不能进入公开配置', () => {
-    expect(storedModelSettingsSchema.safeParse({ ...settings, apiKey: 'fake-test-key' }).success).toBe(false)
+  it('接受温度、Top P 和思考档位，并拒绝越界值', () => {
+    expect(modelConnectionSchema.safeParse({ ...DEFAULT_MODEL_CONNECTION, displayName: '我的配置',
+      temperature: 1.2, topP: 0.98, reasoning: { enabled: true, effort: 'max' } }).success).toBe(true)
+    expect(modelConnectionSchema.safeParse({ ...DEFAULT_MODEL_CONNECTION, temperature: 3 }).success).toBe(false)
+    expect(modelConnectionSchema.safeParse({ ...DEFAULT_MODEL_CONNECTION, topP: 1.5 }).success).toBe(false)
+    expect(modelConnectionSchema.safeParse({ ...DEFAULT_MODEL_CONNECTION, displayName: '  ' }).success).toBe(false)
+    expect(modelConnectionSchema.safeParse({ ...DEFAULT_MODEL_CONNECTION,
+      reasoning: { enabled: true, effort: 'medium' } }).success).toBe(false)
+  })
+  it('旧配置没有新字段也能读取，不会被当成损坏配置', () => {
+    const legacy = { provider: 'deepseek', model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com',
+      contextWindowTokens: 1_000_000, outputReserveTokens: 8_192 }
+    expect(modelConnectionSchema.safeParse(legacy).success).toBe(true)
+    expect(storedModelSettingsSchema.safeParse({ ...settings, connection: legacy }).success).toBe(true)
+  })
+  it('密钥只能出现在单独的保存请求，不能进入公开配置', () => {    expect(storedModelSettingsSchema.safeParse({ ...settings, apiKey: 'fake-test-key' }).success).toBe(false)
     expect(modelConnectionSchema.safeParse({ ...DEFAULT_MODEL_CONNECTION, apiKey: 'fake-test-key' }).success).toBe(false)
     expect(saveModelSettingsSchema.safeParse({ requestId: reference, connection: DEFAULT_MODEL_CONNECTION,
       apiKey: 'fake-test-key' }).success).toBe(true)

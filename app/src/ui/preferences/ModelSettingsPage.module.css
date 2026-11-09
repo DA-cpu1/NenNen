@@ -1,49 +1,140 @@
-/** 模型设置沿用图 07 的双层导航、白色卡片和淡紫角色栏，窄窗口保留表单宽度。 */
-.layout { display: grid; grid-template-columns: 124px minmax(0, 1fr) 20%; flex: 1; min-width: 0; height: 100%; }
-.sections { padding: 18px 8px; border-right: 1px solid var(--border); background: #fafbff; }
-.sectionActive { display: flex; align-items: center; gap: 8px; padding: 12px 7px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 600; }
-.content { overflow-y: auto; min-width: 0; padding: 22px 20px 28px; }
-.heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 20px; }
-.heading h1, .empty h1 { margin: 0; font-size: 25px; letter-spacing: -.5px; }
-.heading p { color: var(--muted); margin: 5px 0 0; font-size: 13px; }
-.unsaved { color: #a86918; font-size: 12px; white-space: nowrap; }
-.fields { border: 0; padding: 0; margin: 0; min-width: 0; }
-.card { border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: 17px; margin-bottom: 14px; min-width: 0; }
-.card h2 { display: flex; align-items: center; gap: 9px; margin: 0 0 16px; font-size: 16px; }
-.card h2 > span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: var(--accent-soft-weak); color: var(--accent); font-size: 21px; }
-.row { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 13px; font-size: 13px; }
-.row input, .row select { box-sizing: border-box; width: 100%; min-width: 0; height: 36px; padding: 6px 9px; border: 1px solid #ced5f1; border-radius: 5px; background: #fff; color: var(--ink); font-size: 13px; }
-.row input::placeholder { color: #9299b2; }
-.fieldHint { margin: 8px 0 0; font-size: 12px; color: var(--muted); line-height: 1.65; }
-.capacity { margin-top: 18px; font-size: 12px; color: var(--muted); }
-.capacity summary { cursor: pointer; color: var(--accent); }
-.capacity p { line-height: 1.6; }
-.keyField { display: flex; min-width: 0; gap: 5px; align-items: center; }
-.keyField input { flex: 1; }
-.storage { color: #277458; font-size: 12px; margin: 11px 0 13px; overflow-wrap: anywhere; }
-.cardFooter { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 18px; padding-top: 13px; border-top: 1px solid #eff1fa; }
-.cardFooter p, .hint { font-size: 12px; color: var(--muted); line-height: 1.65; margin: 0; }
-.layout button, .empty button { border: 1px solid #ced5f1; border-radius: 6px; padding: 8px 12px; min-height: 36px; background: #fff; color: var(--accent); font-size: 12px; cursor: pointer; }
-.layout button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; white-space: nowrap; }
-.layout button.danger { color: var(--danger); border-color: #ecc2cd; }
-.layout button:disabled, .fields:disabled { opacity: .58; cursor: default; }
-.actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.status { font-size: 13px; padding: 11px; background: var(--accent-soft-weak); border-radius: 5px; }
-.warning { font-size: 13px; padding: 11px; background: #fff4de; color: #94621a; border-radius: 5px; }
-.testActions { display: flex; flex-wrap: wrap; gap: 8px; }
-.credentialLabel { display: block; font-size: 13px; margin-bottom: 9px; }
-.credentialInput { box-sizing: border-box; width: 100%; height: 38px; padding: 8px 10px; border: 1px solid #ced5f1; border-radius: 5px; color: var(--ink); margin-bottom: 12px; }
-.error, .notice { font-size: 13px; line-height: 1.7; padding: 11px 13px; border-radius: 6px; overflow-wrap: anywhere; }
+/**
+ * 模型与连接页的样式：单列全宽、字段两列排布、底部固定操作栏。
+ * 版式按 2026-11-09 的设置页设计稿；颜色仍取 global.css 的公共变量，
+ * 这样切到聊天或记忆页时不会突然换一套配色。
+ *
+ * 注意：底部操作栏在表单外面单独占一行，内容区自己滚动。
+ * 这样窗口再矮，保存和测试按钮也不会被表单挤到看不见的地方。
+ */
+
+/* 整页：占满外壳右侧，纵向分成「可滚动内容」和「固定底栏」。 */
+.layout { display: flex; flex: 1; min-width: 0; height: 100%; background: var(--bg); }
+.form { display: flex; flex: 1; min-width: 0; flex-direction: column; }
+.content { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 26px 20px; }
+
+/* 标题区：左边标题和说明，右边当前使用状态。 */
+.heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.heading h1, .empty h1 { margin: 0; font-size: 26px; letter-spacing: -.4px; }
+.heading p { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+.headingSide { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+
+/* 「当前使用 … · 思考关闭」：淡紫底的小胶囊，只读展示，不承担操作。 */
+.currentPill { display: inline-flex; align-items: center; gap: 5px; padding: 8px 12px; border: 1px solid #e5e1ff;
+  border-radius: 7px; background: #f5f3ff; color: #5a4fa8; font-size: 12px; white-space: nowrap; }
+.currentPill strong { color: var(--ink); font-weight: 600; }
+
+/* 快速配置：一组预设按钮，点一下就把整份连接资料换成该预设。 */
+.presetBar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.presetLabel { margin-right: 2px; font-size: 12px; color: var(--muted); }
+.layout button.preset, .layout button.presetActive { min-height: 32px; padding: 6px 12px; border: 1px solid #dde2f2;
+  border-radius: 6px; background: #fff; color: #3b466f; font-size: 12px; }
+.layout button.preset:hover:not(:disabled) { border-color: #c9c2ff; color: var(--accent); }
+.layout button.presetActive { border-color: #d3ccff; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* 白卡片：连接配置和回复参数各一张，圆角和描边与角色设置页一致。 */
+.card { min-width: 0; margin-bottom: 14px; padding: 18px 20px 20px; border: 1px solid var(--border);
+  border-radius: 10px; background: #fff; }
+.cardHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.cardHead h2 { margin: 0; font-size: 16px; }
+.cardHint { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+/* 字段分组本身不带框线：卡片负责外观，fieldset 只负责「忙碌时整组禁用」。 */
+.fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+
+/* 两列字段：窄窗口会自动折成一列（见文件末尾的媒体查询）。 */
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px; }
+.field { display: flex; min-width: 0; flex-direction: column; gap: 7px; font-size: 13px; }
+.fieldLabel { color: #3b466f; font-size: 12.5px; font-weight: 500; }
+.fieldLabel em { margin-left: 2px; color: #8b93b3; font-style: normal; font-weight: 400; }
+.fieldHint { margin: 0; font-size: 11.5px; line-height: 1.6; color: var(--muted); }
+.warningHint { margin: 0; font-size: 11.5px; line-height: 1.6; color: #a86918; }
+
+/* 输入框和下拉框共用一套尺寸；禁用的占位字段用灰底，和可编辑项一眼能分开。 */
+.field input, .field select, .keyRow input { box-sizing: border-box; width: 100%; min-width: 0; height: 38px;
+  padding: 8px 10px; border: 1px solid #ced5f1; border-radius: 6px; background: #fff; color: var(--ink); font-size: 13px; }
+.field input::placeholder, .keyRow input::placeholder { color: #9299b2; }
+.field input:disabled, .field select:disabled { background: #f5f6fb; color: #8b93b3; cursor: default; }
+
+/* API 密钥单独一行：输入框可继续输入新密钥，右边「更换」走独立弹窗。 */
+.keyBlock { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.keyRow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.keyRow input { flex: 1; }
+.storageRow { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.storage { font-size: 12px; color: #277458; overflow-wrap: anywhere; }
+.inlineActions { display: flex; align-items: center; gap: 10px; }
+.layout button.linkButton { min-height: 0; padding: 0; border: 0; background: none; color: var(--muted);
+  font-size: 12px; text-decoration: underline; }
+.layout button.linkButton:hover:not(:disabled) { color: var(--danger); }
+
+/* 思考模式与等级：浅底小面板，把两个相关字段框在一起。 */
+.thinkingBox { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px;
+  margin-top: 16px; padding: 14px 16px; border: 1px solid #eef0f9; border-radius: 8px; background: #fbfbff; }
+/* 思考开关：按钮只画一个滑块和文字，不继承普通按钮的边框和底色。 */
+.layout button.toggle { display: inline-flex; align-items: center; gap: 9px; height: 38px; min-height: 0;
+  padding: 0; border: 0; background: none; color: var(--ink); font-size: 12.5px; cursor: pointer; }
+.layout button.toggle:disabled { opacity: 1; cursor: default; }
+.toggleTrack { position: relative; flex-shrink: 0; width: 40px; height: 22px; border-radius: 999px; background: #d9dcec; }
+.layout button.toggle.toggleOn .toggleTrack { background: var(--accent); }
+.toggleThumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px #0002; transition: transform .16s ease; }
+.toggleOn .toggleThumb { transform: translateX(18px); }
+
+/* 识图说明：只是告诉用户本地聊天只收文字，不是可调开关。 */
+.infoRow { display: flex; align-items: center; gap: 14px; margin-top: 16px; font-size: 12.5px; color: var(--muted); }
+.infoLabel { color: #3b466f; font-weight: 500; }
+
+/* 容量折叠区：数字不对时默认展开，避免保存后才发现容量填错。 */
+.capacity { margin-top: 16px; padding-top: 14px; border-top: 1px solid #f0f2fa; }
+.capacity summary { cursor: pointer; color: var(--accent); font-size: 12.5px; }
+.capacity p { margin: 10px 0 0; font-size: 11.5px; line-height: 1.7; color: var(--muted); }
+.capacity .grid2 { margin-top: 12px; }
+
+/* 底部固定栏：左边是保存状态和连接状态，右边是三个操作。 */
+.footer { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 16px;
+  padding: 12px 26px; border-top: 1px solid var(--border); background: #fff; }
+.footerStatus { display: flex; min-width: 0; flex-direction: column; gap: 4px; font-size: 12px; }
+.statusLine { display: inline-flex; align-items: center; gap: 7px; color: #a86918; }
+.statusLineSaved { color: var(--muted); }
+.dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: #d99a2b; }
+.dotSaved { background: #35a06b; }
+.statusText { color: var(--muted); overflow-wrap: anywhere; }
+.statusError { color: var(--danger); overflow-wrap: anywhere; }
+.footerActions { display: flex; align-items: center; flex-shrink: 0; flex-wrap: wrap; gap: 8px; }
+
+/* 按钮基线：白底紫字；主按钮实心紫。danger 只用于删除凭据。 */
+.layout button, .empty button { min-height: 36px; padding: 8px 13px; border: 1px solid #ced5f1; border-radius: 6px;
+  background: #fff; color: var(--accent); font-size: 12.5px; cursor: pointer; }
+.layout button:hover:not(:disabled), .empty button:hover:not(:disabled) { border-color: #b9b0ff; }
+.layout button.primary { border-color: var(--accent); background: var(--accent); color: #fff; font-weight: 600; white-space: nowrap; }
+.layout button.primary:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); }
+.layout button.danger { border-color: #ecc2cd; color: var(--danger); }
+.layout button:disabled, .fields:disabled { opacity: .55; cursor: default; }
+
+/* 错误和提示条：都放在表单末尾，离底栏最近，保存后第一眼能看到。 */
+.error, .notice { margin: 0 0 12px; padding: 10px 13px; border-radius: 6px; font-size: 12.5px;
+  line-height: 1.7; overflow-wrap: anywhere; }
 .error { color: var(--danger); background: #fff1f4; }
 .notice { color: #22694d; background: #eaf7ef; }
-.art { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; overflow: hidden; background: radial-gradient(ellipse at 40% 35%, #fff 0, #eeeaff 70%, #e1e7ff 100%); border-left: 1px solid var(--border); }
-.art img { width: 100%; max-height: 75%; object-fit: contain; }
-.art > div { align-self: stretch; padding: 20px; color: #514b87; }
-.art strong { font-size: 26px; }
-.art p { font-size: 12px; line-height: 1.8; }
-.avatar { display: grid; place-items: center; width: 82px; height: 82px; border-radius: 50%; background: #fff9; color: var(--accent); font-size: 34px; }
+.hint { margin: 0; font-size: 12px; line-height: 1.65; color: var(--muted); }
+
+/* 更换凭据弹窗沿用同一份输入样式，弹窗挂在页面根节点下也能取到。 */
+.credentialLabel { display: block; margin-bottom: 9px; font-size: 13px; }
+.credentialInput { box-sizing: border-box; width: 100%; height: 38px; margin-bottom: 12px; padding: 8px 10px;
+  border: 1px solid #ced5f1; border-radius: 6px; color: var(--ink); }
+
+/* 配置尚未读到时只显示标题和原因，不渲染空表单。 */
 .empty { padding: 32px; }
-.layout.compact { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
-/* 先收起装饰，再把次级导航移到上方，避免最小窗口中表单被压成几字一行。 */
-@media (max-width: 880px) { .layout { grid-template-columns: 112px minmax(0, 1fr); } .art { display: none; } }
-@media (max-width: 740px) { .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); } .sections { padding: 8px 14px; border-bottom: 1px solid var(--border); border-right: 0; } .sectionActive { display: inline-flex; padding: 8px; } .content { padding: 18px 14px; } .row { grid-template-columns: 76px minmax(0, 1fr); } }
+.empty p { color: var(--muted); }
+
+/* 首次使用引导里没有外层标题区，收紧内边距，把空间让给表单。 */
+.layout.compact .content { padding: 0 4px 12px; }
+.layout.compact .footer { padding: 12px 4px 0; border-top: 0; background: transparent; }
+
+/* 窄窗口：两列折成一列，底栏允许换行，避免按钮被压出窗口。 */
+@media (max-width: 820px) {
+  .content { padding: 18px 16px; }
+  .grid2, .thinkingBox { grid-template-columns: minmax(0, 1fr); }
+  .footer { flex-wrap: wrap; padding: 12px 16px; }
+  .heading { flex-direction: column; align-items: stretch; }
+  .headingSide { justify-content: flex-start; }
+}

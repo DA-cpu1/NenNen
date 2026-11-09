@@ -266,8 +266,14 @@ CREATE TABLE context_exclusions (
 );
 `,
   },
+  {
+    version: 11,
+    summary: '保存助手回复的思考内容，供带工具的思考模式跨轮回传（T11）',
+    sql: `
+ALTER TABLE messages ADD COLUMN reasoning_content TEXT;
+`,
+  },
 ]
-
 /** 给一份 SQL 算"指纹"（sha256）：同样的内容永远得到同一串字符，
  * 改一个标点指纹就整个变。用来发现"单子被事后改过" */
 function checksumOf(sql: string): string {

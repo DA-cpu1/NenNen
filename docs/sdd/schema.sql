@@ -62,6 +62,7 @@ CREATE TABLE messages (
   seq INTEGER NOT NULL CHECK (seq > 0),
   role TEXT NOT NULL CHECK (role IN ('user','assistant','proactive')),
   content TEXT NOT NULL,
+  reasoning_content TEXT,
   status TEXT NOT NULL CHECK (status IN ('pending','streaming','completed','cancelled','failed')),
   client_request_id TEXT,
   reply_to_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
