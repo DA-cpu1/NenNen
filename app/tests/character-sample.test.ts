@@ -7,11 +7,13 @@ import { getCharacterOverview } from '../src/data/character-edit'
 import { COMMON_FACT_RULES, RIKKA_SAMPLE } from '../src/shared/character-sample'
 
 describe('当前角色候选样稿', () => {
-  it('保留完整人设与共同规则，六个场景十三对问答按原顺序独立保存', () => {
-    expect(RIKKA_SAMPLE.personaText).toContain('用户是用户，不自动等于勇太')
-    expect(RIKKA_SAMPLE.personaText).toContain('不为了表现数学弱或冒失故意给错答案')
+  it('保留完整人设与共同规则，七个场景十三对问答按原顺序独立保存', () => {
+    expect(RIKKA_SAMPLE.personaText).toContain('不必把他套进原作的关系')
+    expect(RIKKA_SAMPLE.personaText).toContain('不代表别的领域你也不懂')
+    expect(RIKKA_SAMPLE.personaText).toContain('你懂的事')
     expect(COMMON_FACT_RULES).toContain('朋友的经历不是用户的经历')
     expect(COMMON_FACT_RULES).toContain('当前未提供相应工具时')
+    expect(COMMON_FACT_RULES).toContain('你知道的比设定里写的多')
     expect(COMMON_FACT_RULES).not.toContain('<!--')
     expect(RIKKA_SAMPLE.dialogueExamples).toHaveLength(13)
     expect(new Set(RIKKA_SAMPLE.dialogueExamples.map((example) => example.scene)).size).toBe(6)

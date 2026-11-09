@@ -1,5 +1,5 @@
 /**
- * 把用户要求恢复的角色候选样稿 0.2 随应用打包，供新库初始化和编辑页主动载入。
+ * 把当前角色候选样稿 0.4 随应用打包，供新库初始化和编辑页主动载入。
  * 载入和读取检查只确认内容接通；角色质量仍要由真实试聊与人工评价判断。
  * ?raw 让构建工具把 Markdown 当文字放进产物，不在用户电脑上另找开发文件。
  */
@@ -15,7 +15,7 @@ function withoutComment(source: string): string {
 
 /**
  * 每个场景的连续问答保持原次序；示例独立于真实历史，不冒充用户说过的话。
- * @returns 当前候选样稿的十三对问答；源文件格式坏了则明确报错
+ * @returns 当前候选样稿七个场景的十三对问答；源文件格式坏了则明确报错
  */
 function readExamples(): DialogueExample[] {
   const examples: DialogueExample[] = []

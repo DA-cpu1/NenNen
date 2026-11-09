@@ -204,13 +204,13 @@ function CharacterEditor({ character, reload, loadError, modelReady, leaving, on
       busy={previewBusy} onBusyChange={setPreviewBusy} onClose={() => setPreviewOpen(false)} />}
     <footer className={styles.footer}><p>保存生成新版本，从下一轮聊天生效。</p><div>
       <button type="button" className={styles.secondary} disabled={busy || imageBusy || blocked}
-        onClick={() => setSampleRequested(true)}>载入六花样稿 0.2</button>
+        onClick={() => setSampleRequested(true)}>载入六花样稿 0.4</button>
       <button type="button" className={styles.secondary} disabled={busy || imageBusy || !dirty} onClick={() => setCancelRequested(true)}>取消修改</button>
       <button type="button" className={styles.secondary} disabled={busy || imageBusy || blocked}
         onClick={() => setPreviewOpen(true)}>试聊当前草稿</button>
       <button type="button" className={styles.primary} disabled={busy || imageBusy || blocked || !dirty} onClick={() => void save()}>{busy ? '正在处理…' : '保存人设版本'}</button>
     </div></footer>
-    {sampleRequested && <ConfirmationDialog title="载入六花样稿 0.2？" onCancel={() => setSampleRequested(false)}
+    {sampleRequested && <ConfirmationDialog title="载入六花样稿 0.4？" onCancel={() => setSampleRequested(false)}
       actions={<><button autoFocus className={styles.secondary} onClick={() => setSampleRequested(false)}>取消</button>
         <button className={styles.primary} onClick={() => {
           changeDraft(draftWithRikkaSample(draft)); setSampleRequested(false)
