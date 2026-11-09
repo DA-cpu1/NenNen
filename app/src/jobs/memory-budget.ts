@@ -6,6 +6,7 @@ import { finishAgentRun } from '../data/agent-runs'
 import { listCurrentMemories } from '../data/memories'
 import { readSetting } from '../data/settings'
 import { agentRuns, memoryJobs } from '../data/tables'
+import { findMemoryReviewCandidates } from '../memory/review-candidates'
 import { commitMemoryCandidates } from './commit-candidates'
 import { prepareMemoryExtraction, type ExtractionResult, type PreparedMemoryExtraction } from './extract-candidates'
 import { claimMemoryJob, readMemoryJobWork, type MemoryJob, type MemoryJobWork } from './memory-jobs'
@@ -45,7 +46,12 @@ export function beginMemoryAttempt(
       claimMemoryJob(tx, jobId, now) // 让失效任务退出待执行状态。
       return { status: 'unavailable' }
     }
-    const prepared = prepareMemoryExtraction(snapshot.batch, listCurrentMemories(tx, snapshot.characterId, now))
+    const { batch, characterId } = snapshot
+    const previous = findMemoryReviewCandidates(tx, listCurrentMemories(tx, characterId, now), {
+      sourceMessageIds: batch.sources.map((source) => source.id), memoryKey: null,
+      content: batch.sources.map((source) => source.content).join('\n'),
+    })
+    const prepared = prepareMemoryExtraction(batch, previous)
     const configured = limitsSchema.safeParse(readSetting(tx, 'memory.daily-limits'))
     const limits = configured.success ? configured.data : defaults
     const start = new Date(now).setHours(0, 0, 0, 0)

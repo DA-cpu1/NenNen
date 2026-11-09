@@ -369,6 +369,31 @@ describe('整理任务登记与领取', () => {
 })
 
 describe('整理候选原子提交', () => {
+  it('即时已保存的事实按原话进入整理候选，复用旧条并补来源后推进书签', () => {
+    const { db } = companion
+    const source = saveUserMessage(db, { conversationId, requestId: 'first', content: '这个我挺爱喝。', now }).message
+    const old = saveCharacterMemory(db, { conversationId, kind: 'preference', memoryKey: null,
+      content: '用户喜欢无糖可乐', origin: 'user_explicit', sourceMessageIds: [source.id], expiresAt: null, now })
+    if (!('memory' in old)) throw new Error('缺少即时记忆')
+    const repeated = saveUserMessage(db, { conversationId, requestId: 'second', content: '平时都选这个。', now }).message
+    const started = beginMemoryAttempt(db, registerMemoryJob(db, conversationId, now + 300_000)!.id, testModel, now + 300_000)
+    if (started.status !== 'ready') throw new Error('未领取任务')
+    const { attempt } = started
+    expect(JSON.parse(attempt.prepared.prompt).previous).toMatchObject([{ id: old.memory.id, firstSourceAt: now }])
+    const reuse = { action: 'reuse', memoryId: old.memory.id, sourceMessageIds: [source.id, repeated.id] }
+    expect(commitMemoryCandidates(db, attempt.work, [reuse], new Map(), now + 300_001))
+      .toEqual({ status: 'invalid_candidates' })
+    expect(db.select().from(conversations).get()?.lastProcessedSeq).toBe(0)
+    expect(db.select().from(memorySources).all()).toHaveLength(1)
+
+    finishMemoryAttempt(db, attempt, { ok: true, candidates: [{ ...reuse, action: 'reuse' }],
+      usage: { inputTokens: 20, outputTokens: 5, estimated: false } }, now + 300_002)
+    expect(db.select().from(memories).all()).toEqual([old.memory])
+    expect(db.select().from(memorySources).all()).toHaveLength(2)
+    expect(db.select().from(conversations).get()?.lastProcessedSeq).toBe(repeated.seq)
+    expect(db.select().from(memoryJobs).get()?.status).toBe('completed')
+  })
+
   it('保存、来源和书签一起提交，同一批重放只返回已完成', () => {
     const { db } = companion
     const source = message('source')

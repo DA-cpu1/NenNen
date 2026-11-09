@@ -45,4 +45,12 @@ describe('整理候选输出', () => {
       ok: true, candidates: [], usage: { inputTokens: prepared.estimatedInputTokens, outputTokens: prepared.outputLimit, estimated: true },
     })
   })
+
+  it('复用只携带旧记忆和本批来源编号', async () => {
+    const reuse = { action: 'reuse', memoryId: 'old-1', sourceMessageIds: [source.id] }
+    expect(await extractCandidates(model(JSON.stringify({ candidates: [reuse] })), prepared, new AbortController().signal))
+      .toMatchObject({ ok: true, candidates: [reuse] })
+    expect(await extractCandidates(model(JSON.stringify({ candidates: [{ ...reuse, content: '偷换旧正文' }] })),
+      prepared, new AbortController().signal)).toMatchObject({ ok: false, code: 'E_INVALID_CANDIDATES' })
+  })
 })

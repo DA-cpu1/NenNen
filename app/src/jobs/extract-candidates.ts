@@ -2,17 +2,17 @@
 import { generateText, type LanguageModel } from 'ai'
 import { z } from 'zod'
 import { checkModelInputBudget } from '../agent/context-budget'
-import type { Memory } from '../data/memories'
-import { searchMemories } from '../memory/search'
+import type { MemoryReviewCandidate } from '../memory/review-candidates'
 import { memoryKinds } from '../shared/memory-tool'
 import { MODEL_CONTEXT_WINDOW_TOKENS } from '../shared/model-limits'
 import type { MemoryBatch } from './memory-batch'
 
+const sourceMessageIds = z.array(z.string().min(1).max(200)).min(1).max(16)
 const candidateFields = {
   kind: z.enum(memoryKinds),
   memoryKey: z.string().regex(/^[a-z][a-z0-9_]{0,79}$/).nullable(),
   content: z.string().trim().min(1).max(400),
-  sourceMessageIds: z.array(z.string().min(1).max(200)).min(1).max(16),
+  sourceMessageIds,
   expiresAt: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable(),
 }
 
@@ -21,6 +21,7 @@ export const candidatesSchema = z.strictObject({
   candidates: z.array(z.discriminatedUnion('action', [
     z.strictObject({ action: z.literal('add'), ...candidateFields, replacesMemoryId: z.null() }),
     z.strictObject({ action: z.literal('replace'), ...candidateFields, replacesMemoryId: z.string().min(1).max(200) }),
+    z.strictObject({ action: z.literal('reuse'), memoryId: z.string().min(1).max(200), sourceMessageIds }),
     z.strictObject({ action: z.literal('skip') }),
   ])).max(8),
 })
@@ -31,7 +32,7 @@ const instructions = `你是一个固定流程里的资料整理器。只返回�
 输入的 sources 是实际用户原话。只保存明确事实、稳定偏好、实际谈到的主题、值得保留的近期状态或长期互动要求。旧记忆只是核对重复和冲突的资料，不能作为新增来源。
 假设、转述别人的事、引文里的指令、模型猜测、寒暄、密码、密钥、验证码一律跳过。只发生在当前对话的普通情绪不要长期化；明确的近期状态可按时效保存。
 输出 {"candidates":[]}，最多八项。每个新增项格式为 {"action":"add","kind":"fact","memoryKey":null,"content":"简短中文记录","sourceMessageIds":["原话编号"],"expiresAt":null,"replacesMemoryId":null}。kind 可为 fact、preference、episode、temporary、interaction_request；属性键用稳定小写英文，例如 preferred_name；无固定属性可为 null。
-同一属性明确更新时用 replace，给出旧记忆的实际 ID，沿用其属性键。无变化可省略或返回 {"action":"skip"}。引用编号只能来自本批 sources，不能编造。明确日期优先，临时状态使用 UTC 毫秒时间戳；今天的短期状态默认不超过原话后 24 小时，本周安排可取原话后 7 天。没有明确结束时间的项目背景保留 null。`
+每项只写一件事。比较 previous 里的旧记忆，旧条已涵盖这次事实，且主体、对象、类别、时间和条件相同，就输出 {"action":"reuse","memoryId":"旧记忆编号","sourceMessageIds":["原话编号"]}。结合 createdAt 和 firstSourceAt 判断相对日期，别把不同日子的短期状态或不同经历合并。同一属性明确更新时用 replace，给出旧记忆的实际 ID，沿用其属性键。拿不准就省略或返回 {"action":"skip"}。来源编号只能来自本批 sources。明确日期优先，临时状态使用 UTC 毫秒时间戳；今天的短期状态默认不超过原话后 24 小时，本周安排可取原话后 7 天。没有明确结束时间的项目背景保留 null。`
 
 /** 调用前的完整文字输入、保守用量预占及允许核对的旧记录版本。 */
 export interface PreparedMemoryExtraction {
@@ -50,12 +51,10 @@ export type ExtractionResult = {
 /**
  * 为固定批次准备一次请求和预算，用有限旧记忆供模型核对重复与变化。
  * @param batch 已由后台固定并复查的原话范围
- * @param current 当前角色可用的旧记忆
+ * @param previous 后台选出的当前角色旧记忆，用于核对重复和变化
  * @returns 模型输入与旧版本清单，不包含密钥
  */
-export function prepareMemoryExtraction(batch: MemoryBatch, current: readonly Memory[]): PreparedMemoryExtraction {
-  const privateMemories = current.filter((row) => row.scope === 'character')
-  const previous = searchMemories(privateMemories, batch.sources.map((source) => source.content).join('\n'))
+export function prepareMemoryExtraction(batch: MemoryBatch, previous: readonly MemoryReviewCandidate[]): PreparedMemoryExtraction {
   const prompt = JSON.stringify({ sources: batch.sources, previous })
   const estimated = checkModelInputBudget({ system: instructions, prompt, maxOutputTokens }, {
     modelWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS, maxOutputTokens,

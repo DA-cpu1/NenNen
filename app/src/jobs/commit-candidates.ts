@@ -68,6 +68,18 @@ export function commitMemoryCandidates(
           newestSourceAt = Math.max(newestSourceAt, source.createdAt)
           newestSourceSeq = Math.max(newestSourceSeq, source.seq)
         }
+        if (candidate.action === 'reuse') {
+          // 模型只能选它实际看过的旧条，类别、正文和时效以 SQLite 里的旧条为准。
+          const old = tx.select().from(memories).where(eq(memories.id, candidate.memoryId)).get()
+          if (!old || old.revision !== revisions.get(old.id)) throw new InvalidCandidates()
+          const reused = saveCharacterMemory(tx, {
+            conversationId: job.conversationId, kind: old.kind, memoryKey: old.memoryKey, content: old.content,
+            sourceMessageIds: candidate.sourceMessageIds, expiresAt: old.expiresAt, reuse: { id: old.id, revision: old.revision },
+            origin: 'user_explicit', now,
+          })
+          if (reused.status !== 'already_saved') throw new InvalidCandidates()
+          continue
+        }
         const expiresAt = candidate.expiresAt ?? (candidate.kind === 'temporary' ? newestSourceAt + dayMs : null)
         if (expiresAt !== null && expiresAt <= newestSourceAt) throw new InvalidCandidates()
         const replacement = candidate.action === 'replace'

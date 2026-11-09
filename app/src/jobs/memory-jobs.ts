@@ -8,7 +8,7 @@ import { planMemoryBatch, type MemoryBatch } from './memory-batch'
 import { readMemoryTrigger, readUnprocessedMemoryMessages } from './memory-trigger'
 
 /** 修改提取规则或批次尺寸时换版本，以免旧批次沿用新规则。 */
-export const memoryExtractorVersion = '1'
+export const memoryExtractorVersion = '2'
 const leaseMs = 90_000
 
 /** 已登记的任务，以及核对后可用的角色和原话。 */
