@@ -1,7 +1,8 @@
 /**
  * 在隔离用户目录运行真实应用，验证模型设置、系统加密、聊天、记忆和重启。
  * 模型供应商仅绑定本机随机端口；随机假密钥只留在脚本内存，不接触正式资料。
- * 运行前先构建应用；--packaged 改用实际 win-unpacked 程序，不更改安装配置。
+ * 运行前先构建应用；--packaged 用 win-unpacked，--package-dir 可指定从安装包解出的目录。
+ * --deepseek 按 DeepSeek 的规则检查关闭思考，并模拟一轮立即记忆工具调用。
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -14,7 +15,12 @@ import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as delay } from 'node:timers/promises'
 
 const appDir = resolve(import.meta.dirname, '..')
-const packaged = process.argv.includes('--packaged')
+const packageDirIndex = process.argv.indexOf('--package-dir')
+if (packageDirIndex >= 0 && !process.argv[packageDirIndex + 1]) throw new Error('E_PACKAGE_DIRECTORY_REQUIRED')
+const packaged = process.argv.includes('--packaged') || packageDirIndex >= 0
+const packageDir = packageDirIndex >= 0 ? resolve(process.argv[packageDirIndex + 1]) : join(appDir, 'release/win-unpacked')
+const deepSeek = process.argv.includes('--deepseek')
+const model = deepSeek ? 'deepseek-flash' : 'native-fixed-model'
 const fixture = await mkdtemp(join(appDir, '.eve/model-native-'))
 const profile = join(fixture, 'profile')
 const copy = join(fixture, 'app')
@@ -24,7 +30,7 @@ if (!packaged) {
   for (const path of ['out', '.output', 'scripts/eve-entry.mjs']) await cp(join(appDir, path), join(copy, path), { recursive: true })
   await writeFile(join(copy, 'package.json'), JSON.stringify({ name: 'companion-model-native-probe', main: 'out/main/index.js' }))
 }
-const executable = packaged ? join(appDir, 'release/win-unpacked/二次元女友.exe') : join(appDir, 'node_modules/electron/dist/electron.exe')
+const executable = packaged ? join(packageDir, '二次元女友.exe') : join(appDir, 'node_modules/electron/dist/electron.exe')
 const firstKey = randomBytes(32).toString('base64url')
 const secondKey = randomBytes(32).toString('base64url')
 let acceptedKey = firstKey
@@ -32,6 +38,8 @@ let mode = 'passed'
 const requests = []
 let appLogs = ''
 const memoryContent = '用户喜欢用水彩画植物。'
+const rememberMessage = '我平时用蓝色马克杯喝茶。'
+const rememberedContent = '用户平时用蓝色马克杯喝茶。'
 
 /** 固定供应商只返回本次检查需要的结构；不转发请求、不保留用户正文。 */
 const provider = createServer(async (request, response) => {
@@ -41,7 +49,14 @@ const provider = createServer(async (request, response) => {
   const names = (input.tools ?? []).map((tool) => tool.function.name)
   const batch = input.messages.find((message) => message.role === 'user' && typeof message.content === 'string' && message.content.startsWith('{"sources":'))
   const kind = names.includes('connection_check') ? 'connection' : batch ? 'memory' : 'chat'
-  requests.push({ kind, model: input.model, tools: names, usedMemory: JSON.stringify(input.messages).includes(memoryContent) })
+  const record = { kind, model: input.model, tools: names, thinkingDisabled: input.thinking?.type === 'disabled',
+    usedMemory: JSON.stringify(input.messages).includes(memoryContent), toolReceipt: false }
+  requests.push(record)
+  if (input.model !== model || (deepSeek ? !record.thinkingDisabled : input.thinking !== undefined)) {
+    response.writeHead(400, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: { message: 'fixed-invalid-model-or-thinking-mode' } }))
+    return
+  }
   if (request.headers.authorization !== `Bearer ${acceptedKey}` || (kind === 'connection' && mode === 'failed')) {
     response.writeHead(401, { 'content-type': 'application/json' })
     response.end(JSON.stringify({ error: { message: 'fixed-auth-failed' } }))
@@ -63,8 +78,26 @@ const provider = createServer(async (request, response) => {
         function: { name: 'connection_check', arguments: '{"confirmation":"ok"}' } }] } : { role: 'assistant', content },
       finish_reason: tool ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 18, completion_tokens: 6, total_tokens: 24 } }))
   } else {
+    let delta = { role: 'assistant', content }
+    let finishReason = 'stop'
+    if (deepSeek && input.messages.findLast((message) => message.role === 'user')?.content === rememberMessage) {
+      const lastMessage = input.messages.at(-1)
+      if (lastMessage.role === 'tool') {
+        // 只有收到业务后台的真实保存回执，假模型才说“已记下”。
+        const receipt = JSON.parse(lastMessage.content)
+        record.toolReceipt = receipt.ok === true && receipt.status === 'saved'
+        delta = { role: 'assistant', content: record.toolReceipt ? '固定回复：已记下。' : '固定回复：保存未完成。' }
+      } else {
+        const sourceId = input.messages.find((message) => message.role === 'system' &&
+          message.content.includes('仅供立即记忆工具使用'))?.content.match(/：([^\s]+)$/u)?.[1]
+        delta = { role: 'assistant', tool_calls: [{ index: 0, id: 'fixed-remember', type: 'function', function: {
+          name: 'remember_explicit', arguments: JSON.stringify({ kind: 'preference', content: rememberedContent, sourceMessageId: sourceId }),
+        } }] }
+        finishReason = 'tool_calls'
+      }
+    }
     response.writeHead(200, { 'content-type': 'text/event-stream' })
-    for (const chunk of [{ delta: { role: 'assistant', content }, finish_reason: null }, { delta: {}, finish_reason: 'stop' }]) {
+    for (const chunk of [{ delta, finish_reason: null }, { delta: {}, finish_reason: finishReason }]) {
       response.write('data: ' + JSON.stringify({ id: 'fixed-stream', object: 'chat.completion.chunk', created: 0, model: input.model,
         choices: [{ index: 0, ...chunk }], ...(chunk.finish_reason ? { usage: { prompt_tokens: 18, completion_tokens: 6, total_tokens: 24 } } : {}) }) + '\n\n')
     }
@@ -127,13 +160,14 @@ async function boot() {
   const click = (text, root = 'document') => evaluate(`[...${root}.querySelectorAll('button')].find(button => button.textContent.trim() === ${JSON.stringify(text)})?.click()`)
   const visible = (text) => waitFor(() => evaluate(`document.body.innerText.includes(${JSON.stringify(text)})`), 'E_UI_STATE')
   /** 使用浏览器原生 setter 触发 React 的输入事件，实际保存仍走产品按钮。 */
-  async function input(selector, value, select = false) {
+  async function input(selector, value) {
     await evaluate(`(() => { const element = ${selector}; if (!element) throw new Error('missing');
-      Object.getOwnPropertyDescriptor(${select ? 'HTMLSelectElement' : 'HTMLInputElement'}.prototype, 'value').set.call(element, ${JSON.stringify(value)});
-      element.dispatchEvent(new Event('${select ? 'change' : 'input'}', { bubbles: true })); })()`)
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value').set.call(element, ${JSON.stringify(value)});
+      element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true })); })()`)
   }
   const byLabel = (label) => `[...document.querySelectorAll('label')].find(label => label.firstElementChild?.textContent === ${JSON.stringify(label)})?.querySelector('input')`
-  const state = () => evaluate('window.appApi.getModelSettings().then(result => result.ok ? result.data : null)')
+  // 刚找到窗口时，预加载脚本可能还没把接口放到页面上。等到接口可用再读状态。
+  const state = () => evaluate('window.appApi?.getModelSettings().then(result => result.ok ? result.data : null) ?? null')
   async function screenshot(name) {
     const result = await page.call('Page.captureScreenshot', { format: 'png' })
     await writeFile(join(fixture, `${name}.png`), Buffer.from(result.data, 'base64'))
@@ -149,7 +183,8 @@ async function boot() {
     }
     browser.close()
   }
-  await waitFor(() => state().then((value) => value !== null), 'E_MODEL_STATE')
+  try { await waitFor(() => state().then((value) => value !== null), 'E_MODEL_STATE') }
+  catch (error) { await stop(); throw error }
   return { child, evaluate, click, visible, input, byLabel, state, screenshot, stop }
 }
 
@@ -166,10 +201,21 @@ try {
   await app.visible('下一步：模型连接')
   await app.click('下一步：模型连接')
   await app.visible('保存配置')
-  await app.input('document.querySelector("select")', 'openai-compatible', true)
-  for (const [label, value] of [['模型', 'native-fixed-model'], ['服务地址', baseUrl], ['模型总容量', '262144'], ['回复预留', '32768'], ['API 密钥', firstKey]]) {
-    await app.input(app.byLabel(label), value)
+  await app.input('document.querySelector("select")', deepSeek ? 'deepseek' : 'openai-compatible')
+  if (deepSeek) {
+    await app.visible('请求会关闭深度思考。')
+    for (const [label, value] of [['模型', model], ['服务地址', 'https://api.deepseek.com'],
+      ['模型总容量', '1000000'], ['回复预留', '8192']]) {
+      assert.equal(await app.evaluate(`${app.byLabel(label)}.value`), value)
+    }
+    await app.screenshot('deepseek-preset')
+  } else {
+    for (const [label, value] of [['模型', model], ['模型总容量', '262144'], ['回复预留', '32768']]) {
+      await app.input(app.byLabel(label), value)
+    }
   }
+  await app.input(app.byLabel('服务地址'), baseUrl)
+  await app.input(app.byLabel('API 密钥'), firstKey)
   await app.click('保存配置')
   await waitFor(() => app.state().then((value) => value?.credentialStorage === 'encrypted'), 'E_ENCRYPTED_SAVE')
   await waitFor(() => app.evaluate('[...document.querySelectorAll("button")].some(button => button.textContent === "测试连接" && !button.disabled)'), 'E_TEST_BUTTON_READY')
@@ -179,9 +225,7 @@ try {
   await app.click('下一步：试聊预览')
   await app.visible('试聊当前草稿')
   // 试聊按钮通过真实界面操作，不能绕过 preview 的服务层隔离。
-  await app.evaluate(`(() => { const input = document.querySelector('[aria-label=试聊输入框]');
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, '固定试聊问候');
-    input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+  await app.input('document.querySelector("[aria-label=试聊输入框]")', '固定试聊问候')
   await app.click('发送', 'document.querySelector("[aria-label=草稿试聊]")')
   await app.visible('固定回复：收到。')
   await waitFor(() => app.evaluate('[...document.querySelectorAll("button")].some(button => button.textContent === "下一步：开始相处" && !button.disabled)'), 'E_PREVIEW_FINISHED')
@@ -202,9 +246,24 @@ try {
       if (!result.ok) { off(); resolve({ status: 'rejected', code: result.code }); }
     })`)
   }
-  for (let turn = 0; turn < 10; turn += 1) assert.equal((await send(turn === 0 ? '我喜欢用水彩画植物。' : `固定日常问候${turn}`)).status, 'done')
-  await waitFor(() => readDatabase((db) => db.prepare("SELECT count(*) AS count FROM memories WHERE status='active'").get().count > 0), 'E_MEMORY_SAVED')
-  assert(requests.some((request) => request.kind === 'memory' && request.model === 'native-fixed-model'))
+  // 第一条正式消息用真实输入框和发送按钮，后续重复回合沿用同一个界面桥接。
+  const composer = 'document.querySelector("[aria-label=聊天输入框]")'
+  await waitFor(() => app.evaluate(`${composer}?.disabled === false`), 'E_FORMAL_COMPOSER')
+  await app.input(composer, '我喜欢用水彩画植物。')
+  await app.click('发送')
+  await app.visible('固定回复：收到。')
+  await waitFor(() => readDatabase((db) => db.prepare("SELECT count(*) AS count FROM agent_runs WHERE trigger_type='chat' AND status='completed'").get().count === 1), 'E_FORMAL_REPLY')
+  await waitFor(() => app.evaluate('[...document.querySelectorAll("button")].some(button => button.textContent === "发送")'), 'E_FORMAL_READY')
+  for (let turn = 1; turn < 10; turn += 1) {
+    const content = deepSeek && turn === 1 ? rememberMessage : `固定日常问候${turn}`
+    assert.equal((await send(content)).status, 'done')
+  }
+  await waitFor(() => readDatabase((db) => db.prepare("SELECT count(*) AS count FROM memories WHERE status='active' AND content=?").get(memoryContent).count === 1), 'E_MEMORY_SAVED')
+  assert(requests.some((request) => request.kind === 'memory' && request.model === model))
+  if (deepSeek) {
+    assert(requests.some((request) => request.toolReceipt), '供应商必须收到立即记忆保存回执')
+    assert.equal(readDatabase((db) => db.prepare("SELECT count(*) AS count FROM tool_operations WHERE tool_name='remember_explicit' AND status='committed'").get().count), 1)
+  }
   const beforeRestart = requests.length
   console.log(JSON.stringify({ checkpoint: 'chat-preview-memory', modelCalls: beforeRestart }))
   await app.stop()
@@ -217,6 +276,18 @@ try {
   assert(requests.at(-1).usedMemory)
   await app.click('设置', 'document.querySelector("nav[aria-label=应用页面]")')
   await app.visible('更换凭据')
+  const savedConnection = (await app.state()).settings.connection
+  const beforeServiceChange = requests.length
+  await app.input('document.querySelector("select")', 'zhipu')
+  await app.input(app.byLabel('服务地址'), baseUrl + '/other-service')
+  await app.visible('填写新服务的 API 密钥后再保存。')
+  await app.click('保存配置')
+  await app.visible('服务地址或供应商已更改，请重新填写对应的 API 密钥。')
+  assert.deepEqual((await app.state()).settings.connection, savedConnection)
+  assert.equal(requests.length, beforeServiceChange)
+  await waitFor(() => app.evaluate('[...document.querySelectorAll("button")].some(button => button.textContent === "取消修改" && !button.disabled)'), 'E_REJECTED_SAVE_FINISHED')
+  await app.click('取消修改')
+  await app.visible('已取消修改。')
   await app.click('更换凭据')
   await app.visible('新 API 密钥')
   await app.input('document.querySelector("dialog input")', secondKey)
@@ -276,8 +347,10 @@ try {
   assert.equal((await app.state()).ready, false)
   assert.equal((await app.state()).settings.credentialRef, null)
   assert.equal(requests.length, beforeFinalRestart)
-  const report = { packaged, fixture, formalConversationRetained: true, encryptedCredentials: true, replacedAndDeleted: true,
+  const report = { packaged, deepSeek, fixture, formalConversationRetained: true, encryptedCredentials: true, replacedAndDeleted: true,
     noAutomaticModelCalls: true, previewIsolated: true, formalMessages, memorySavedAndReused: true, unsupportedBlocked: true, failedAndCancelled: true,
+    serviceChangeRequiresNewKey: true, immediateMemoryToolRoundTrip: requests.some((value) => value.toolReceipt),
+    thinkingDisabledRequests: requests.filter((value) => value.thinkingDisabled).length,
     requestCounts: { connection: requests.filter((value) => value.kind === 'connection').length,
       chat: requests.filter((value) => value.kind === 'chat').length, memory: requests.filter((value) => value.kind === 'memory').length },
     actualModels: [...new Set(requests.map((value) => value.model))], logsContainFakeSecrets: appLogs.includes(firstKey) || appLogs.includes(secondKey) }

@@ -3,12 +3,12 @@
  * 编译时不读密钥，也不把带密钥的模型对象放进工作流检查点（落盘的执行进度）。
  * 正式角色和聊天历史由后台信封提供；固定连通探针继续兼容 T01。
  */
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { defineAgent, defineDynamic } from 'eve'
 import { wrapLanguageModel } from 'ai'
 import { waitSecrets } from './lib/stdin-secrets'
 import { createCompanionContextMiddleware } from './lib/context-middleware'
 import { createModelStepLimitMiddleware } from './lib/model-step-limit'
+import { createCompanionLanguageModel } from '../src/agent/model'
 import { readRuntimeModelConnection } from '../src/shared/model-settings'
 
 export default defineAgent({
@@ -23,17 +23,11 @@ export default defineAgent({
       'step.started': async (event) => {
         const { modelApiKey } = await waitSecrets()
         if (!modelApiKey) throw new Error('E_NO_MODEL_KEY')
+        // 环境变量只读公开配置，密钥来自内存管道。共用创建入口让聊天和连接测试发送同样的供应商参数。
         const connection = readRuntimeModelConnection(process.env.COMPANION_MODEL_CONFIG, process.env.COMPANION_MODEL_BASE_URL)
-        const provider = createOpenAICompatible({
-          name: connection.provider,
-          // 这里从环境读取的只有公开配置；模型密钥始终来自上面的内存管道。
-          baseURL: connection.baseUrl,
-          apiKey: modelApiKey,
-          includeUsage: true,
-        })
         return {
           model: wrapLanguageModel({
-            model: provider(connection.model),
+            model: createCompanionLanguageModel(modelApiKey, connection),
             middleware: [createModelStepLimitMiddleware(event), createCompanionContextMiddleware({
               modelWindowTokens: connection.contextWindowTokens, outputReserveTokens: connection.outputReserveTokens,
             })],

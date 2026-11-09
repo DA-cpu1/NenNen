@@ -20,7 +20,7 @@ const serviceAddressSchema = z.string().trim().max(2048).refine((value) => {
 
 /** 这里只支持已安装的 OpenAI 兼容适配器；供应商名字用于区分配置和用量记录。 */
 export const modelConnectionSchema = z.object({
-  provider: z.enum(['zhipu', 'openai-compatible']),
+  provider: z.enum(['zhipu', 'deepseek', 'openai-compatible']),
   model: z.string().trim().min(1).max(200).regex(/^[^\s\x00-\x1f]+$/),
   baseUrl: serviceAddressSchema,
   // 模型窗口是一次输入和输出的总容量；回复预留是在放历史前先留出的空位。
@@ -35,6 +35,25 @@ export const DEFAULT_MODEL_CONNECTION: ModelConnection = {
   provider: 'zhipu', model: 'glm-5.3-flash', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
   contextWindowTokens: MODEL_CONTEXT_WINDOW_TOKENS,
   outputReserveTokens: MODEL_OUTPUT_RESERVE_TOKENS,
+}
+
+/** DeepSeek 官方预设。关闭思考后，服务端未指定输出上限时默认可回 8,192 token。 */
+export const DEEPSEEK_MODEL_CONNECTION: ModelConnection = {
+  provider: 'deepseek', model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com',
+  contextWindowTokens: 1_000_000, outputReserveTokens: 8_192,
+}
+
+type ModelService = Pick<ModelConnection, 'provider' | 'baseUrl'>
+
+/**
+ * 看本次配置能否沿用原服务的密钥。改模型名可以沿用，换供应商或地址就要重填。
+ * @param next 用户正在填写的供应商和地址，可以带首尾空白或末尾斜线
+ * @param saved 已通过配置检查并保存的供应商和地址
+ * @returns 是否指向同一份服务配置
+ */
+export function isSameModelService(next: ModelService, saved: ModelService): boolean {
+  const address = serviceAddressSchema.safeParse(next.baseUrl)
+  return next.provider === saved.provider && address.success && address.data === saved.baseUrl
 }
 
 /**

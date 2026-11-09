@@ -14,6 +14,7 @@
 .row { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 13px; font-size: 13px; }
 .row input, .row select { box-sizing: border-box; width: 100%; min-width: 0; height: 36px; padding: 6px 9px; border: 1px solid #ced5f1; border-radius: 5px; background: #fff; color: var(--ink); font-size: 13px; }
 .row input::placeholder { color: #9299b2; }
+.fieldHint { margin: 8px 0 0; font-size: 12px; color: var(--muted); line-height: 1.65; }
 .capacity { margin-top: 18px; font-size: 12px; color: var(--muted); }
 .capacity summary { cursor: pointer; color: var(--accent); }
 .capacity p { line-height: 1.6; }

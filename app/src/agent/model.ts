@@ -1,11 +1,11 @@
 /**
- * AI SDK 的本地模型连接配置和直连探针，供固定后台整理复用。
- * 正式聊天、试聊和后台整理都使用后台给出的公开配置，密钥只留在内存。
+ * 用同一份配置创建 AI SDK 模型，供连接测试、正式聊天、试聊和后台整理复用。
+ * 供应商需要额外参数时集中在这里设置，避免测试能通过而正式聊天用另一份参数。
  * 旧探针可以只传本机地址；自定义供应商是否支持工具仍要实际检查。
  */
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { generateText } from 'ai'
-import { DEFAULT_MODEL_CONNECTION, modelConnectionSchema, type ModelConnection } from '../shared/model-settings'
+import { DEEPSEEK_MODEL_CONNECTION, DEFAULT_MODEL_CONNECTION, modelConnectionSchema, type ModelConnection } from '../shared/model-settings'
 
 /**
  * 用现有配置建立模型连接。密钥只留在调用进程内存中。
@@ -16,7 +16,16 @@ import { DEFAULT_MODEL_CONNECTION, modelConnectionSchema, type ModelConnection }
 export function createCompanionLanguageModel(apiKey: string, connection: ModelConnection | string = DEFAULT_MODEL_CONNECTION) {
   const checked = modelConnectionSchema.parse(typeof connection === 'string'
     ? { ...DEFAULT_MODEL_CONNECTION, baseUrl: connection } : connection)
-  return createOpenAICompatible({ name: checked.provider, baseURL: checked.baseUrl, apiKey, includeUsage: true })(checked.model)
+  // 自定义配置也可能直接填 DeepSeek 官方地址。origin 比较协议、主机和端口，不比较路径。
+  const isDeepSeek = checked.provider === 'deepseek' || new URL(checked.baseUrl).origin === DEEPSEEK_MODEL_CONNECTION.baseUrl
+  return createOpenAICompatible({
+    name: checked.provider,
+    baseURL: checked.baseUrl,
+    apiKey,
+    includeUsage: true,
+    // 请求体就是发给供应商的那包资料。DeepSeek 默认思考，思考模式下会拒绝测试指定的工具。
+    transformRequestBody: isDeepSeek ? (body) => ({ ...body, thinking: { type: 'disabled' } }) : undefined,
+  })(checked.model)
 }
 
 /** 一次模型调用的结果：回复文本 + 用量（用量给费用记录用，可能缺失） */

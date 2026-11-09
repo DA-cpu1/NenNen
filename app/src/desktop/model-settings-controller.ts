@@ -5,7 +5,7 @@
 import type { BackendHandle } from './backend'
 import type { ModelCredentialStore } from './model-credentials'
 import type { BridgeResult } from '../bridge/requests'
-import { saveModelSettingsSchema, type ModelConnectionTest, type ModelSettingsOverview, type StoredModelSettings } from '../shared/model-settings'
+import { isSameModelService, saveModelSettingsSchema, type ModelConnectionTest, type ModelSettingsOverview, type StoredModelSettings } from '../shared/model-settings'
 
 interface BackendSnapshot { settings: StoredModelSettings | null; ready: boolean; onboardingCompleted: boolean }
 
@@ -76,7 +76,7 @@ export function createDesktopModelSettings(
       if (!previous.ok || !previous.data) return previous as BridgeResult<ModelSettingsOverview>
       const input = checked.data
       const old = previous.data.settings
-      if (!input.apiKey && old && (old.connection.baseUrl !== input.connection.baseUrl || old.connection.provider !== input.connection.provider)) {
+      if (!input.apiKey && old && !isSameModelService(input.connection, old.connection)) {
         return { ok: false, code: 'E_CREDENTIAL_REQUIRED_FOR_ADDRESS' }
       }
       const reference = input.apiKey ? input.requestId : old?.credentialRef

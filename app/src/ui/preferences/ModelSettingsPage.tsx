@@ -4,7 +4,10 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { CharacterOverview } from '../../shared/data-types'
-import { DEFAULT_MODEL_CONNECTION, modelConnectionSchema, type ModelConnection, type ModelSettingsOverview } from '../../shared/model-settings'
+import {
+  DEEPSEEK_MODEL_CONNECTION, DEFAULT_MODEL_CONNECTION, isSameModelService, modelConnectionSchema,
+  type ModelConnection, type ModelSettingsOverview,
+} from '../../shared/model-settings'
 import { assetUrl } from '../../shared/asset-url'
 import ConfirmationDialog from '../settings/ConfirmationDialog'
 import { modelSettingsMessage } from './model-settings-messages'
@@ -65,6 +68,7 @@ function ModelConnectionForm(props: ModelSettingsPageProps & { overview: ModelSe
   const requestId = useRef<string | null>(null)
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved) || apiKey !== ''
   const hasCredential = !!props.overview.settings?.credentialRef
+  const needsNewKey = hasCredential && !isSameModelService(draft, saved)
   const portrait = assetUrl(props.character?.portraitImagePath)
   const blocked = props.loadError !== null
 
@@ -135,9 +139,19 @@ function ModelConnectionForm(props: ModelSettingsPageProps & { overview: ModelSe
         <fieldset disabled={busy !== null || blocked} className={styles.fields}>
           <section className={styles.card}><h2><span aria-hidden="true">◇</span>模型配置</h2>
             <label className={styles.row}><span>供应商</span><select value={draft.provider} onChange={(event) => {
-              setApiKey(''); edit(event.target.value === 'zhipu' ? toDraft(DEFAULT_MODEL_CONNECTION)
-                : { provider: 'openai-compatible', model: '', baseUrl: '', contextWindowTokens: '', outputReserveTokens: '' })
-            }}><option value="zhipu">智谱 · OpenAI 兼容接口</option><option value="openai-compatible">自定义兼容服务</option></select></label>
+              const provider = event.target.value
+              // 新输入的密钥只用于刚才选的供应商，换选项时先清空并恢复遮挡。
+              setApiKey('')
+              setShowKey(false)
+              if (provider === 'deepseek') edit(toDraft(DEEPSEEK_MODEL_CONNECTION))
+              else if (provider === 'zhipu') edit(toDraft(DEFAULT_MODEL_CONNECTION))
+              else edit({ provider: 'openai-compatible', model: '', baseUrl: '', contextWindowTokens: '', outputReserveTokens: '' })
+            }}>
+              <option value="zhipu">智谱 · OpenAI 兼容接口</option>
+              <option value="deepseek">DeepSeek · 关闭深度思考</option>
+              <option value="openai-compatible">自定义兼容服务</option>
+            </select></label>
+            {draft.provider === 'deepseek' ? <p className={styles.fieldHint}>请求会关闭深度思考。连接测试会检查记忆所需的工具调用。</p> : null}
             <label className={styles.row}><span>模型</span><input value={draft.model} autoComplete="off" placeholder="填写服务商的模型名称"
               onChange={(event) => edit({ ...draft, model: event.target.value, contextWindowTokens: '', outputReserveTokens: '' })} /></label>
             <label className={styles.row}><span>服务地址</span><input value={draft.baseUrl} type="url" autoComplete="off" placeholder="https://api.example.com/v1"
@@ -153,16 +167,17 @@ function ModelConnectionForm(props: ModelSettingsPageProps & { overview: ModelSe
           <section className={styles.card}><h2><span aria-hidden="true">⚿</span>API 凭据</h2>
             <label className={styles.row}><span>API 密钥</span><span className={styles.keyField}>
               <input type={showKey ? 'text' : 'password'} value={apiKey} autoComplete="off" spellCheck={false}
-                placeholder={hasCredential ? '••••••••••••' : '请输入你的 API 密钥'} onChange={(event) => {
+                placeholder={hasCredential && !needsNewKey ? '••••••••••••' : '请输入当前服务的 API 密钥'} onChange={(event) => {
                   setApiKey(event.target.value); requestId.current = null; setError(''); setNotice('')
                 }} /><button type="button" onClick={() => setShowKey(!showKey)} aria-label={showKey ? '隐藏新输入的密钥' : '显示新输入的密钥'}>{showKey ? '隐藏' : '显示'}</button>
             </span></label>
-            <p className={styles.storage}>{storageText}</p>
+            {needsNewKey ? <p className={styles.fieldHint}>填写新服务的 API 密钥后再保存。</p> : <p className={styles.storage}>{storageText}</p>}
             {hasCredential ? <div className={styles.actions}><button type="button" disabled={dirty} onClick={() => {
               requestId.current = null; setError(''); setNotice(''); setReplaceOpen(true)
             }}>更换凭据</button>
               <button type="button" className={styles.danger} onClick={() => setDeleteOpen(true)}>删除凭据</button></div> : null}
-            <div className={styles.cardFooter}><p>凭据不会写入聊天、备份或日志。<br />已保存的密钥不会显示，留空可沿用。</p>
+            <div className={styles.cardFooter}><p>凭据保存在本机，调用模型时用于认证。<br />
+              {hasCredential && !needsNewKey ? '供应商和地址相同时，留空可沿用已保存的密钥。' : '保存配置后可手动测试连接。'}</p>
               <button type="submit" className={styles.primary}>{busy === 'save' ? '正在保存…' : '保存配置'}</button></div>
           </section>
         </fieldset>
